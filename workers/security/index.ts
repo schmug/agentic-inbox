@@ -29,6 +29,34 @@ import { aggregateVerdict, type FinalVerdict } from "./verdict";
 import { getSecuritySettings } from "./settings";
 import { checkUrlAgainstFeeds, type FeedMatch } from "../intel/feeds";
 import { evaluateTriage, type IntelMatchInfo } from "./triage";
+import { scoreOffHours } from "./time-rules";
+import type { VerdictThresholds } from "./verdict";
+
+/**
+ * Apply a post-aggregation score bump and recompute the action tier and
+ * explanation. Used for signals that only fire after the main verdict has
+ * been computed (intel feed hits, off-hours delivery).
+ */
+function applyBoost(
+	verdict: FinalVerdict,
+	boost: number,
+	reason: string,
+	thresholds: VerdictThresholds,
+): FinalVerdict {
+	const newScore = Math.min(100, verdict.score + boost);
+	const action: FinalVerdict["action"] = newScore >= thresholds.block ? "block"
+		: newScore >= thresholds.quarantine ? "quarantine"
+		: newScore >= thresholds.tag ? "tag"
+		: "allow";
+	const signals = [...verdict.signals, reason];
+	return {
+		...verdict,
+		score: newScore,
+		action,
+		signals,
+		explanation: signals.slice(0, 4).join("; "),
+	};
+}
 
 export interface RunPipelineInput {
 	env: Env;
@@ -62,7 +90,9 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	// complete in milliseconds. The classifier LLM call is the expensive
 	// stage (seconds); the triage tier checks below let us skip it entirely
 	// for clear-cut cases.
-	const auth = parseAuthResults(parsedEmail.headers);
+	const auth = parseAuthResults(parsedEmail.headers, {
+		trustedAuthservIds: settings.trusted_authserv_ids,
+	});
 	const urls = extractUrls(bodyHtml);
 
 	// Intel feed lookup — first confirmed hit wins. Kept early (pre-triage)
@@ -114,21 +144,15 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	// hit bumps by 5 (low-signal — bloom FPR is configured at ~1%).
 	const intelBoost = intelMatch?.confirmed ? 20 : intelMatch ? 5 : 0;
 	if (intelBoost > 0 && intelMatch) {
-		const newScore = Math.min(100, verdict.score + intelBoost);
-		const thresh = settings.thresholds;
-		const action = newScore >= thresh.block ? "block"
-			: newScore >= thresh.quarantine ? "quarantine"
-			: newScore >= thresh.tag ? "tag"
-			: "allow";
 		const label = intelMatch.confirmed ? "threat-intel match" : "threat-intel match (unconfirmed)";
 		const reason = `${label} (${intelMatch.feedId}: ${intelMatch.value})`;
-		verdict = {
-			...verdict,
-			score: newScore,
-			action,
-			signals: [...verdict.signals, reason],
-			explanation: [...verdict.signals.slice(0, 2), reason].slice(0, 4).join("; "),
-		};
+		verdict = applyBoost(verdict, intelBoost, reason, settings.thresholds);
+	}
+
+	// Off-hours boost. Small nudge (+10) so it can only tilt borderline verdicts.
+	const offHours = scoreOffHours(settings.business_hours);
+	if (offHours.score > 0) {
+		verdict = applyBoost(verdict, offHours.score, offHours.reasons[0], settings.thresholds);
 	}
 
 	// Learning mode never quarantines/blocks — cap at "tag".
