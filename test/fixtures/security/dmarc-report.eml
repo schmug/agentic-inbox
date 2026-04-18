@@ -1,0 +1,20 @@
+From: noreply-dmarc-support@google.com
+To: dmarc-reports@example.com
+Subject: Report domain: example.com Submitter: google.com Report-ID: 14321567890123456789
+Date: Sun, 12 Apr 2026 00:05:00 +0000
+Message-ID: <report-14321567890123456789@google.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----dmarc-boundary----"
+
+------dmarc-boundary----
+Content-Type: text/plain; charset=UTF-8
+
+This is an aggregate report from google.com for example.com.
+
+------dmarc-boundary----
+Content-Type: application/gzip
+Content-Disposition: attachment; filename="example.com!google.com!1712000000!1712086400.xml.gz"
+Content-Transfer-Encoding: base64
+
+H4sIAAAAAAAAA+3BAQ0AAAACIGf/0LbwAhEAAAAAAAAAAAAAAAAAAAAAAAAAwGsAAAAA
+------dmarc-boundary------

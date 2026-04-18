@@ -1,0 +1,15 @@
+From: "Jordan" <jordan@friendly-sender.example>
+To: test@example.com
+Subject: Check this out
+Date: Thu, 16 Apr 2026 14:30:00 +0000
+Message-ID: <shortener-1@friendly-sender.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Authentication-Results: mx.example.com;
+ spf=pass smtp.mailfrom=friendly-sender.example;
+ dkim=pass header.d=friendly-sender.example;
+ dmarc=pass header.from=friendly-sender.example
+
+Hey, thought you might like this: https://bit.ly/3xAmPle
+
+— Jordan
