@@ -403,7 +403,7 @@ export class EmailMCP extends McpAgent<Env> {
 		// ── move_email ─────────────────────────────────────────────
 		this.server.tool(
 			"move_email",
-			"Move an email to a different folder (inbox, sent, draft, archive, trash).",
+			"Move an email to a different folder (inbox, sent, draft, archive, trash, quarantine).",
 			{
 				mailboxId: z.string().describe("The mailbox email address"),
 				emailId: z.string().describe("The email ID"),

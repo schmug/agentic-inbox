@@ -1,0 +1,41 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "ais-hub",
+	"compatibility_date": "2025-11-28",
+	"main": "./src/index.ts",
+	"observability": {
+		"enabled": true
+	},
+	"compatibility_flags": ["nodejs_compat"],
+	"ai": {
+		"binding": "AI"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "ais-hub",
+			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"migrations_dir": "./migrations"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "TRIAGE_QUEUE",
+				"queue": "ais-hub-triage"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "ais-hub-triage",
+				"max_batch_size": 10,
+				"max_batch_timeout": 5
+			}
+		]
+	},
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	}
+}

@@ -8,6 +8,7 @@ import { jwtVerify, createRemoteJWKSet } from "jose";
 import { createRequestHandler } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
 import { EmailMCP } from "./mcp";
+import { refreshAllFeeds } from "./intel/feeds";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
@@ -113,5 +114,17 @@ export default {
 			// Swallowing the error would silently drop the email.
 			throw e;
 		}
+	},
+	async scheduled(
+		_event: ScheduledController,
+		env: Env,
+		ctx: ExecutionContext,
+	) {
+		ctx.waitUntil(
+			refreshAllFeeds(env).then(
+				(r) => console.log(`intel: refreshed ${r.feeds} feeds, ${r.entries} entries`),
+				(e) => console.error("intel feed refresh failed:", (e as Error).message),
+			),
+		);
 	},
 };

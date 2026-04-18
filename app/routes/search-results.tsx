@@ -65,7 +65,7 @@ export default function SearchResultsRoute() {
 	const isPanelOpen = selectedEmailId !== null || isComposing;
 
 	const handleRowClick = (email: Email) => { selectEmail(email.id); if (!email.read && mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { read: true } }); };
-	const folderDisplayName = (name: string | null | undefined): string => { if (!name) return ""; const map: Record<string, string> = { inbox: "Inbox", sent: "Sent", draft: "Drafts", archive: "Archive", trash: "Trash" }; return map[name.toLowerCase()] || name; };
+	const folderDisplayName = (name: string | null | undefined): string => { if (!name) return ""; const map: Record<string, string> = { inbox: "Inbox", sent: "Sent", draft: "Drafts", archive: "Archive", trash: "Trash", quarantine: "Quarantine" }; return map[name.toLowerCase()] || name; };
 
 	return (
 		<MailboxSplitView

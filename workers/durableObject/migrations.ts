@@ -168,4 +168,122 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_emails_folder_date ON emails(folder_id, date DESC);
         `,
 	},
+	{
+		name: "9_add_quarantine_folder",
+		sql: txn(`INSERT INTO folders (id, name, is_deletable) VALUES ('quarantine', 'Quarantine', 0);`),
+	},
+	{
+		// Security pipeline, threat intel, DMARC analytics, and case workflow
+		// all land together so a fresh deploy ends up with the full schema after
+		// one migration pass. Columns added via ALTER TABLE in this same
+		// migration — each statement is idempotent-safe because migrations only
+		// run once per name (see d1_migrations table).
+		name: "10_security_intel_dmarc_cases",
+		sql: `
+            ALTER TABLE emails ADD COLUMN security_verdict TEXT;
+            ALTER TABLE emails ADD COLUMN security_score INTEGER;
+            ALTER TABLE emails ADD COLUMN security_explanation TEXT;
+            ALTER TABLE emails ADD COLUMN deep_scan_status TEXT DEFAULT 'pending';
+
+            ALTER TABLE attachments ADD COLUMN scan_status TEXT DEFAULT 'pending';
+            ALTER TABLE attachments ADD COLUMN scan_verdict TEXT;
+
+            CREATE TABLE IF NOT EXISTS urls (
+                id TEXT PRIMARY KEY,
+                email_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                display_text TEXT,
+                is_homograph INTEGER NOT NULL DEFAULT 0,
+                is_shortener INTEGER NOT NULL DEFAULT 0,
+                resolved_url TEXT,
+                page_title TEXT,
+                fetch_status TEXT DEFAULT 'pending',
+                verdict TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY(email_id) REFERENCES emails(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_urls_email_id ON urls(email_id);
+
+            CREATE TABLE IF NOT EXISTS sender_reputation (
+                sender TEXT PRIMARY KEY,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                message_count INTEGER NOT NULL DEFAULT 1,
+                avg_score REAL NOT NULL DEFAULT 50.0,
+                flagged INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS intel_feed_state (
+                feed_id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                last_fetched_at TEXT,
+                etag TEXT,
+                entry_count INTEGER,
+                bloom_kv_key TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS dmarc_reports (
+                id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL,
+                org_name TEXT,
+                report_id TEXT,
+                domain TEXT NOT NULL,
+                date_range_begin TEXT,
+                date_range_end TEXT,
+                policy_p TEXT,
+                raw_r2_key TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_dmarc_reports_domain ON dmarc_reports(domain);
+            CREATE INDEX IF NOT EXISTS idx_dmarc_reports_received_at ON dmarc_reports(received_at);
+
+            CREATE TABLE IF NOT EXISTS dmarc_records (
+                id TEXT PRIMARY KEY,
+                report_id TEXT NOT NULL,
+                source_ip TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                disposition TEXT,
+                dkim_result TEXT,
+                spf_result TEXT,
+                header_from TEXT,
+                FOREIGN KEY(report_id) REFERENCES dmarc_reports(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_dmarc_records_source_ip ON dmarc_records(source_ip);
+            CREATE INDEX IF NOT EXISTS idx_dmarc_records_report_id ON dmarc_records(report_id);
+
+            CREATE TABLE IF NOT EXISTS dmarc_sources (
+                source_ip TEXT PRIMARY KEY,
+                label TEXT,
+                legitimate INTEGER NOT NULL DEFAULT 0,
+                notes TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS cases (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                status TEXT NOT NULL DEFAULT 'open',
+                title TEXT NOT NULL,
+                notes TEXT,
+                shared_to_hub INTEGER NOT NULL DEFAULT 0,
+                hub_event_uuid TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
+
+            CREATE TABLE IF NOT EXISTS case_emails (
+                case_id TEXT NOT NULL,
+                email_id TEXT NOT NULL,
+                PRIMARY KEY (case_id, email_id),
+                FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS case_observables (
+                id TEXT PRIMARY KEY,
+                case_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                value TEXT NOT NULL,
+                FOREIGN KEY(case_id) REFERENCES cases(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_case_observables_case_id ON case_observables(case_id);
+        `,
+	},
 ];
