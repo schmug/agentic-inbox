@@ -1,0 +1,19 @@
+From: "PayPal Security" <service@paypal.com>
+To: test@example.com
+Subject: Your account has been limited — action required
+Date: Tue, 14 Apr 2026 03:12:44 -0700
+Message-ID: <limit-9981@mail.paypal.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Authentication-Results: mx.example.com;
+ spf=fail smtp.mailfrom=bounce.shady-sender.example;
+ dkim=none;
+ dmarc=fail header.from=paypal.com
+
+<html><body>
+<p>Dear customer,</p>
+<p>We have detected unusual activity on your account. To restore full access,
+please <a href="https://paypal-secure-login.example/confirm">verify your identity</a>
+within 24 hours or your account will be suspended.</p>
+<p>Thank you,<br>PayPal Security Team</p>
+</body></html>

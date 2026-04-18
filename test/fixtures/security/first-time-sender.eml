@@ -1,0 +1,20 @@
+From: "Morgan Lee" <morgan@new-prospect.example>
+To: test@example.com
+Subject: Quick intro
+Date: Fri, 17 Apr 2026 10:00:00 +0000
+Message-ID: <intro-1@new-prospect.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Authentication-Results: mx.example.com;
+ spf=pass smtp.mailfrom=new-prospect.example;
+ dkim=pass header.d=new-prospect.example;
+ dmarc=pass header.from=new-prospect.example
+
+Hi,
+
+My name is Morgan Lee and I work at New Prospect, a logistics firm based in
+Chicago. I came across your work and wondered if you'd be open to a short
+call next week to compare notes on freight visibility.
+
+Best,
+Morgan

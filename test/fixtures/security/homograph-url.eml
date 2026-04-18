@@ -1,0 +1,17 @@
+From: "Security Team" <alerts@trusted-sender.example>
+To: test@example.com
+Subject: Please confirm your login
+Date: Wed, 15 Apr 2026 11:02:10 +0000
+Message-ID: <homograph-test-1@trusted-sender.example>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Authentication-Results: mx.example.com;
+ spf=pass smtp.mailfrom=trusted-sender.example;
+ dkim=pass header.d=trusted-sender.example;
+ dmarc=pass header.from=trusted-sender.example
+
+<html><body>
+<p>Hi there,</p>
+<p>Please sign in at <a href="https://раypal.com/login">paypal.com/login</a>
+to confirm a recent change.</p>
+</body></html>
