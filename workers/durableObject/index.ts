@@ -160,6 +160,9 @@ export class MailboxDO extends DurableObject<Env> {
 				email_references: schema.emails.email_references,
 				thread_id: schema.emails.thread_id,
 				folder_id: schema.emails.folder_id,
+				security_verdict: schema.emails.security_verdict,
+				security_score: schema.emails.security_score,
+				security_explanation: schema.emails.security_explanation,
 				snippet: sql<string>`SUBSTR(${schema.emails.body}, 1, 300)`,
 			})
 			.from(schema.emails)
@@ -868,5 +871,344 @@ export class MailboxDO extends DurableObject<Env> {
 		if (attachments.length > 0) {
 			this.db.insert(schema.attachments).values(attachments).run();
 		}
+	}
+
+	// ── Security pipeline persistence ──────────────────────────────
+
+	async persistSecurityVerdict(
+		emailId: string,
+		data: { verdict_json: string; score: number; explanation: string },
+	) {
+		this.db
+			.update(schema.emails)
+			.set({
+				security_verdict: data.verdict_json,
+				security_score: data.score,
+				security_explanation: data.explanation,
+			})
+			.where(eq(schema.emails.id, emailId))
+			.run();
+	}
+
+	async insertUrls(
+		emailId: string,
+		urls: Array<{
+			url: string;
+			display_text: string | null;
+			is_homograph: number;
+			is_shortener: number;
+		}>,
+	) {
+		if (urls.length === 0) return;
+		this.db
+			.insert(schema.urls)
+			.values(
+				urls.map((u) => ({
+					id: crypto.randomUUID(),
+					email_id: emailId,
+					url: u.url,
+					display_text: u.display_text,
+					is_homograph: u.is_homograph,
+					is_shortener: u.is_shortener,
+				})),
+			)
+			.run();
+	}
+
+	async getSenderReputation(sender: string) {
+		const row = this.db
+			.select()
+			.from(schema.senderReputation)
+			.where(eq(schema.senderReputation.sender, sender))
+			.get();
+		if (!row) return null;
+		return {
+			sender: row.sender,
+			first_seen: row.first_seen,
+			last_seen: row.last_seen,
+			message_count: row.message_count,
+			avg_score: row.avg_score,
+			flagged: row.flagged === 1,
+		};
+	}
+
+	async upsertSenderReputation(sender: string, newScore: number) {
+		const now = new Date().toISOString();
+		// Rolling average, capped so an old sender can still be retrained.
+		const existing = this.db
+			.select()
+			.from(schema.senderReputation)
+			.where(eq(schema.senderReputation.sender, sender))
+			.get();
+		if (!existing) {
+			this.db
+				.insert(schema.senderReputation)
+				.values({
+					sender,
+					first_seen: now,
+					last_seen: now,
+					message_count: 1,
+					avg_score: newScore,
+					flagged: 0,
+				})
+				.run();
+			return;
+		}
+		const cappedCount = Math.min(existing.message_count, 1000);
+		const newAvg = (existing.avg_score * cappedCount + newScore) / (cappedCount + 1);
+		this.db
+			.update(schema.senderReputation)
+			.set({
+				last_seen: now,
+				message_count: cappedCount + 1,
+				avg_score: newAvg,
+			})
+			.where(eq(schema.senderReputation.sender, sender))
+			.run();
+	}
+
+	async flagSender(sender: string, flagged: boolean) {
+		this.db
+			.update(schema.senderReputation)
+			.set({ flagged: flagged ? 1 : 0 })
+			.where(eq(schema.senderReputation.sender, sender))
+			.run();
+	}
+
+	// ── Threat intel feed state ────────────────────────────────────
+
+	async getIntelFeedState(feedId: string) {
+		return this.db
+			.select()
+			.from(schema.intelFeedState)
+			.where(eq(schema.intelFeedState.feed_id, feedId))
+			.get() ?? null;
+	}
+
+	async upsertIntelFeedState(
+		feedId: string,
+		data: {
+			url: string;
+			last_fetched_at: string;
+			etag: string | null;
+			entry_count: number;
+			bloom_kv_key: string;
+		},
+	) {
+		const existing = this.db
+			.select()
+			.from(schema.intelFeedState)
+			.where(eq(schema.intelFeedState.feed_id, feedId))
+			.get();
+		if (!existing) {
+			this.db
+				.insert(schema.intelFeedState)
+				.values({ feed_id: feedId, ...data })
+				.run();
+		} else {
+			this.db
+				.update(schema.intelFeedState)
+				.set(data)
+				.where(eq(schema.intelFeedState.feed_id, feedId))
+				.run();
+		}
+	}
+
+	// ── DMARC ──────────────────────────────────────────────────────
+
+	async insertDmarcReport(
+		report: {
+			id: string;
+			received_at: string;
+			org_name: string | null;
+			report_id: string | null;
+			domain: string;
+			date_range_begin: string | null;
+			date_range_end: string | null;
+			policy_p: string | null;
+			raw_r2_key: string | null;
+		},
+		records: Array<{
+			id: string;
+			source_ip: string;
+			count: number;
+			disposition: string | null;
+			dkim_result: string | null;
+			spf_result: string | null;
+			header_from: string | null;
+		}>,
+	) {
+		this.db.insert(schema.dmarcReports).values(report).run();
+		if (records.length > 0) {
+			this.db
+				.insert(schema.dmarcRecords)
+				.values(records.map((r) => ({ ...r, report_id: report.id })))
+				.run();
+		}
+	}
+
+	async listDmarcReports(options: { domain?: string; limit?: number; offset?: number } = {}) {
+		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+		const offset = Math.max(options.offset ?? 0, 0);
+		const conditions: SQL[] = [];
+		if (options.domain) conditions.push(eq(schema.dmarcReports.domain, options.domain));
+		return this.db
+			.select()
+			.from(schema.dmarcReports)
+			.where(conditions.length > 0 ? and(...conditions) : undefined)
+			.orderBy(desc(schema.dmarcReports.received_at))
+			.limit(limit)
+			.offset(offset)
+			.all();
+	}
+
+	async getDmarcRecords(reportId: string) {
+		return this.db
+			.select()
+			.from(schema.dmarcRecords)
+			.where(eq(schema.dmarcRecords.report_id, reportId))
+			.all();
+	}
+
+	// ── Cases (TheHive-lite) ───────────────────────────────────────
+
+	async createCase(input: {
+		title: string;
+		notes?: string;
+		emailId?: string;
+		observables?: Array<{ kind: string; value: string }>;
+	}) {
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+		this.db
+			.insert(schema.cases)
+			.values({
+				id,
+				created_at: now,
+				updated_at: now,
+				status: "open",
+				title: input.title.slice(0, 500),
+				notes: input.notes ?? null,
+				shared_to_hub: 0,
+				hub_event_uuid: null,
+			})
+			.run();
+		if (input.emailId) {
+			this.db.insert(schema.caseEmails).values({ case_id: id, email_id: input.emailId }).run();
+		}
+		if (input.observables && input.observables.length > 0) {
+			this.db
+				.insert(schema.caseObservables)
+				.values(input.observables.map((o) => ({
+					id: crypto.randomUUID(),
+					case_id: id,
+					kind: o.kind,
+					value: o.value,
+				})))
+				.run();
+		}
+		return { id };
+	}
+
+	async listCases(options: { status?: string; limit?: number; offset?: number } = {}) {
+		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+		const offset = Math.max(options.offset ?? 0, 0);
+		const conditions: SQL[] = [];
+		if (options.status) conditions.push(eq(schema.cases.status, options.status));
+		return this.db
+			.select()
+			.from(schema.cases)
+			.where(conditions.length > 0 ? and(...conditions) : undefined)
+			.orderBy(desc(schema.cases.updated_at))
+			.limit(limit)
+			.offset(offset)
+			.all();
+	}
+
+	async getCase(id: string) {
+		const row = this.db
+			.select()
+			.from(schema.cases)
+			.where(eq(schema.cases.id, id))
+			.get();
+		if (!row) return null;
+		const emails = this.db
+			.select()
+			.from(schema.caseEmails)
+			.where(eq(schema.caseEmails.case_id, id))
+			.all();
+		const observables = this.db
+			.select()
+			.from(schema.caseObservables)
+			.where(eq(schema.caseObservables.case_id, id))
+			.all();
+		return { ...row, emails, observables };
+	}
+
+	async updateCase(
+		id: string,
+		changes: {
+			status?: string;
+			notes?: string;
+			shared_to_hub?: boolean;
+			hub_event_uuid?: string | null;
+		},
+	) {
+		const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+		if (changes.status !== undefined) patch.status = changes.status;
+		if (changes.notes !== undefined) patch.notes = changes.notes;
+		if (changes.shared_to_hub !== undefined) patch.shared_to_hub = changes.shared_to_hub ? 1 : 0;
+		if (changes.hub_event_uuid !== undefined) patch.hub_event_uuid = changes.hub_event_uuid;
+		this.db
+			.update(schema.cases)
+			.set(patch)
+			.where(eq(schema.cases.id, id))
+			.run();
+	}
+
+	async deleteCase(id: string) {
+		this.db.delete(schema.cases).where(eq(schema.cases.id, id)).run();
+	}
+
+	async addCaseObservable(caseId: string, kind: string, value: string) {
+		const id = crypto.randomUUID();
+		this.db
+			.insert(schema.caseObservables)
+			.values({ id, case_id: caseId, kind, value })
+			.run();
+		return { id };
+	}
+
+	async getDmarcSummary(domain: string) {
+		// Aggregate per-source-IP over the last 90 days. Raw SQL for the
+		// multi-column GROUP BY + derived rates.
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT
+				   r.source_ip as source_ip,
+				   SUM(r.count) as total_count,
+				   SUM(CASE WHEN r.dkim_result = 'pass' AND r.spf_result = 'pass' THEN r.count ELSE 0 END) as pass_count,
+				   SUM(CASE WHEN r.disposition = 'quarantine' THEN r.count ELSE 0 END) as quarantine_count,
+				   SUM(CASE WHEN r.disposition = 'reject' THEN r.count ELSE 0 END) as reject_count,
+				   MIN(rep.received_at) as first_seen,
+				   MAX(rep.received_at) as last_seen
+				 FROM dmarc_records r
+				 JOIN dmarc_reports rep ON rep.id = r.report_id
+				 WHERE rep.domain = ?1
+				 GROUP BY r.source_ip
+				 ORDER BY total_count DESC
+				 LIMIT 200`,
+				domain,
+			),
+		] as Array<{
+			source_ip: string;
+			total_count: number;
+			pass_count: number;
+			quarantine_count: number;
+			reject_count: number;
+			first_seen: string;
+			last_seen: string;
+		}>;
+		return rows;
 	}
 }

@@ -244,7 +244,7 @@ function createEmailTools(env: Env, mailboxId: string) {
 
 		move_email: defineTool({
 			description:
-				"Move an email to a different folder (inbox, sent, draft, archive, trash).",
+				"Move an email to a different folder (inbox, sent, draft, archive, trash, quarantine).",
 			parameters: z.object({
 				emailId: z.string().describe("The email ID"),
 				folderId: z
@@ -332,7 +332,32 @@ export class EmailAgent extends AIChatAgent<any> {
 		sender: string;
 		subject: string;
 		threadId: string;
+		securityVerdict?: { action: string; score: number; explanation: string } | null;
 	}) {
+		// Respect the security pipeline: if the email was quarantined/blocked,
+		// skip the auto-draft and log why. See workers/security/index.ts.
+		if (emailData.securityVerdict && (emailData.securityVerdict.action === "quarantine" || emailData.securityVerdict.action === "block")) {
+			const v = emailData.securityVerdict;
+			const note = `🛡️ Security pipeline ${v.action === "block" ? "blocked" : "quarantined"} this email (score ${v.score}). ${v.explanation}`;
+			const newMessages = [
+				{
+					id: crypto.randomUUID(),
+					role: "user" as const,
+					content: `[Auto-triggered] New email from ${emailData.sender}: "${emailData.subject}"`,
+					createdAt: new Date(),
+					parts: [{ type: "text" as const, text: `[Auto-triggered] New email from ${emailData.sender}: "${emailData.subject}"` }],
+				},
+				{
+					id: crypto.randomUUID(),
+					role: "assistant" as const,
+					content: note,
+					createdAt: new Date(),
+					parts: [{ type: "text" as const, text: note }],
+				},
+			];
+			await this.persistMessages([...this.messages, ...newMessages]);
+			return;
+		}
 		const env = this.env as Env;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, emailData.mailboxId);

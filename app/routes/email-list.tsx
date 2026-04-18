@@ -12,6 +12,7 @@ import {
 	FileIcon,
 	PaperPlaneTiltIcon,
 	PencilSimpleIcon,
+	ShieldWarningIcon,
 	StarIcon,
 	TrashIcon,
 	TrayIcon,
@@ -22,6 +23,7 @@ import { useParams } from "react-router";
 import { Folders } from "shared/folders";
 import { formatListDate } from "shared/dates";
 import MailboxSplitView from "~/components/MailboxSplitView";
+import VerdictBadge from "~/components/VerdictBadge";
 import { getSnippetText } from "~/lib/utils";
 import {
 	useDeleteEmail,
@@ -77,6 +79,12 @@ const FOLDER_EMPTY_STATES: Record<
 		title: "Trash is empty",
 		description:
 			"Deleted emails will appear here. You can restore them or permanently delete them.",
+	},
+	[Folders.QUARANTINE]: {
+		icon: <ShieldWarningIcon size={48} weight="thin" className="text-kumo-subtle" />,
+		title: "No quarantined emails",
+		description:
+			"Emails the security pipeline classifies as high-risk appear here. Review and release to inbox if safe.",
 	},
 };
 
@@ -384,6 +392,7 @@ export default function EmailListRoute() {
 														</span>
 													</Tooltip>
 												)}
+												<VerdictBadge email={email} />
 												<span className="text-sm text-kumo-subtle shrink-0 ml-auto">
 													{formatListDate(email.date)}
 												</span>

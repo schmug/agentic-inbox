@@ -15,10 +15,13 @@ import {
 	FolderSimpleIcon,
 	PaperPlaneTiltIcon,
 	PencilSimpleIcon,
+	ShieldCheckIcon,
 	StarIcon,
 	TrashIcon,
 	XIcon,
 } from "@phosphor-icons/react";
+import { Folders } from "shared/folders";
+import ReportPhishButton from "~/components/ReportPhishButton";
 import type { Folder, Email } from "~/types";
 
 interface EmailPanelToolbarProps {
@@ -70,6 +73,19 @@ export default function EmailPanelToolbar({
 				aria-label="Back to list"
 				className="md:hidden shrink-0"
 			/>
+
+			{email.folder_id === Folders.QUARANTINE ? (
+				<Tooltip content="Release to Inbox" side="bottom" asChild>
+					<Button
+						variant="secondary"
+						size="sm"
+						icon={<ShieldCheckIcon size={16} />}
+						onClick={() => onMove(Folders.INBOX)}
+					>
+						Release
+					</Button>
+				</Tooltip>
+			) : null}
 
 			{isDraftFolder ? (
 				<>
@@ -157,6 +173,8 @@ export default function EmailPanelToolbar({
 			</Tooltip>
 
 			<MoveToFolderMenu folders={moveToFolders} onMove={onMove} />
+
+			<ReportPhishButton mailboxId={mailboxId} emailId={email.id} />
 
 			<div className="ml-auto flex items-center gap-0.5">
 				<Tooltip content="View source" side="bottom" asChild>

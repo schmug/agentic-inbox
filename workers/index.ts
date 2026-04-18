@@ -20,6 +20,10 @@ import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
+import { runSecurityPipeline } from "./security";
+import { isDmarcReport, ingestDmarcReport } from "./dmarc/ingest";
+import { dmarcRoutes } from "./routes/dmarc";
+import { caseRoutes } from "./routes/cases";
 
 type AppContext = Context<MailboxContext>;
 
@@ -84,6 +88,9 @@ app.use("/api/*", cors({
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
 // -- Config ---------------------------------------------------------
+
+app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
+app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 
 app.get("/api/v1/config", (c) => {
 	const domainsRaw = c.env.DOMAINS || "";
@@ -402,10 +409,59 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
 
+	// DMARC aggregate reports arrive as email. Detect and divert to the
+	// dashboard rather than running the content classifier against what is
+	// obviously automated machine mail. See workers/dmarc/ingest.ts.
+	if (isDmarcReport(parsedEmail)) {
+		try {
+			const result = await ingestDmarcReport(env, mailboxId, messageId, parsedEmail);
+			if (result.ingested) {
+				await stub.moveEmail(messageId, Folders.ARCHIVE);
+				return;
+			}
+		} catch (e) {
+			console.error("dmarc ingest failed:", (e as Error).message);
+		}
+	}
+
+	// Security pipeline (opt-in per mailbox via settings.security.enabled).
+	// Runs synchronously so quarantine decisions are made before the agent
+	// auto-draft fires. See workers/security/index.ts.
+	let securityVerdict: Awaited<ReturnType<typeof runSecurityPipeline>>["verdict"] = null;
+	try {
+		const result = await runSecurityPipeline({
+			env,
+			mailboxId,
+			messageId,
+			parsedEmail: {
+				subject: parsedEmail.subject,
+				from: parsedEmail.from,
+				html: parsedEmail.html,
+				text: parsedEmail.text,
+				headers: parsedEmail.headers,
+			},
+		});
+		securityVerdict = result.verdict;
+		if (securityVerdict?.action === "quarantine" || securityVerdict?.action === "block") {
+			await stub.moveEmail(messageId, Folders.QUARANTINE);
+		}
+	} catch (e) {
+		console.error("Security pipeline failed:", (e as Error).message);
+	}
+
 	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
 	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {
 		method: "POST", headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ mailboxId, emailId: messageId, sender: (parsedEmail.from?.address || "").toLowerCase(), subject: parsedEmail.subject || "", threadId }),
+		body: JSON.stringify({
+			mailboxId,
+			emailId: messageId,
+			sender: (parsedEmail.from?.address || "").toLowerCase(),
+			subject: parsedEmail.subject || "",
+			threadId,
+			securityVerdict: securityVerdict
+				? { action: securityVerdict.action, score: securityVerdict.score, explanation: securityVerdict.explanation }
+				: null,
+		}),
 	})).catch((e) => console.error("Auto-draft trigger failed:", (e as Error).message)));
 }
 

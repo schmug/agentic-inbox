@@ -48,6 +48,40 @@ export interface Email {
 	participants?: string;
 	needs_reply?: boolean;
 	has_draft?: boolean;
+	// Security pipeline verdict (null when the pipeline didn't run)
+	security_verdict?: string | null;
+	security_score?: number | null;
+	security_explanation?: string | null;
+}
+
+/** Shape of the JSON stored in Email.security_verdict. */
+export interface SecurityVerdict {
+	action: "allow" | "tag" | "quarantine" | "block";
+	score: number;
+	explanation: string;
+	auth: {
+		spf: string;
+		dkim: string;
+		dmarc: string;
+		authservId?: string;
+	};
+	classification: {
+		label: "safe" | "spam" | "phishing" | "bec" | "suspicious";
+		confidence: number;
+		reasoning: string;
+	};
+	signals: string[];
+	/** Present when a triage tier short-circuited the pipeline. */
+	triage?: "hard_allow" | "hard_block";
+}
+
+export function parseVerdict(raw: string | null | undefined): SecurityVerdict | null {
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as SecurityVerdict;
+	} catch {
+		return null;
+	}
 }
 
 export interface Attachment {
