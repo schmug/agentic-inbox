@@ -11,6 +11,7 @@
 
 import type { Env } from "../types";
 import { DEFAULT_THRESHOLDS, type VerdictThresholds } from "./verdict";
+import { DEFAULT_ATTACHMENT_POLICY, type AttachmentPolicy } from "./attachments";
 
 /**
  * Business-hours definition for the off-hours scrutiny tier.
@@ -59,6 +60,45 @@ export interface MailboxSecuritySettings {
 	 * gets a small verdict-score boost. See `time-rules.ts`.
 	 */
 	business_hours?: BusinessHours;
+	/**
+	 * Per-folder pipeline policy, keyed by folder id (see shared/folders.ts).
+	 *
+	 * `mode` controls how much of the security pipeline runs when a message
+	 * is delivered into that folder:
+	 *   - "full"            — default; run the full pipeline including the LLM classifier.
+	 *   - "skip_classifier" — run cheap signals + triage, but skip the LLM call.
+	 *                         Aggregate scoring treats classification as "safe".
+	 *   - "skip_all"        — no pipeline at all; record a synthetic allow verdict
+	 *                         tagged `triage: "folder_bypass"`.
+	 *
+	 * `treat_as_verified` is orthogonal to `mode`: when a user moves a
+	 * message into the folder, bump the sender's reputation with a score
+	 * of 0 (favourable signal). The bump is idempotent against the folder
+	 * transition — moving out of and back into a verified folder does not
+	 * double-count (see the `/emails/:id/move` handler in workers/index.ts).
+	 *
+	 * Folder policies are latency/cost optimisations plus a manual trust
+	 * signal. `skip_all` on INBOX is equivalent to disabling the pipeline
+	 * entirely for this mailbox, which is safe only because the mailbox
+	 * owner is the only actor who can configure policies. The hard-allow
+	 * DMARC invariant in triage.ts is unaffected — folder-bypass is a
+	 * separate, earlier tier.
+	 */
+	folder_policies?: Record<string, {
+		mode: "full" | "skip_classifier" | "skip_all";
+		treat_as_verified?: boolean;
+	}>;
+	/**
+	 * Attachment-type gate policy. Cheap triage tier that inspects attachment
+	 * metadata (filename/mimetype parsed by PostalMime) and either blocks the
+	 * message outright or boosts its verdict score. Runs BEFORE the LLM
+	 * classifier so we avoid the expensive stage for obvious-malicious carriers.
+	 *
+	 * The defaults are conservative-but-actionable: executables are hard-blocked
+	 * (effectively zero legit use), containers/macros only score (legit uses
+	 * exist). See `workers/security/attachments.ts` for full rules.
+	 */
+	attachment_policy: AttachmentPolicy;
 }
 
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
@@ -70,6 +110,7 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	trusted_auto_allow: true,
 	trusted_auto_allow_min_messages: 10,
 	intel_auto_block: true,
+	attachment_policy: DEFAULT_ATTACHMENT_POLICY,
 };
 
 export async function getSecuritySettings(
@@ -100,6 +141,17 @@ export async function getSecuritySettings(
 					boost_on_off_hours: raw.business_hours.boost_on_off_hours ?? false,
 				}
 				: undefined,
+			// Merge attachment policy field-by-field so a partially specified user
+			// block (e.g. only custom_blocklist_extensions) doesn't silently drop
+			// the default actions back to "ignore" across the board.
+			attachment_policy: {
+				...DEFAULT_ATTACHMENT_POLICY,
+				...(raw.attachment_policy ?? {}),
+				custom_blocklist_extensions: (raw.attachment_policy?.custom_blocklist_extensions
+					?? DEFAULT_ATTACHMENT_POLICY.custom_blocklist_extensions)
+					.map((e) => e.trim().toLowerCase().replace(/^\./, ""))
+					.filter((e) => e.length > 0),
+			},
 		};
 		return merged;
 	} catch (e) {

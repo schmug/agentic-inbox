@@ -19,6 +19,10 @@ import { scoreAuth } from "./auth";
 import { scoreClassification } from "./classification";
 import { scoreUrls } from "./urls";
 import { scoreReputation } from "./reputation";
+import { scoreOffHours } from "./time-rules";
+import type { BusinessHours } from "./settings";
+import type { AttachmentLike, AttachmentPolicy } from "./attachments";
+import { scoreAttachments } from "./attachments";
 
 export type VerdictAction = "allow" | "tag" | "quarantine" | "block";
 
@@ -30,7 +34,7 @@ export interface FinalVerdict {
 	classification: ClassificationResult;
 	signals: string[];
 	/** If a triage tier short-circuited the pipeline, which one. */
-	triage?: "hard_allow" | "hard_block";
+	triage?: "hard_allow" | "hard_block" | "attachment_block" | "folder_bypass";
 }
 
 export interface VerdictInputs {
@@ -38,6 +42,14 @@ export interface VerdictInputs {
 	classification: ClassificationResult;
 	urls: ExtractedUrl[];
 	reputation: SenderReputation | null;
+	/** When the mail was received. Defaults to `new Date()` if omitted. */
+	receiveDate?: Date;
+	/** Business-hours policy, or null when the mailbox has none configured. */
+	businessHours?: BusinessHours | null;
+	/** PostalMime-parsed attachments (filename/mimetype) — only metadata is needed. */
+	attachments?: AttachmentLike[];
+	/** Attachment-type gate policy. Pass null/undefined to skip scoring contribution. */
+	attachmentPolicy?: AttachmentPolicy | null;
 }
 
 export interface VerdictThresholds {
@@ -74,6 +86,29 @@ export function aggregateVerdict(
 	const rep = scoreReputation(inputs.reputation);
 	score += rep.score;
 	signals.push(...rep.reasons);
+
+	// Off-hours scrutiny: small nudge for mail arriving outside the mailbox's
+	// business hours, amplified when the classifier already flagged BEC/phishing.
+	// See `time-rules.ts` for the rationale and hand trace.
+	const offHours = scoreOffHours(
+		inputs.receiveDate ?? new Date(),
+		inputs.businessHours ?? undefined,
+		inputs.classification,
+		{ flaggedSender: inputs.reputation?.flagged === true },
+	);
+	score += offHours.score;
+	signals.push(...offHours.reasons);
+
+	// Attachment-type gate. Hard-blocks are handled by the triage tier before
+	// we ever get here; in the aggregate path we only pick up the "score"
+	// action contributions (container / macro-office). If a hard-block
+	// attachment slipped through (policy set to "score" for executables), its
+	// contribution still lands here.
+	if (inputs.attachmentPolicy && inputs.attachments && inputs.attachments.length > 0) {
+		const att = scoreAttachments(inputs.attachments, inputs.attachmentPolicy);
+		score += att.score;
+		signals.push(...att.reasons);
+	}
 
 	score = Math.max(0, Math.min(100, Math.round(score)));
 

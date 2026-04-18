@@ -22,24 +22,46 @@
 
 import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
+import { Folders } from "../../shared/folders";
 import { parseAuthResults } from "./auth";
-import { classifyEmail } from "./classification";
+import { classifyEmail, type ClassificationResult } from "./classification";
 import { extractUrls } from "./urls";
 import { aggregateVerdict, type FinalVerdict } from "./verdict";
 import { getSecuritySettings } from "./settings";
 import { checkUrlAgainstFeeds, type FeedMatch } from "../intel/feeds";
 import { evaluateTriage, type IntelMatchInfo } from "./triage";
 
+/** Default classification used when the folder policy skips the LLM stage. */
+const SAFE_DEFAULT_CLASSIFICATION: ClassificationResult = {
+	label: "safe",
+	confidence: 1.0,
+	reasoning: "classifier skipped by folder policy",
+};
+
 export interface RunPipelineInput {
 	env: Env;
 	mailboxId: string;
 	messageId: string;
+	/**
+	 * Folder the message was delivered into. Defaults to INBOX (which is
+	 * what `receiveEmail` always passes today). Filter-rule deliveries into
+	 * non-inbox folders are not implemented yet — when they land, routing
+	 * must pass the destination folder here so the folder-bypass triage
+	 * tier can honour per-folder policy.
+	 */
+	targetFolder?: string;
 	parsedEmail: {
 		subject?: string;
 		from?: { address?: string };
 		html?: string;
 		text?: string;
 		headers?: unknown;
+		/**
+		 * PostalMime produces `{ filename, mimeType, ... }` per attachment. We
+		 * only read the metadata here; attachment bodies live in R2 by the time
+		 * the pipeline runs and the cheap triage gate doesn't need them.
+		 */
+		attachments?: ReadonlyArray<{ filename?: string | null; mimeType?: string | null }>;
 	};
 }
 
@@ -51,6 +73,11 @@ export interface PipelineResult {
 
 export async function runSecurityPipeline(input: RunPipelineInput): Promise<PipelineResult> {
 	const { env, mailboxId, messageId, parsedEmail } = input;
+	const targetFolder = input.targetFolder ?? Folders.INBOX;
+	// Capture the receive timestamp once at the top so every downstream scoring
+	// stage sees the same instant — avoids flaky time-dependent decisions if a
+	// slow LLM call drags the pipeline across a business-hours boundary.
+	const receiveDate = new Date();
 	const settings = await getSecuritySettings(env, mailboxId);
 	if (!settings.enabled) return { verdict: null, skipped: true };
 
@@ -64,6 +91,13 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	// for clear-cut cases.
 	const auth = parseAuthResults(parsedEmail.headers);
 	const urls = extractUrls(bodyHtml);
+	// Normalise attachment metadata once — PostalMime uses `mimeType`, our
+	// attachment module uses `mimetype`. The downstream code is purely
+	// extension-based so the mimetype here is informational only.
+	const attachments = (parsedEmail.attachments ?? []).map((a) => ({
+		filename: a.filename ?? null,
+		mimetype: a.mimeType ?? null,
+	}));
 
 	// Intel feed lookup — first confirmed hit wins. Kept early (pre-triage)
 	// so the hard-block tier can short-circuit on it.
@@ -91,9 +125,11 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		urls,
 		intelMatch: intelForTriage,
 		settings,
+		targetFolder,
+		attachments,
 	});
-	if (triaged) {
-		let verdict: FinalVerdict = { ...triaged.verdict, triage: triaged.tier };
+	if (triaged.shortcircuit) {
+		let verdict: FinalVerdict = { ...triaged.shortcircuit.verdict, triage: triaged.shortcircuit.tier };
 		// Learning mode still applies — even a hard-block is downgraded to tag.
 		if (settings.learning_mode && (verdict.action === "quarantine" || verdict.action === "block")) {
 			verdict = { ...verdict, action: "tag" };
@@ -102,11 +138,34 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		return { verdict, skipped: false };
 	}
 
-	// Full path: LLM classification + aggregation.
-	const classification = await classifyEmail(env.AI, { subject, sender, bodyHtml, auth });
+	// Full path: LLM classification + aggregation. When a folder policy asked
+	// us to skip the LLM stage, substitute a neutral "safe" classification so
+	// the scoring function still runs on the other signals.
+	//
+	// Hand trace — mailbox with `folder_policies: { inbox: { mode: "skip_classifier" } }`
+	// receives mail into INBOX:
+	//   1. evaluateTriage sees folderPolicy.mode === "skip_classifier",
+	//      returns { skipClassifier: true } (no shortcircuit).
+	//   2. We take the else branch below: no classifyEmail() call is made.
+	//   3. `classification` = { label: "safe", confidence: 1.0,
+	//      reasoning: "classifier skipped by folder policy (inbox)" }.
+	//   4. aggregateVerdict still runs auth/url/reputation/off-hours scoring
+	//      so a truly suspicious message can still surface a non-zero score.
+	const classification = triaged.skipClassifier
+		? { ...SAFE_DEFAULT_CLASSIFICATION, reasoning: `classifier skipped by folder policy (${targetFolder})` }
+		: await classifyEmail(env.AI, { subject, sender, bodyHtml, auth });
 
 	let verdict = aggregateVerdict(
-		{ auth, classification, urls, reputation },
+		{
+			auth,
+			classification,
+			urls,
+			reputation,
+			receiveDate,
+			businessHours: settings.business_hours ?? null,
+			attachments,
+			attachmentPolicy: settings.attachment_policy ?? null,
+		},
 		settings.thresholds,
 	);
 
