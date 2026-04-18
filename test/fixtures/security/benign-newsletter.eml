@@ -1,0 +1,22 @@
+From: "ACME Weekly" <newsletter@acme-example.com>
+To: test@example.com
+Subject: ACME Weekly — Issue #42
+Date: Mon, 13 Apr 2026 09:15:22 -0400
+Message-ID: <weekly-042@acme-example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Authentication-Results: mx.example.com;
+ spf=pass smtp.mailfrom=acme-example.com;
+ dkim=pass header.d=acme-example.com;
+ dmarc=pass header.from=acme-example.com
+List-Unsubscribe: <mailto:unsubscribe@acme-example.com>
+
+<html><body>
+<h1>ACME Weekly</h1>
+<p>Welcome back! Here are this week's stories:</p>
+<ul>
+  <li><a href="https://acme-example.com/posts/framework-upgrade">Framework 5.0 released</a></li>
+  <li><a href="https://acme-example.com/posts/conference-recap">Conference recap</a></li>
+</ul>
+<p>Happy reading,<br>The ACME team</p>
+</body></html>

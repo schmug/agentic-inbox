@@ -40,15 +40,30 @@ Return STRICT JSON in this exact shape:
 
 No prose, no code fences, no preamble — just the JSON object.`;
 
+export interface ClassifyInput {
+	subject: string;
+	sender: string;
+	bodyHtml: string;
+	auth: AuthVerdict;
+}
+
+/**
+ * Test-only seam: implementations can be injected via `__setClassifier` to
+ * bypass the Workers AI call. This is NOT part of the runtime contract and
+ * must not be used from production code paths. Tests reset the override to
+ * `null` on teardown.
+ */
+export type ClassifierImpl = (ai: Ai, input: ClassifyInput) => Promise<ClassificationResult>;
+let overrideClassifier: ClassifierImpl | null = null;
+export function __setClassifier(impl: ClassifierImpl | null) {
+	overrideClassifier = impl;
+}
+
 export async function classifyEmail(
 	ai: Ai,
-	input: {
-		subject: string;
-		sender: string;
-		bodyHtml: string;
-		auth: AuthVerdict;
-	},
+	input: ClassifyInput,
 ): Promise<ClassificationResult> {
+	if (overrideClassifier) return overrideClassifier(ai, input);
 	const plain = stripHtmlToText(input.bodyHtml || "").slice(0, 4000);
 	const userMessage = `SENDER: ${input.sender}
 AUTH: spf=${input.auth.spf} dkim=${input.auth.dkim} dmarc=${input.auth.dmarc}
