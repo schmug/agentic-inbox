@@ -70,6 +70,61 @@ describe("parseAuthResults", () => {
 	});
 });
 
+describe("parseAuthResults — authserv-id gating", () => {
+	// The forgery threat: an attacker-controlled upstream mail server can
+	// inject its own Authentication-Results header claiming pass results
+	// before sending. Cloudflare Email Routing preserves such headers, so a
+	// parser that trusts any Authentication-Results header would accept
+	// forged verdicts. These tests pin the defensive behaviour.
+
+	it("ignores headers whose authserv-id is not on the trusted list", () => {
+		const v = parseAuthResults(
+			[
+				header("Authentication-Results", "attacker.example; spf=pass; dkim=pass; dmarc=pass"),
+				header("Authentication-Results", "mx.cloudflare.net; spf=fail; dkim=fail; dmarc=fail"),
+			],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v).toMatchObject({ spf: "fail", dkim: "fail", dmarc: "fail", authservId: "mx.cloudflare.net", trusted: true });
+	});
+
+	it("matches trusted authserv-id as a dotted suffix", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "mx5.google.com; spf=pass; dkim=pass; dmarc=pass")],
+			{ trustedAuthservIds: ["google.com"] },
+		);
+		expect(v).toMatchObject({ spf: "pass", trusted: true });
+	});
+
+	it("returns all-none when no trusted header is present (prefers silence over forged-pass)", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "attacker.example; spf=pass; dkim=pass; dmarc=pass")],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v).toEqual(emptyVerdict());
+	});
+
+	it("treats an empty trusted list as 'trust any' (back-compat)", () => {
+		const v = parseAuthResults(
+			[header("Authentication-Results", "anywhere; spf=pass; dkim=pass; dmarc=pass")],
+			{ trustedAuthservIds: [] },
+		);
+		expect(v).toMatchObject({ spf: "pass", dkim: "pass", dmarc: "pass" });
+	});
+
+	it("preserves 'first set wins' — legitimate dkim=none is not overwritten by later headers", () => {
+		// Regression: earlier versions used the string 'none' as both the
+		// value and the "not yet set" sentinel, so a first header with
+		// `dkim=none` let any subsequent header overwrite it — including
+		// an attacker-controlled one when gating was off.
+		const v = parseAuthResults([
+			header("Authentication-Results", "inner; spf=pass; dkim=none; dmarc=pass"),
+			header("Authentication-Results", "outer; spf=fail; dkim=pass; dmarc=fail"),
+		]);
+		expect(v).toMatchObject({ spf: "pass", dkim: "none", dmarc: "pass" });
+	});
+});
+
 describe("scoreAuth", () => {
 	it("scores a clean pass as a net-negative (credit)", () => {
 		const { score } = scoreAuth({ spf: "pass", dkim: "pass", dmarc: "pass" });

@@ -8,6 +8,19 @@
  * Cloudflare Email Routing preserves upstream auth headers and adds its own.
  * This parser handles the IANA-standard `Authentication-Results` format plus
  * the common Gmail and Microsoft variants.
+ *
+ * THREAT MODEL: An attacker who controls their own mail server can inject
+ * an `Authentication-Results` header claiming pass results for their own
+ * forged From address. Per RFC 8601 §5, receivers MUST validate the
+ * authserv-id against a trusted list before acting on the reported
+ * results. When `trusted_authserv_ids` is configured on the mailbox, only
+ * headers whose authserv-id appears in that list contribute to the verdict;
+ * all others are ignored.
+ *
+ * When no trusted list is configured we fall back to first-header-wins,
+ * which matches the behaviour pre-hardening. That's still exploitable if
+ * a forged header precedes the authentic one in the array, so operators
+ * are strongly encouraged to set the trusted list.
  */
 
 export type AuthResult =
@@ -25,6 +38,13 @@ export interface AuthVerdict {
 	dmarc: AuthResult;
 	/** The `authserv-id` that produced the verdict, if captured. */
 	authservId?: string;
+	/**
+	 * True when at least one header with a trusted authserv-id was found.
+	 * When `trusted_authserv_ids` is configured and no header matched, this
+	 * stays false and the verdict remains all-none — the aggregator treats
+	 * that as a strong suspicion signal.
+	 */
+	trusted?: boolean;
 }
 
 export function emptyVerdict(): AuthVerdict {
@@ -52,22 +72,59 @@ function findAuthHeaders(rawHeaders: unknown): string[] {
 
 const RESULT_RE = /(spf|dkim|dmarc)\s*=\s*(pass|fail|neutral|none|softfail|temperror|permerror)/gi;
 
-export function parseAuthResults(rawHeaders: unknown): AuthVerdict {
+function extractAuthservId(raw: string): string | undefined {
+	const firstToken = raw.split(";")[0]?.trim();
+	if (!firstToken || firstToken.includes("=")) return undefined;
+	return firstToken.toLowerCase();
+}
+
+export interface ParseAuthOptions {
+	/**
+	 * Lowercased list of trusted authserv-id values. When non-empty, only
+	 * `Authentication-Results` headers whose authserv-id is on this list
+	 * contribute to the verdict. Empty/unset means "trust any".
+	 */
+	trustedAuthservIds?: readonly string[];
+}
+
+/** Suffix-aware authserv-id match. `google.com` matches `mx.google.com`. */
+function matchesTrusted(authservId: string, trusted: readonly string[]): boolean {
+	for (const t of trusted) {
+		if (authservId === t) return true;
+		if (authservId.endsWith("." + t)) return true;
+	}
+	return false;
+}
+
+export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions = {}): AuthVerdict {
 	const verdict = emptyVerdict();
 	const headerValues = findAuthHeaders(rawHeaders);
 	if (headerValues.length === 0) return verdict;
 
+	const trusted = options.trustedAuthservIds ?? [];
+	const gating = trusted.length > 0;
+
+	// Track which methods are already set so a legitimate `dkim=none` result
+	// doesn't leave the state indistinguishable from "not set" — which would
+	// otherwise let a subsequent (possibly forged) header overwrite it.
+	const set = { spf: false, dkim: false, dmarc: false };
+
 	for (const raw of headerValues) {
-		if (!verdict.authservId) {
-			const firstToken = raw.split(";")[0]?.trim();
-			if (firstToken && !firstToken.includes("=")) verdict.authservId = firstToken;
+		const authservId = extractAuthservId(raw);
+		if (gating) {
+			if (!authservId) continue;
+			if (!matchesTrusted(authservId, trusted)) continue;
 		}
+		if (!verdict.authservId && authservId) verdict.authservId = authservId;
+		if (!verdict.trusted) verdict.trusted = true;
+
 		for (const match of raw.matchAll(RESULT_RE)) {
 			const method = match[1].toLowerCase() as "spf" | "dkim" | "dmarc";
 			const result = match[2].toLowerCase() as AuthResult;
-			// First verdict wins if multiple Authentication-Results headers
-			// disagree — we trust the innermost (first-listed) authserv-id.
-			if (verdict[method] === "none") verdict[method] = result;
+			if (!set[method]) {
+				verdict[method] = result;
+				set[method] = true;
+			}
 		}
 	}
 	return verdict;

@@ -43,6 +43,17 @@ export interface MailboxSecuritySettings {
 	allowlist_senders: string[];
 	/** Registrable domains (lowercased) that short-circuit to allow when DMARC passes. */
 	allowlist_domains: string[];
+	/**
+	 * Lowercased list of trusted `authserv-id` values (e.g. `mx.cloudflare.net`,
+	 * `mx.google.com`). When set, only `Authentication-Results` headers from
+	 * these authserv-ids contribute to the DMARC/SPF/DKIM verdict — all others
+	 * are ignored. Prevents an attacker-controlled upstream from forging a
+	 * pass verdict by injecting their own `Authentication-Results` header.
+	 *
+	 * Empty list falls back to first-header-wins behaviour (insecure against
+	 * forgery). Operators should populate this list to match their mail path.
+	 */
+	trusted_authserv_ids: string[];
 	/** Enable the hard-allow triage tier. Requires DMARC pass — never allowlist alone. */
 	trusted_auto_allow: boolean;
 	/**
@@ -67,6 +78,7 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	learning_mode: false,
 	allowlist_senders: [],
 	allowlist_domains: [],
+	trusted_authserv_ids: [],
 	trusted_auto_allow: true,
 	trusted_auto_allow_min_messages: 10,
 	intel_auto_block: true,
@@ -89,6 +101,7 @@ export async function getSecuritySettings(
 			// comparisons at runtime don't need to repeat the case fold.
 			allowlist_senders: (raw.allowlist_senders ?? DEFAULT_SECURITY_SETTINGS.allowlist_senders).map((s) => s.toLowerCase()),
 			allowlist_domains: (raw.allowlist_domains ?? DEFAULT_SECURITY_SETTINGS.allowlist_domains).map((s) => s.toLowerCase()),
+			trusted_authserv_ids: (raw.trusted_authserv_ids ?? DEFAULT_SECURITY_SETTINGS.trusted_authserv_ids).map((s) => s.toLowerCase()),
 			// business_hours: only materialise if the user supplied at least a timezone.
 			// `boost_on_off_hours` defaults to false so a partially specified block is inert.
 			business_hours: raw.business_hours && raw.business_hours.timezone
