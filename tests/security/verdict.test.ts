@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aggregateVerdict, DEFAULT_THRESHOLDS } from "../../workers/security/verdict";
+import { DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
 import type { AuthVerdict } from "../../workers/security/auth";
 import type { ClassificationResult } from "../../workers/security/classification";
 
@@ -73,6 +74,45 @@ describe("aggregateVerdict", () => {
 		});
 		expect(v.explanation.length).toBeGreaterThan(0);
 		expect(v.explanation).not.toBe("no notable signals");
+	});
+
+	it("adds +25 for a container-format attachment under the default policy", () => {
+		// Baseline uses DMARC-fail so score is positive before the attachment
+		// contribution — otherwise the [0,100] clamp masks the real delta.
+		const failAuth: AuthVerdict = { spf: "fail", dkim: "fail", dmarc: "fail" };
+		const common = { auth: failAuth, classification: safeClass, urls: [], reputation: null };
+		const without = aggregateVerdict(common);
+		const withIso = aggregateVerdict({
+			...common,
+			attachments: [{ filename: "installer.iso" }],
+			attachmentPolicy: DEFAULT_ATTACHMENT_POLICY,
+		});
+		expect(withIso.score - without.score).toBe(25);
+		expect(withIso.signals.some((s) => s.includes(".iso"))).toBe(true);
+	});
+
+	it("adds +15 for a macro-enabled Office attachment", () => {
+		const failAuth: AuthVerdict = { spf: "fail", dkim: "fail", dmarc: "fail" };
+		const common = { auth: failAuth, classification: safeClass, urls: [], reputation: null };
+		const without = aggregateVerdict(common);
+		const withDocm = aggregateVerdict({
+			...common,
+			attachments: [{ filename: "report.docm" }],
+			attachmentPolicy: DEFAULT_ATTACHMENT_POLICY,
+		});
+		expect(withDocm.score - without.score).toBe(15);
+	});
+
+	it("adds no score for an ordinary PDF attachment", () => {
+		const failAuth: AuthVerdict = { spf: "fail", dkim: "fail", dmarc: "fail" };
+		const common = { auth: failAuth, classification: safeClass, urls: [], reputation: null };
+		const without = aggregateVerdict(common);
+		const withPdf = aggregateVerdict({
+			...common,
+			attachments: [{ filename: "invoice.pdf" }],
+			attachmentPolicy: DEFAULT_ATTACHMENT_POLICY,
+		});
+		expect(withPdf.score).toBe(without.score);
 	});
 
 	it("respects custom thresholds", () => {

@@ -78,11 +78,13 @@ export interface MailboxSecuritySettings {
 	 */
 	folder_policies?: Record<string, FolderPolicy>;
 	/**
-	 * Attachment-type gate. When present, runs before hard-allow in triage
-	 * so a DMARC-passing allowlisted sender carrying an .exe still gets
-	 * quarantined. See `attachments.ts`.
+	 * Attachment-type gate. Runs before hard-allow in triage so a
+	 * DMARC-passing allowlisted sender carrying an .exe still gets
+	 * quarantined. Defaults are conservative-but-actionable: executables
+	 * hard-block, containers/macros only score. See `attachments.ts` for
+	 * the full rules.
 	 */
-	attachment_policy?: AttachmentPolicy;
+	attachment_policy: AttachmentPolicy;
 }
 
 /**
@@ -105,6 +107,7 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	trusted_auto_allow: true,
 	trusted_auto_allow_min_messages: 10,
 	intel_auto_block: true,
+	attachment_policy: DEFAULT_ATTACHMENT_POLICY,
 };
 
 export async function getSecuritySettings(
@@ -136,6 +139,17 @@ export async function getSecuritySettings(
 					boost_on_off_hours: raw.business_hours.boost_on_off_hours ?? false,
 				}
 				: undefined,
+			// Merge attachment_policy field-by-field so a partially-specified user
+			// block (e.g. only `custom_blocklist_extensions`) doesn't silently
+			// drop the default actions back to "ignore" across the board.
+			attachment_policy: {
+				...DEFAULT_ATTACHMENT_POLICY,
+				...(raw.attachment_policy ?? {}),
+				custom_blocklist_extensions: (raw.attachment_policy?.custom_blocklist_extensions
+					?? DEFAULT_ATTACHMENT_POLICY.custom_blocklist_extensions)
+					.map((e) => e.trim().toLowerCase().replace(/^\./, ""))
+					.filter((e) => e.length > 0),
+			},
 		};
 		return merged;
 	} catch (e) {
