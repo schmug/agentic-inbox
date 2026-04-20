@@ -180,3 +180,100 @@ describe("evaluateTriage — hard allow", () => {
 		expect(r.shortcircuit).toBeUndefined();
 	});
 });
+
+describe("evaluateTriage — attachment block", () => {
+	it("quarantines on an executable attachment under the default policy", () => {
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "whoever@example.com",
+			auth: dmarcFail,
+			reputation: null,
+			intelMatch: null,
+			settings: baseSettings,
+			attachments: [{ filename: "invoice.exe", mimetype: "application/pdf" }],
+		});
+		expect(r.shortcircuit?.tier).toBe("attachment_block");
+		expect(r.shortcircuit?.verdict.action).toBe("quarantine");
+		expect(r.shortcircuit?.verdict.score).toBe(100);
+		expect(r.shortcircuit?.reason).toContain(".exe");
+	});
+
+	it("preserves the double-extension trick: invoice.pdf.exe blocks on .exe", () => {
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "x@y.com",
+			auth: dmarcPass,
+			reputation: null,
+			intelMatch: null,
+			settings: baseSettings,
+			attachments: [{ filename: "invoice.pdf.exe", mimetype: "application/pdf" }],
+		});
+		expect(r.shortcircuit?.tier).toBe("attachment_block");
+	});
+
+	it("runs BEFORE hard-allow: allowlisted + DMARC-pass sender with .exe is still blocked", () => {
+		// Design invariant: account takeover or auto-forwarded malware should
+		// not be papered over by allowlist membership.
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "ceo@trusted.com",
+			auth: dmarcPass,
+			reputation: null,
+			intelMatch: null,
+			settings: { ...baseSettings, allowlist_senders: ["ceo@trusted.com"] },
+			attachments: [{ filename: "payroll.exe", mimetype: "application/octet-stream" }],
+		});
+		expect(r.shortcircuit?.tier).toBe("attachment_block");
+	});
+
+	it("does NOT short-circuit on safe attachments", () => {
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "x@y.com",
+			auth: dmarcFail,
+			reputation: null,
+			intelMatch: null,
+			settings: baseSettings,
+			attachments: [{ filename: "invoice.pdf", mimetype: "application/pdf" }],
+		});
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("does NOT short-circuit on container/macro attachments (those only score)", () => {
+		// Default policy: container_action="score", macro_office_action="score".
+		// Neither category should cause a triage-level short-circuit.
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "x@y.com",
+			auth: dmarcFail,
+			reputation: null,
+			intelMatch: null,
+			settings: baseSettings,
+			attachments: [
+				{ filename: "report.iso", mimetype: "application/octet-stream" },
+				{ filename: "report.docm", mimetype: "application/vnd.ms-word.document.macroenabled.12" },
+			],
+		});
+		expect(r.shortcircuit).toBeUndefined();
+	});
+
+	it("custom_blocklist_extensions extends the block set (e.g. .ace)", () => {
+		const r = evaluateTriage({
+			...baseInputs,
+			sender: "x@y.com",
+			auth: dmarcFail,
+			reputation: null,
+			intelMatch: null,
+			settings: {
+				...baseSettings,
+				attachment_policy: {
+					...baseSettings.attachment_policy,
+					custom_blocklist_extensions: ["ace"],
+				},
+			},
+			attachments: [{ filename: "malware.ace", mimetype: "application/octet-stream" }],
+		});
+		expect(r.shortcircuit?.tier).toBe("attachment_block");
+		expect(r.shortcircuit?.reason).toContain(".ace");
+	});
+});

@@ -15,10 +15,12 @@ import type { AuthVerdict } from "./auth";
 import type { ClassificationResult } from "./classification";
 import type { ExtractedUrl } from "./urls";
 import type { SenderReputation } from "./reputation";
+import type { AttachmentLike, AttachmentPolicy } from "./attachments";
 import { scoreAuth } from "./auth";
 import { scoreClassification } from "./classification";
 import { scoreUrls } from "./urls";
 import { scoreReputation } from "./reputation";
+import { scoreAttachments } from "./attachments";
 
 export type VerdictAction = "allow" | "tag" | "quarantine" | "block";
 
@@ -38,6 +40,18 @@ export interface VerdictInputs {
 	classification: ClassificationResult;
 	urls: ExtractedUrl[];
 	reputation: SenderReputation | null;
+	/**
+	 * PostalMime-parsed attachment metadata. Only filename/mimetype is read;
+	 * the bodies already live in R2 by the time the pipeline runs.
+	 */
+	attachments?: AttachmentLike[];
+	/**
+	 * Attachment-type gate policy. When omitted or null, attachments
+	 * contribute no score here. Hard-blocks are handled by the triage tier
+	 * before aggregation; this hook only picks up the "score" contributions
+	 * (container/macro-office under the defaults).
+	 */
+	attachmentPolicy?: AttachmentPolicy | null;
 }
 
 export interface VerdictThresholds {
@@ -74,6 +88,17 @@ export function aggregateVerdict(
 	const rep = scoreReputation(inputs.reputation);
 	score += rep.score;
 	signals.push(...rep.reasons);
+
+	// Attachment-type gate. Hard-blocks are handled by the triage tier before
+	// we ever reach aggregation; here we only pick up the "score" action
+	// contributions (container / macro-office under the defaults). If a
+	// policy set `executable_action: "score"`, its contribution also lands
+	// here rather than short-circuiting.
+	if (inputs.attachmentPolicy && inputs.attachments && inputs.attachments.length > 0) {
+		const att = scoreAttachments(inputs.attachments, inputs.attachmentPolicy);
+		score += att.score;
+		signals.push(...att.reasons);
+	}
 
 	score = Math.max(0, Math.min(100, Math.round(score)));
 

@@ -146,7 +146,14 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		: await classifyEmail(env.AI, { subject, sender, bodyHtml, auth });
 
 	let verdict = aggregateVerdict(
-		{ auth, classification, urls, reputation },
+		{
+			auth,
+			classification,
+			urls,
+			reputation,
+			attachments,
+			attachmentPolicy: settings.attachment_policy,
+		},
 		settings.thresholds,
 	);
 
