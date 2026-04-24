@@ -194,7 +194,9 @@ export function scoreAttachments(
 //   [invoice.pdf]  → hardBlock=false, score 0
 //   [malware.ace] with custom_blocklist_extensions=["ace"] → hardBlock=true
 //
-// TODO(attachments): password-protected archive heuristic. zip/rar with a
-// very high ratio of unparseable content relative to size is a classic
-// malware-smuggling pattern, but we can't cleanly detect it without an
-// unzip implementation in the Worker — deferred alongside full deep-scan.
+// Content-based attachment signals (e.g. detecting a password-protected
+// ZIP/RAR via archive-header encryption flags) live in the async deep-scan,
+// not here. This sync module stays filename+MIME only so the hot receive
+// path never pays for an R2 read. See `detectEncryptedArchive` in
+// `workers/intel/attachment-checks.ts` and its call site in
+// `workers/intel/deep-scan.ts:scanAttachments`.

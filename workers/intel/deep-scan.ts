@@ -33,7 +33,12 @@ import { Folders } from "../../shared/folders";
 import { checkUrlAgainstFeeds } from "./feeds";
 import { lookupDomainAge, FRESH_DOMAIN_THRESHOLD_DAYS } from "./rdap";
 import { resolveUrl } from "./url-resolver";
-import { aggregateAttachmentSignals, scoreAttachment } from "./attachment-checks";
+import {
+	aggregateAttachmentSignals,
+	detectEncryptedArchive,
+	finalExtension,
+	scoreAttachment,
+} from "./attachment-checks";
 import { isHomographic } from "../security/urls";
 import { DEFAULT_THRESHOLDS } from "../security/verdict";
 
@@ -198,7 +203,16 @@ async function scanAttachments(
 	}>;
 	if (!rows.length) return { score: 0, reasons: [] };
 
-	const verdicts = rows.map((r) => ({ row: r, verdict: scoreAttachment(r) }));
+	// For archive attachments, fetch the first 32KB from R2 and run the
+	// header-level encryption detector. 32KB gives us room for self-
+	// extracting stubs (SFX zips prepend an EXE) and for RAR5 main headers
+	// that can sit after a prefix, without the cost of a full object read.
+	// Skipped for non-archives and for very small files where any "archive"
+	// is certainly junk.
+	const verdicts = await Promise.all(rows.map(async (r) => {
+		const signals = await detectArchiveSignals(env, emailId, r);
+		return { row: r, verdict: scoreAttachment(r, signals) };
+	}));
 	const agg = aggregateAttachmentSignals(verdicts.map((v) => v.verdict));
 
 	for (const { row, verdict } of verdicts) {
@@ -209,6 +223,41 @@ async function scanAttachments(
 	}
 
 	return { score: agg.score, reasons: agg.reasons };
+}
+
+/** Extensions for which we do a bounded R2 read to sniff encryption flags. */
+const ENCRYPTED_ARCHIVE_CHECK_EXTS = new Set(["zip", "rar", "7z"]);
+/** Size of the prefix we fetch from R2 for archive-header inspection. */
+const ARCHIVE_HEADER_READ_BYTES = 32 * 1024;
+/** Below this file size, any "archive" is certainly junk — skip the R2 read. */
+const ARCHIVE_MIN_FILE_SIZE = 100;
+
+/**
+ * Fetch enough bytes from the R2-stored attachment to decide whether the
+ * archive advertises encryption. Best-effort: any failure returns an empty
+ * signal object so attachment scoring can proceed without this input.
+ */
+async function detectArchiveSignals(
+	env: Env,
+	emailId: string,
+	row: { id: string; filename: string; size: number },
+): Promise<{ encryptedArchive?: boolean }> {
+	const ext = finalExtension(row.filename);
+	if (!ENCRYPTED_ARCHIVE_CHECK_EXTS.has(ext)) return {};
+	if (row.size < ARCHIVE_MIN_FILE_SIZE) return {};
+
+	const key = `attachments/${emailId}/${row.id}/${row.filename}`;
+	try {
+		const obj = await env.BUCKET.get(key, {
+			range: { offset: 0, length: ARCHIVE_HEADER_READ_BYTES },
+		});
+		if (!obj) return {};
+		const buf = new Uint8Array(await obj.arrayBuffer());
+		return { encryptedArchive: detectEncryptedArchive(buf, ext) };
+	} catch (e) {
+		console.error("deep-scan archive header read failed:", (e as Error).message);
+		return {};
+	}
 }
 
 // ── Internals ────────────────────────────────────────────────────
