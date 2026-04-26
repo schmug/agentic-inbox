@@ -3,19 +3,64 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Button, Input, Tooltip } from "@cloudflare/kumo";
-import { GearSixIcon, ListIcon, MagnifyingGlassIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
+import {
+	BellIcon,
+	BellSlashIcon,
+	GearSixIcon,
+	ListIcon,
+	MagnifyingGlassIcon,
+	RobotIcon,
+	XIcon,
+} from "@phosphor-icons/react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useUIStore } from "~/hooks/useUIStore";
 
+type NotificationStatus = "unsupported" | "default" | "granted" | "denied";
+
+function readNotificationStatus(): NotificationStatus {
+	if (typeof window === "undefined" || typeof Notification === "undefined") {
+		return "unsupported";
+	}
+	return Notification.permission as NotificationStatus;
+}
+
 export default function Header() {
 	const [searchQuery, setSearchQuery] = useState("");
 	const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+	const [notifStatus, setNotifStatus] = useState<NotificationStatus>("unsupported");
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const navigate = useNavigate();
 	const location = useLocation();
 	const [searchParams] = useSearchParams();
 	const { toggleSidebar, toggleAgentPanel, isAgentPanelOpen } = useUIStore();
+
+	// Read on mount only. The Permissions API would let us watch for revocation
+	// in real time but Safari's support is uneven and a stale "granted" badge
+	// is harmless — the OS still controls actual delivery.
+	useEffect(() => {
+		setNotifStatus(readNotificationStatus());
+	}, []);
+
+	const requestNotifications = async () => {
+		if (typeof Notification === "undefined") return;
+		try {
+			const result = await Notification.requestPermission();
+			setNotifStatus(result as NotificationStatus);
+		} catch {
+			// Older Safari throws on the promise form. Ignore — the user can
+			// re-enable via browser settings if it falls through.
+		}
+	};
+
+	const notifTooltip = (() => {
+		switch (notifStatus) {
+			case "granted": return "Desktop notifications enabled";
+			case "denied": return "Notifications blocked — enable in browser settings";
+			case "default": return "Enable desktop notifications";
+			default: return "Notifications not supported in this browser";
+		}
+	})();
 
 	// Sync search input with URL query param so it stays populated
 	const urlQuery = searchParams.get("q") || "";
@@ -119,6 +164,22 @@ export default function Header() {
 			)}
 
 			<div className="flex items-center gap-1 ml-auto shrink-0">
+				{notifStatus !== "unsupported" && (
+					<Tooltip content={notifTooltip} side="bottom" asChild>
+						<Button
+							variant={notifStatus === "granted" ? "secondary" : "ghost"}
+							shape="square"
+							icon={
+								notifStatus === "denied"
+									? <BellSlashIcon size={20} />
+									: <BellIcon size={20} weight={notifStatus === "granted" ? "fill" : "regular"} />
+							}
+							onClick={requestNotifications}
+							disabled={notifStatus === "granted" || notifStatus === "denied"}
+							aria-label={notifTooltip}
+						/>
+					</Tooltip>
+				)}
 				<Tooltip content={isAgentPanelOpen ? "Hide agent panel" : "Show agent panel"} side="bottom" asChild>
 					<Button
 						variant={isAgentPanelOpen ? "secondary" : "ghost"}
