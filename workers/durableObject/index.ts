@@ -110,6 +110,42 @@ export class MailboxDO extends DurableObject<Env> {
 		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
 	}
 
+	// ── Realtime event stream (WebSocket, hibernation API) ─────────
+	//
+	// Foreground "new mail" notifications. Clients open a WebSocket via
+	// `GET /api/v1/mailboxes/:id/events` (see workers/index.ts) and the
+	// inbound email handler calls `notifyNewEmail` after the sync security
+	// verdict so quarantined mail doesn't surface as a desktop notification.
+
+	async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("Upgrade") !== "websocket") {
+			return new Response("Expected WebSocket upgrade", { status: 426 });
+		}
+		const pair = new WebSocketPair();
+		const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+		this.ctx.acceptWebSocket(server);
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	async webSocketMessage(_ws: WebSocket, _msg: ArrayBuffer | string) {
+		// Server-push only; ignore anything the client sends.
+	}
+
+	async webSocketClose(ws: WebSocket, code: number, _reason: string, _wasClean: boolean) {
+		try { ws.close(code, "closing"); } catch { /* already closed */ }
+	}
+
+	async webSocketError(_ws: WebSocket, _err: unknown) {
+		// Hibernation API requires the handler; nothing to do.
+	}
+
+	async notifyNewEmail(emailId: string, folderId: string) {
+		const payload = JSON.stringify({ type: "new-email", id: emailId, folder: folderId });
+		for (const ws of this.ctx.getWebSockets()) {
+			try { ws.send(payload); } catch { /* dead socket — hibernation will GC */ }
+		}
+	}
+
 	// ── Email CRUD (Drizzle) ───────────────────────────────────────
 
 	async getEmails(options: GetEmailsOptions = {}) {

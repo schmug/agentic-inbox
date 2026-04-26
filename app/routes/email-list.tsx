@@ -176,10 +176,13 @@ export default function EmailListRoute() {
 		[folder, page],
 	);
 
+	// Live updates arrive via the per-mailbox WebSocket subscription mounted
+	// in `app/routes/mailbox.tsx`, which invalidates this query on each new
+	// email. The manual refresh button below remains as an explicit fallback.
 	const {
 		data: emailData,
 		isFetching: isRefreshing,
-	} = useEmails(mailboxId, params, { refetchInterval: 30_000 });
+	} = useEmails(mailboxId, params);
 
 	const emails = emailData?.emails ?? [];
 	const totalCount = emailData?.totalCount ?? 0;

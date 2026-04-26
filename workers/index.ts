@@ -132,6 +132,18 @@ app.get("/api/v1/mailboxes/:mailboxId", async (c) => {
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings: await obj.json() });
 });
 
+// Realtime event stream. Browsers can't set custom headers on `new
+// WebSocket()`, so auth piggybacks on the `cf-access-jwt-assertion` header
+// the CF Access edge injects on all origin requests (including Upgrade)
+// when the user's session is valid. The `*` middleware in workers/app.ts
+// validates that header before this route is reached.
+app.get("/api/v1/mailboxes/:mailboxId/events", async (c) => {
+	if (c.req.header("Upgrade") !== "websocket") {
+		return c.text("Expected WebSocket upgrade", 426);
+	}
+	return c.var.mailboxStub.fetch(c.req.raw);
+});
+
 app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const { settings } = (await c.req.json()) as { settings: Record<string, unknown> };
@@ -543,6 +555,22 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		}
 	} catch (e) {
 		console.error("Security pipeline failed:", (e as Error).message);
+	}
+
+	// Foreground notification fanout. Pass the *final* folder so connected
+	// clients can suppress desktop notifications for mail that was
+	// quarantined/blocked by the sync verdict — surfacing a notification for
+	// a phishing email that just vanished into Quarantine is worse than
+	// silence. Deep-scan can still tighten the verdict later, but that
+	// happens out-of-band and does not retract the notification.
+	const finalFolder =
+		securityVerdict?.action === "quarantine" || securityVerdict?.action === "block"
+			? Folders.QUARANTINE
+			: Folders.INBOX;
+	try {
+		await stub.notifyNewEmail(messageId, finalFolder);
+	} catch (e) {
+		console.error("notifyNewEmail failed:", (e as Error).message);
 	}
 
 	// Async deep-scan. Runs AFTER the sync pipeline decision and only ever
