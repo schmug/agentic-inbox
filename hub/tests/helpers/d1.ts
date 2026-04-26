@@ -76,8 +76,25 @@ export function makeTestDb(): TestDb {
 						},
 					};
 				},
-			};
+				// Expose boundObj for use in batch().
+				_getBoundObj() { return boundObj; },
+				_getStmt() { return stmt; },
+			} as PreparedLike & { _getBoundObj(): Record<string, unknown>; _getStmt(): ReturnType<Database.Database["prepare"]> };
 			return api;
+		},
+		async batch(statements: PreparedLike[]): Promise<{ results: unknown[] }[]> {
+			// Run all statements inside a single SQLite transaction to emulate
+			// D1's atomic batch semantics. Each statement returns a result object.
+			const results: { results: unknown[] }[] = [];
+			const txn = raw.transaction(() => {
+				for (const stmt of statements) {
+					const s = stmt as PreparedLike & { _getBoundObj(): Record<string, unknown>; _getStmt(): ReturnType<Database.Database["prepare"]> };
+					const info = s._getStmt().run(s._getBoundObj());
+					results.push({ results: [{ changes: info.changes, last_row_id: Number(info.lastInsertRowid) }] });
+				}
+			});
+			txn();
+			return results;
 		},
 	} as unknown as D1Database;
 
