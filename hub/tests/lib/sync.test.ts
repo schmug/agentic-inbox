@@ -187,3 +187,29 @@ describe("pullFromPeer", () => {
 		expect(stored.info).toBe("edited upstream");
 	});
 });
+
+import { runInboundSync } from "../../src/lib/sync";
+
+describe("runInboundSync", () => {
+	it("skips peers whose next_retry_at is in the future", async () => {
+		const future = new Date(Date.now() + 60_000).toISOString();
+		db.raw.prepare(`UPDATE inbound_peers SET next_retry_at = ? WHERE uuid = 'ib-1'`).run(future);
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ response: [] }), { status: 200 })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await runInboundSync(env);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("skips peers with enabled=0", async () => {
+		db.raw.prepare(`UPDATE inbound_peers SET enabled = 0 WHERE uuid = 'ib-1'`).run();
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ response: [] }), { status: 200 })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await runInboundSync(env);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
