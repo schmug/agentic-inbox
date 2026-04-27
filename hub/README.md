@@ -107,6 +107,8 @@ curl -X POST https://your-hub.example/admin/peers \
 
 Pulled-only intel does **not** solo-promote to the destroylist. The synthetic peer org counts as one contributor; promotion still requires `PROMOTION_CONTRIBUTORS = 2`. CIRCL's IoCs only land on the destroylist after at least one local org independently reports the same value. This is intentional sybil resistance — a compromised upstream cannot single-handedly push entries into your published feed. To boost a trusted peer's intel faster, raise its `default_trust` so it contributes more score per corroboration.
 
+For local-org reports to count as corroboration of pulled intel, they must be posted to the same sharing group configured as `default_sharing_group_uuid` on the peer. Corroboration rows are keyed on `(sharing_group_uuid, attribute_type, value)`, so reports landing in a different group (or `NULL`) form a separate row and never combine.
+
 ### Loop prevention
 
 Events whose `orgc_uuid` matches a local org are skipped on pull. This handles the case where we previously published to the upstream and now see it coming back. Provenance is recorded on `events.source_peer_uuid` for forward-compat with outbound sync.

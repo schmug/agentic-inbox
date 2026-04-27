@@ -138,6 +138,11 @@ async function fetchPage(
 		returnFormat: "json",
 		limit: PAGE_SIZE,
 		page,
+		// Explicit ASC ordering. MISP restSearch order is undefined without
+		// this; with DESC default a deep first-backfill (>MAX_PAGES * PAGE_SIZE
+		// events) would advance the watermark past unprocessed older events
+		// and never come back for them.
+		order: "Event.timestamp ASC",
 	};
 	if (since) body.timestamp = since; // >= semantics on the upstream side
 
