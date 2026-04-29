@@ -75,6 +75,7 @@ ${plain}`;
 	try {
 		const response = (await Promise.race([
 			ai.run(
+				// @ts-expect-error — model string not in generated union
 				"@cf/meta/llama-3.1-8b-instruct-fast",
 				{
 					messages: [
