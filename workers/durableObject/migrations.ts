@@ -295,4 +295,24 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_cases_updated_at ON cases(updated_at);
         `,
 	},
+	{
+		// Per-pipeline-run timing log for the dashboard's real p95-latency card.
+		// Only records invocations that actually ran (security pipeline enabled
+		// for the mailbox); skipped invocations are excluded so the success rate
+		// and p95 stay consistent. Index on started_at supports the 24h window.
+		name: "12_pipeline_runs",
+		sql: `
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id TEXT PRIMARY KEY,
+                email_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                status TEXT NOT NULL,
+                duration_ms INTEGER,
+                stage_failed TEXT,
+                FOREIGN KEY(email_id) REFERENCES emails(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started_at ON pipeline_runs(started_at);
+        `,
+	},
 ];

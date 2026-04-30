@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	bucketThreatPressure,
+	computeP95,
 	pipelineSuccessRate,
 } from "../../workers/lib/dashboard-aggregation";
 
@@ -101,5 +102,42 @@ describe("pipelineSuccessRate", () => {
 	it("returns 1 when nothing failed and 0 when everything failed", () => {
 		expect(pipelineSuccessRate({ completed: 5, failed: 0 })).toBe(1);
 		expect(pipelineSuccessRate({ completed: 0, failed: 3 })).toBe(0);
+	});
+});
+
+describe("computeP95", () => {
+	it("returns null for an empty sample", () => {
+		expect(computeP95([])).toBeNull();
+	});
+
+	it("returns the single value for a one-element sample", () => {
+		expect(computeP95([42])).toBe(42);
+	});
+
+	it("interpolates between adjacent ranks", () => {
+		// 100 values 1..100 → rank = 0.95 * 99 = 94.05 → between sample[94]=95 and sample[95]=96
+		const durations = Array.from({ length: 100 }, (_, i) => i + 1);
+		expect(computeP95(durations)).toBeCloseTo(95.05, 2);
+	});
+
+	it("matches the top-tier value for a heavy-tailed distribution", () => {
+		// 19 small values + 1 outlier — p95 sits in the outlier region.
+		const durations = [
+			...Array.from({ length: 19 }, () => 100),
+			5000,
+		];
+		// Sorted: nineteen 100s then 5000. rank = 0.95 * 19 = 18.05 →
+		// interpolate between sample[18]=100 and sample[19]=5000 = 100 + 0.05*(5000-100)
+		expect(computeP95(durations)).toBeCloseTo(345, 0);
+	});
+
+	it("drops negative and non-finite values rather than counting them", () => {
+		// Three 100s plus garbage that should be discarded.
+		const durations = [100, 100, 100, Number.NaN, Number.POSITIVE_INFINITY, -50];
+		expect(computeP95(durations)).toBe(100);
+	});
+
+	it("does not require pre-sorted input", () => {
+		expect(computeP95([900, 100, 500, 200, 300])).toBeCloseTo(820, 0);
 	});
 });

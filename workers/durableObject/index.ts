@@ -996,6 +996,69 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
+	// ── Pipeline runs (real p95 latency) ───────────────────────────
+
+	async recordPipelineRunStart(input: {
+		runId: string;
+		emailId: string;
+		startedAt: string;
+	}) {
+		this.db
+			.insert(schema.pipelineRuns)
+			.values({
+				id: input.runId,
+				email_id: input.emailId,
+				started_at: input.startedAt,
+				status: "running",
+			})
+			.run();
+	}
+
+	async recordPipelineRunComplete(input: {
+		runId: string;
+		completedAt: string;
+		durationMs: number;
+		status: "completed" | "failed" | "skipped";
+		stageFailed?: string | null;
+	}) {
+		this.db
+			.update(schema.pipelineRuns)
+			.set({
+				completed_at: input.completedAt,
+				duration_ms: input.durationMs,
+				status: input.status,
+				stage_failed: input.stageFailed ?? null,
+			})
+			.where(eq(schema.pipelineRuns.id, input.runId))
+			.run();
+	}
+
+	/**
+	 * Pull the `duration_ms` of every completed run in the 24h window. p95 is
+	 * computed in JS (SQLite has no `PERCENTILE_CONT`); the helper lives in
+	 * `workers/lib/dashboard-aggregation.ts` so it's unit-testable without a
+	 * runtime SQL surface.
+	 */
+	async getPipelineDurations24h(opts: { now?: string } = {}): Promise<number[]> {
+		const nowIso = opts.now ?? new Date().toISOString();
+		const dayAgoIso = new Date(
+			new Date(nowIso).getTime() - 24 * 60 * 60 * 1000,
+		).toISOString();
+		const rows = this.db
+			.select({ duration_ms: schema.pipelineRuns.duration_ms })
+			.from(schema.pipelineRuns)
+			.where(
+				and(
+					eq(schema.pipelineRuns.status, "completed"),
+					sql`${schema.pipelineRuns.started_at} >= ${dayAgoIso}`,
+				),
+			)
+			.all();
+		return rows
+			.map((r) => r.duration_ms)
+			.filter((d): d is number => typeof d === "number");
+	}
+
 	/**
 	 * Enumerate every attachment's R2 object key (`attachments/{email_id}/{id}/{filename}`)
 	 * so the mailbox-delete flow can reap R2 blobs before wiping this DO.
@@ -1364,13 +1427,16 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Aggregate the operations dashboard payload in one round-trip from the
 	 * UI. Each card lives in its own indexed query — see
-	 * `migrations.ts/11_dashboard_indexes` for the supporting indexes.
+	 * `migrations.ts/11_dashboard_indexes` and `12_pipeline_runs` for the
+	 * supporting indexes.
 	 *
-	 * Pipeline-success is derived from `emails.deep_scan_status` because we
-	 * don't yet log per-run latency; tracked as a follow-up. Hub
-	 * "contributions" is the local proxy `cases.shared_to_hub`; real
-	 * cross-org corroboration would require a hub-side query and is also
-	 * tracked separately.
+	 * Pipeline-success is derived from `emails.deep_scan_status` (the deep-
+	 * scan stage runs out-of-band on a separate clock from the sync pipeline
+	 * tracked in `pipeline_runs`). p95 latency comes from `pipeline_runs`,
+	 * filtered to the `completed` status so skipped/failed invocations don't
+	 * skew the sample. Hub "contributions" is the local proxy
+	 * `cases.shared_to_hub`; real cross-org corroboration would require a
+	 * hub-side query and is tracked separately.
 	 */
 	async getDashboardSummary(opts: { now?: string } = {}) {
 		const nowIso = opts.now ?? new Date().toISOString();
@@ -1445,12 +1511,15 @@ export class MailboxDO extends DurableObject<Env> {
 			.limit(5)
 			.all();
 
+		const pipelineDurationsMs = await this.getPipelineDurations24h({ now: nowIso });
+
 		return {
 			now: nowIso,
 			threatsBlocked,
 			openCases,
 			hubContributions,
 			pipelineScan: { completed, failed },
+			pipelineDurationsMs,
 			verdictRows,
 			recentCases,
 		};

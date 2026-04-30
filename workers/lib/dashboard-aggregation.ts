@@ -81,3 +81,25 @@ export function pipelineSuccessRate(input: PipelineSuccessInput): number | null 
 	if (total === 0) return null;
 	return input.completed / total;
 }
+
+/**
+ * Compute the 95th-percentile value of a sample of durations using linear
+ * interpolation between adjacent ranks. Returns `null` for an empty sample so
+ * the dashboard can render a neutral placeholder rather than a misleading 0.
+ *
+ * Negative or non-finite inputs are dropped — they only show up if a clock
+ * jumped backwards mid-run, and counting them would understate p95.
+ */
+export function computeP95(durationsMs: number[]): number | null {
+	const sample = durationsMs
+		.filter((d) => Number.isFinite(d) && d >= 0)
+		.sort((a, b) => a - b);
+	if (sample.length === 0) return null;
+	if (sample.length === 1) return sample[0]!;
+	const rank = 0.95 * (sample.length - 1);
+	const lo = Math.floor(rank);
+	const hi = Math.ceil(rank);
+	if (lo === hi) return sample[lo]!;
+	const weight = rank - lo;
+	return sample[lo]! * (1 - weight) + sample[hi]! * weight;
+}
