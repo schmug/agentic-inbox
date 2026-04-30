@@ -2,11 +2,12 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Loader, Pagination, Tooltip } from "@cloudflare/kumo";
+import { Badge, Button, Pagination, Tooltip } from "@cloudflare/kumo";
 import { ArrowLeftIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import MailboxSplitView from "~/components/MailboxSplitView";
+import { useFeedback } from "~/lib/feedback";
 import { formatListDate, getSnippetText } from "~/lib/utils";
 import { useUpdateEmail } from "~/queries/emails";
 import { useSearchEmails, SEARCH_PAGE_SIZE } from "~/queries/search";
@@ -55,7 +56,7 @@ export default function SearchResultsRoute() {
 		closePanel();
 	}, [closePanel, searchChanged, searchKey]);
 
-	const { data: searchData, isLoading } = useSearchEmails(
+	const { data: searchData, isLoading, isError } = useSearchEmails(
 		mailboxId,
 		urlQuery,
 		currentPage,
@@ -63,6 +64,14 @@ export default function SearchResultsRoute() {
 	const results = searchData?.results ?? [];
 	const totalCount = searchData?.totalCount ?? 0;
 	const isPanelOpen = selectedEmailId !== null || isComposing;
+
+	const feedback = useFeedback();
+	useEffect(() => {
+		if (isError) feedback.error("Search failed. Try again.");
+		// feedback identity changes every render (returns a fresh object), so we
+		// gate the effect on isError alone to avoid spamming toasts.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isError]);
 
 	const handleRowClick = (email: Email) => { selectEmail(email.id); if (!email.read && mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { read: true } }); };
 	const folderDisplayName = (name: string | null | undefined): string => { if (!name) return ""; const map: Record<string, string> = { inbox: "Inbox", sent: "Sent", draft: "Drafts", archive: "Archive", trash: "Trash", quarantine: "Quarantine" }; return map[name.toLowerCase()] || name; };
@@ -78,7 +87,23 @@ export default function SearchResultsRoute() {
 					<div className="min-w-0 flex-1"><h1 className="pp-serif text-ink truncate">Search Results</h1>{!isLoading && <span className="text-sm text-ink-3">{totalCount} result{totalCount !== 1 ? "s" : ""}{urlQuery ? ` for "${urlQuery}"` : ""}</span>}</div>
 				</div>
 				<div className="flex-1 overflow-y-auto">
-					{isLoading ? <div className="flex justify-center py-16"><Loader size="lg" /></div> : results.length === 0 ? (
+					{isLoading ? (
+						<div className="divide-y divide-line">
+							{Array.from({ length: 5 }).map((_, i) => (
+								<div key={i} className="flex items-center gap-3 px-4 py-2.5 md:px-5 md:py-3 animate-pulse">
+									<div className="w-2.5 shrink-0" />
+									<div className="flex-1 min-w-0">
+										<div className="flex items-center gap-2">
+											<div className="h-3 w-24 rounded bg-paper-3" />
+											<div className="h-3 flex-1 rounded bg-paper-3" />
+											<div className="h-3 w-12 rounded bg-paper-3 ml-auto" />
+										</div>
+										<div className="h-2.5 w-3/4 rounded bg-paper-3 mt-2" />
+									</div>
+								</div>
+							))}
+						</div>
+					) : results.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-24 px-6 text-center">
 							<div className="mb-4"><MagnifyingGlassIcon size={48} weight="thin" className="text-ink-3" /></div>
 							<h3 className="text-base font-semibold text-ink mb-1.5">No results found</h3>
