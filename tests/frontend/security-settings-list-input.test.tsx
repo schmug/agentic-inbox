@@ -80,7 +80,7 @@ describe("SecuritySettingsPanel · comma-separated list inputs", () => {
 		const onLatest = vi.fn();
 		renderWithProviders(<ControlledHost onLatest={onLatest} />);
 
-		const input = screen.getByPlaceholderText(/mx\.cloudflare\.net/i);
+		const input = screen.getByPlaceholderText("mx.cloudflare.net, mx.google.com");
 		await user.type(input, "mx.cloudflare.net, mx.google.com, mx.proton.me");
 
 		const last = onLatest.mock.calls.at(-1)?.[0] as SecuritySettings;
