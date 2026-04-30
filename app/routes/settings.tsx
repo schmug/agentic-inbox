@@ -58,6 +58,10 @@ export default function SettingsRoute() {
 
 		const resolvedModel =
 			modelChoice === "__custom__" ? customModel.trim() : modelChoice;
+		if (modelChoice === "__custom__" && !resolvedModel) {
+			feedback.error("Custom model cannot be empty");
+			return;
+		}
 		if (resolvedModel && !resolvedModel.startsWith("@cf/")) {
 			feedback.error("Model must start with @cf/");
 			return;
