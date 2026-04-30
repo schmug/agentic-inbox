@@ -9,9 +9,22 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "node:path";
 
+// `wrangler.jsonc` marks the `send_email` binding as `remote: true`, which
+// makes the Cloudflare vite plugin authenticate against the deployed Worker
+// at startup. That Worker sits behind Cloudflare Access, so without service-
+// token creds the dev server fails to boot. Only enable remote bindings when
+// the contributor has opted in via direnv / their shell (see README).
+const hasAccessCreds = Boolean(
+  process.env.CLOUDFLARE_ACCESS_CLIENT_ID &&
+    process.env.CLOUDFLARE_ACCESS_CLIENT_SECRET,
+);
+
 export default defineConfig({
   plugins: [
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    cloudflare({
+      viteEnvironment: { name: "ssr" },
+      remoteBindings: hasAccessCreds,
+    }),
     tailwindcss(),
     reactRouter(),
     tsconfigPaths(),
