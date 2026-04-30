@@ -35,7 +35,7 @@ const populated: DashboardSummary = {
 	openCases: 7,
 	hubContributions: 2,
 	pipelineSuccess: 0.92,
-	p95Ms: 1450,
+	p95Ms: 1500,
 	threatPressure: [0, 1, 0, 2, 1, 0, 3, 0, 0, 1, 0, 0],
 	recentCases: [
 		{ id: "c1", title: "Suspicious wire request", status: "open", updated_at: "2026-04-29T11:00:00Z" },
@@ -72,7 +72,10 @@ describe("DashboardRoute", () => {
 		expect(screen.getByText("3")).toBeInTheDocument();
 		expect(screen.getByText("7")).toBeInTheDocument();
 		expect(screen.getByText("92%")).toBeInTheDocument();
-		// p95Ms 1450 → formatLatency renders "1.5s" (≥1000ms, <10s ⇒ one decimal).
+		// p95Ms 1500 → formatLatency renders "1.5s" (≥1000ms, <10s ⇒ one decimal).
+		// 1500 is exactly representable in IEEE-754 so toFixed is unambiguous;
+		// values like 1450 would render "1.4s" because (1.45).toFixed(1) rounds
+		// down on the underlying 1.4499999… binary representation.
 		expect(screen.getByText("1.5s")).toBeInTheDocument();
 		expect(screen.getByText("2")).toBeInTheDocument();
 		expect(screen.getByText(/suspicious wire request/i)).toBeInTheDocument();
