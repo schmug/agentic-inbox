@@ -23,6 +23,7 @@ import { useParams } from "react-router";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useUIStore } from "~/hooks/useUIStore";
+import { useFeedback } from "~/lib/feedback";
 import type { UIMessage } from "ai";
 
 const TOOL_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
@@ -306,10 +307,17 @@ function AgentChatConnected({
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	const [inputValue, setInputValue] = useState("");
 	const { startCompose } = useUIStore();
+	const feedback = useFeedback();
 
 	const agent = useAgent({ agent: "EmailAgent", name: mailboxId });
 	const { messages, sendMessage, status, setMessages, stop } =
-		useAgentChat({ agent });
+		useAgentChat({
+			agent,
+			onError: (error) => {
+				console.error("agent chat error:", error);
+				feedback.error("Agent request failed. Try again.");
+			},
+		});
 	const isStreaming = status === "streaming" || status === "submitted";
 
 	useEffect(() => {
