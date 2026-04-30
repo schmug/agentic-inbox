@@ -35,6 +35,7 @@ const populated: DashboardSummary = {
 	openCases: 7,
 	hubContributions: 2,
 	pipelineSuccess: 0.92,
+	p95Ms: 1450,
 	threatPressure: [0, 1, 0, 2, 1, 0, 3, 0, 0, 1, 0, 0],
 	recentCases: [
 		{ id: "c1", title: "Suspicious wire request", status: "open", updated_at: "2026-04-29T11:00:00Z" },
@@ -71,12 +72,14 @@ describe("DashboardRoute", () => {
 		expect(screen.getByText("3")).toBeInTheDocument();
 		expect(screen.getByText("7")).toBeInTheDocument();
 		expect(screen.getByText("92%")).toBeInTheDocument();
+		// p95Ms 1450 → formatLatency renders "1.5s" (≥1000ms, <10s ⇒ one decimal).
+		expect(screen.getByText("1.5s")).toBeInTheDocument();
 		expect(screen.getByText("2")).toBeInTheDocument();
 		expect(screen.getByText(/suspicious wire request/i)).toBeInTheDocument();
 		expect(screen.getByText(/credential phish/i)).toBeInTheDocument();
 	});
 
-	it("renders '—' for pipelineSuccess when no scans have run, and 'No cases yet.' when empty", () => {
+	it("renders '—' for pipelineSuccess and p95 when no scans have run, and 'No cases yet.' when empty", () => {
 		queryState = {
 			data: {
 				now: populated.now,
@@ -84,6 +87,7 @@ describe("DashboardRoute", () => {
 				openCases: 0,
 				hubContributions: 0,
 				pipelineSuccess: null,
+				p95Ms: null,
 				threatPressure: new Array(12).fill(0),
 				recentCases: [],
 			},
@@ -91,7 +95,9 @@ describe("DashboardRoute", () => {
 			isError: false,
 		};
 		renderDashboard();
-		expect(screen.getByText("—")).toBeInTheDocument();
+		// Both the pipeline-success and pipeline-p95 cards render the "—"
+		// placeholder when their respective values are null.
+		expect(screen.getAllByText("—")).toHaveLength(2);
 		expect(screen.getByText(/no cases yet/i)).toBeInTheDocument();
 	});
 
