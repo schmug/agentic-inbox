@@ -35,6 +35,7 @@ function makeSummary(pipelineSuccess: number | null): DashboardSummary {
 		openCases: 0,
 		hubContributions: 0,
 		pipelineSuccess,
+		p95Ms: null,
 		threatPressure: [],
 		recentCases: [],
 	};

@@ -95,6 +95,28 @@ export function pipelineSuccessRate(input: PipelineSuccessInput): number | null 
 	return input.completed / total;
 }
 
+/**
+ * Compute the 95th-percentile value of a sample of durations using linear
+ * interpolation between adjacent ranks. Returns `null` for an empty sample so
+ * the dashboard can render a neutral placeholder rather than a misleading 0.
+ *
+ * Negative or non-finite inputs are dropped — they only show up if a clock
+ * jumped backwards mid-run, and counting them would understate p95.
+ */
+export function computeP95(durationsMs: number[]): number | null {
+	const sample = durationsMs
+		.filter((d) => Number.isFinite(d) && d >= 0)
+		.sort((a, b) => a - b);
+	if (sample.length === 0) return null;
+	if (sample.length === 1) return sample[0]!;
+	const rank = 0.95 * (sample.length - 1);
+	const lo = Math.floor(rank);
+	const hi = Math.ceil(rank);
+	if (lo === hi) return sample[lo]!;
+	const weight = rank - lo;
+	return sample[lo]! * (1 - weight) + sample[hi]! * weight;
+}
+
 // ── Org overview aggregation ─────────────────────────────────────────
 
 /** Subset of the per-mailbox DO summary the org aggregator consumes. */
@@ -105,6 +127,12 @@ export interface OrgMailboxSummary {
 	hubContributions: number;
 	pipelineScan: PipelineSuccessInput;
 	verdictRows: VerdictBucketRow[];
+	/**
+	 * Per-pipeline-run durations from `pipeline_runs` (#71). Unioned across
+	 * mailboxes to compute an org-wide p95. Optional so older DO replicas
+	 * mid-deploy degrade gracefully (treated as no samples).
+	 */
+	pipelineDurationsMs?: number[];
 }
 
 export interface OrgMailboxRef {
@@ -127,7 +155,7 @@ export interface OrgTopThreat {
 
 export interface OrgPipelineHealth {
 	successRate24h: number | null;
-	/** p95 latency in ms; null until #71 lands a per-run latency log. */
+	/** Org-wide p95 latency in ms — unioned per-mailbox samples (#71). */
 	p95Ms: number | null;
 	runs24h: number;
 }
@@ -190,6 +218,7 @@ export function aggregateOrgOverview(
 	let hubContributions24h = 0;
 	let pipelineCompleted = 0;
 	let pipelineFailed = 0;
+	const allDurationsMs: number[] = [];
 
 	const verdictMix = emptyVerdictMix();
 	const threatCounts = new Map<string, number>();
@@ -202,6 +231,9 @@ export function aggregateOrgOverview(
 		hubContributions24h += summary.hubContributions;
 		pipelineCompleted += summary.pipelineScan.completed;
 		pipelineFailed += summary.pipelineScan.failed;
+		if (summary.pipelineDurationsMs?.length) {
+			allDurationsMs.push(...summary.pipelineDurationsMs);
+		}
 
 		for (const row of summary.verdictRows) {
 			if (!row.security_verdict) continue;
@@ -236,7 +268,7 @@ export function aggregateOrgOverview(
 			completed: pipelineCompleted,
 			failed: pipelineFailed,
 		}),
-		p95Ms: null,
+		p95Ms: computeP95(allDurationsMs),
 		runs24h: pipelineCompleted + pipelineFailed,
 	};
 

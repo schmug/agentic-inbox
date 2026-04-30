@@ -150,6 +150,13 @@ function KpiGrid({ data }: { data: OrgOverview }) {
 					? "—"
 					: `${Math.round(data.pipelineHealth.successRate24h * 100)}%`,
 		},
+		{
+			label: "Pipeline p95 · 24h",
+			value:
+				data.pipelineHealth.p95Ms === null
+					? "—"
+					: formatLatency(data.pipelineHealth.p95Ms),
+		},
 		{ label: "Mailboxes", value: String(data.mailboxesCount) },
 		{ label: "Domains", value: String(data.domainsCount) },
 		{
@@ -229,6 +236,12 @@ function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
 			)}
 		</div>
 	);
+}
+
+function formatLatency(ms: number): string {
+	if (ms < 1000) return `${Math.round(ms)}ms`;
+	const seconds = ms / 1000;
+	return seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
 }
 
 function TopThreatsCard({

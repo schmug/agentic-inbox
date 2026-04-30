@@ -67,6 +67,23 @@ export const urls = sqliteTable("urls", {
 	created_at: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
+// One row per `runSecurityPipeline` invocation that actually ran (skipped
+// invocations — security disabled for the mailbox — are not recorded).
+// Powers the dashboard's real p95-latency card. `stage_failed` is non-null
+// only when `status = "failed"`. Per-stage timing breakdown is intentionally
+// out of scope (see #71).
+export const pipelineRuns = sqliteTable("pipeline_runs", {
+	id: text("id").primaryKey(),
+	email_id: text("email_id")
+		.notNull()
+		.references(() => emails.id, { onDelete: "cascade" }),
+	started_at: text("started_at").notNull(),
+	completed_at: text("completed_at"),
+	status: text("status").notNull(),
+	duration_ms: integer("duration_ms"),
+	stage_failed: text("stage_failed"),
+});
+
 export const senderReputation = sqliteTable("sender_reputation", {
 	sender: text("sender").primaryKey(),
 	first_seen: text("first_seen").notNull(),

@@ -32,6 +32,7 @@ import { hubUiRoutes } from "./routes/hub-ui";
 import {
 	aggregateOrgOverview,
 	bucketThreatPressure,
+	computeP95,
 	pipelineSuccessRate,
 	type OrgMailboxSummary,
 	type OrgOverview,
@@ -192,12 +193,14 @@ app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
 	const raw = await c.var.mailboxStub.getDashboardSummary();
 	const threatPressure = bucketThreatPressure(raw.verdictRows);
 	const pipelineSuccess = pipelineSuccessRate(raw.pipelineScan);
+	const p95Ms = computeP95(raw.pipelineDurationsMs);
 	return c.json({
 		now: raw.now,
 		threatsBlocked: raw.threatsBlocked,
 		openCases: raw.openCases,
 		hubContributions: raw.hubContributions,
 		pipelineSuccess,
+		p95Ms: p95Ms === null ? null : Math.round(p95Ms),
 		threatPressure,
 		recentCases: raw.recentCases,
 	});
@@ -606,7 +609,28 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 	// Security pipeline (opt-in per mailbox via settings.security.enabled).
 	// Runs synchronously so quarantine decisions are made before the agent
 	// auto-draft fires. See workers/security/index.ts.
+	//
+	// Per-run timing is logged to `pipeline_runs` for the dashboard's real
+	// p95 card. The start row is written before the call so a throw partway
+	// through still gets patched to `failed` in the catch — otherwise a hung
+	// `running` row would silently drop out of the p95 sample.
 	let securityVerdict: Awaited<ReturnType<typeof runSecurityPipeline>>["verdict"] = null;
+	const runId = crypto.randomUUID();
+	const startedAtIso = new Date().toISOString();
+	const startedAtMs = Date.now();
+	let runRecorded = false;
+	try {
+		await stub.recordPipelineRunStart({
+			runId,
+			emailId: messageId,
+			startedAt: startedAtIso,
+		});
+		runRecorded = true;
+	} catch (e) {
+		// Don't let a logging failure block the actual scan. The downstream
+		// completion patch will be a no-op if the start row never landed.
+		console.error("recordPipelineRunStart failed:", (e as Error).message);
+	}
 	try {
 		const result = await runSecurityPipeline({
 			env,
@@ -633,8 +657,44 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		if (securityVerdict?.action === "quarantine" || securityVerdict?.action === "block") {
 			await stub.moveEmail(messageId, Folders.QUARANTINE);
 		}
+		if (runRecorded) {
+			// Skipped runs (mailbox security disabled) are marked with a
+			// distinct status so p95 / success-rate aggregation naturally
+			// excludes them — the run finished in microseconds and isn't
+			// representative of the actual scan latency we're tracking.
+			await stub
+				.recordPipelineRunComplete({
+					runId,
+					completedAt: new Date().toISOString(),
+					durationMs: Date.now() - startedAtMs,
+					status: result.skipped ? "skipped" : "completed",
+					stageFailed: null,
+				})
+				.catch((err) => {
+					console.error(
+						"recordPipelineRunComplete failed:",
+						(err as Error).message,
+					);
+				});
+		}
 	} catch (e) {
 		console.error("Security pipeline failed:", (e as Error).message);
+		if (runRecorded) {
+			await stub
+				.recordPipelineRunComplete({
+					runId,
+					completedAt: new Date().toISOString(),
+					durationMs: Date.now() - startedAtMs,
+					status: "failed",
+					stageFailed: "pipeline",
+				})
+				.catch((err) => {
+					console.error(
+						"recordPipelineRunComplete (failure) failed:",
+						(err as Error).message,
+					);
+				});
+		}
 	}
 
 	// Foreground notification fanout. Pass the *final* folder so connected

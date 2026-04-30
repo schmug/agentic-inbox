@@ -125,13 +125,24 @@ describe("HomeRoute (org overview)", () => {
 		expect(cta).toHaveAttribute("href", "/mailboxes");
 	});
 
-	it("renders '—' for pipelineSuccess when no scans have run", () => {
+	it("renders '—' for both pipeline KPIs when no scans have run", () => {
 		queryState = {
 			data: { ...populated, pipelineHealth: { successRate24h: null, p95Ms: null, runs24h: 0 } },
 			isLoading: false,
 			isError: false,
 		};
 		renderHome();
-		expect(screen.getByText("—")).toBeInTheDocument();
+		// Both Pipeline success and Pipeline p95 fall back to "—".
+		expect(screen.getAllByText("—")).toHaveLength(2);
+	});
+
+	it("formats p95 latency on the org overview KPI grid", () => {
+		queryState = {
+			data: { ...populated, pipelineHealth: { successRate24h: 0.92, p95Ms: 1500, runs24h: 200 } },
+			isLoading: false,
+			isError: false,
+		};
+		renderHome();
+		expect(screen.getByText("1.5s")).toBeInTheDocument();
 	});
 });

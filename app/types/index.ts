@@ -156,6 +156,8 @@ export interface DashboardSummary {
 	openCases: number;
 	hubContributions: number;
 	pipelineSuccess: number | null;
+	/** 95th-percentile pipeline duration over the last 24h, in ms. Null when no completed runs. */
+	p95Ms: number | null;
 	threatPressure: number[];
 	recentCases: DashboardCase[];
 }
@@ -175,7 +177,7 @@ export interface OrgTopThreat {
 
 export interface OrgPipelineHealth {
 	successRate24h: number | null;
-	/** p95 latency in ms; null until per-run latency log lands (#71). */
+	/** Org-wide p95 latency in ms — unioned per-mailbox samples (#71). */
 	p95Ms: number | null;
 	runs24h: number;
 }
