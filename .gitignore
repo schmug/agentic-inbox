@@ -9,6 +9,7 @@ build/
 !.env.example
 .dev.vars
 !.dev.vars.example
+.envrc
 .vite/
 dist/
 snapshot-*.txt

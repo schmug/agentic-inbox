@@ -58,6 +58,20 @@ npm install
 npm run dev
 ```
 
+By default the dev server runs with all bindings local-only — no Cloudflare Access service token is required. The Worker's `send_email` binding becomes a local no-op, which is fine for UI work and most backend iteration.
+
+### Optional: enable remote bindings locally
+
+If you have Cloudflare Access service-token credentials for the deployed Worker and want `send_email` (or future remote bindings) to route to it, install [direnv](https://direnv.net/) and create a gitignored `.envrc` at the repo root:
+
+```bash
+# .envrc — DO NOT COMMIT (already in .gitignore)
+export CLOUDFLARE_ACCESS_CLIENT_ID=<your token>.access
+export CLOUDFLARE_ACCESS_CLIENT_SECRET=<your secret>
+```
+
+Then `direnv allow .`. Vite will detect the creds at startup and enable the remote-binding proxy. Without these vars set, `vite.config.ts` passes `remoteBindings: false` so the dev server boots cleanly.
+
 ### Configuration
 
 1. Set your domain(s) in `wrangler.jsonc` — `DOMAINS` is comma-separated, e.g. `"a.example,b.example"`
