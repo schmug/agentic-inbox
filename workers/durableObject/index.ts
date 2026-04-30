@@ -1374,9 +1374,9 @@ export class MailboxDO extends DurableObject<Env> {
 	 */
 	async getDashboardSummary(opts: { now?: string } = {}) {
 		const nowIso = opts.now ?? new Date().toISOString();
-		const dayAgoIso = new Date(
-			new Date(nowIso).getTime() - 24 * 60 * 60 * 1000,
-		).toISOString();
+		const nowMs = new Date(nowIso).getTime();
+		const dayAgoIso = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+		const weekAgoIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
 
 		const threatsBlocked = (
 			this.db
@@ -1386,6 +1386,19 @@ export class MailboxDO extends DurableObject<Env> {
 					and(
 						eq(schema.cases.status, "closed-tp"),
 						sql`${schema.cases.updated_at} >= ${dayAgoIso}`,
+					),
+				)
+				.get() ?? { count: 0 }
+		).count;
+
+		const threatsBlocked7d = (
+			this.db
+				.select({ count: sql<number>`COUNT(*)` })
+				.from(schema.cases)
+				.where(
+					and(
+						eq(schema.cases.status, "closed-tp"),
+						sql`${schema.cases.updated_at} >= ${weekAgoIso}`,
 					),
 				)
 				.get() ?? { count: 0 }
@@ -1448,6 +1461,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return {
 			now: nowIso,
 			threatsBlocked,
+			threatsBlocked7d,
 			openCases,
 			hubContributions,
 			pipelineScan: { completed, failed },

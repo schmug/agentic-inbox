@@ -24,6 +24,9 @@ export const queryKeys = {
 			["search", mailboxId, query, page] as const,
 	},
 	dashboard: (mailboxId: string) => ["dashboard", mailboxId] as const,
+	org: {
+		overview: ["org", "overview"] as const,
+	},
 	hub: {
 		contributions: (mailboxId: string) => ["hub", mailboxId, "contributions"] as const,
 		destroylist: (mailboxId: string) => ["hub", mailboxId, "destroylist"] as const,

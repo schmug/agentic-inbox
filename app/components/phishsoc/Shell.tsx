@@ -1,7 +1,9 @@
 import {
 	BellIcon,
 	BriefcaseIcon,
+	BuildingsIcon,
 	CaretRightIcon,
+	EnvelopeIcon,
 	GaugeIcon,
 	GearSixIcon,
 	GraphIcon,
@@ -161,8 +163,24 @@ function NavContents({
 			</button>
 
 			<nav className="mt-3 px-3 flex-1 overflow-y-auto">
-				{mailboxId ? (
+				{/* Org-scoped entries are always visible. They route to / and
+				    /mailboxes respectively, regardless of which mailbox is
+				    currently selected. */}
+				<NavItem
+					to="/"
+					end
+					icon={<BuildingsIcon size={16} />}
+					label="Org overview"
+				/>
+				<NavItem
+					to="/mailboxes"
+					icon={<EnvelopeIcon size={16} />}
+					label="Mailboxes"
+					count={mailboxCount > 0 ? mailboxCount : undefined}
+				/>
+				{mailboxId && (
 					<>
+						<SectionLabel>This mailbox</SectionLabel>
 						<NavItem
 							to={`${base}/dashboard`}
 							icon={<GaugeIcon size={16} />}
@@ -190,10 +208,6 @@ function NavContents({
 							label="Settings"
 						/>
 					</>
-				) : (
-					<div className="px-3 py-2 text-[12px] text-ink-3">
-						Pick a mailbox to begin.
-					</div>
 				)}
 			</nav>
 

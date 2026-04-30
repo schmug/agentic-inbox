@@ -10,6 +10,7 @@ import type {
 	HubDestroylistResponse,
 	HubSharingGroupsResponse,
 	Mailbox,
+	OrgOverview,
 } from "~/types";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -172,6 +173,10 @@ const api = {
 	// Dashboard
 	getDashboardSummary: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
 		get<DashboardSummary>(`/api/v1/mailboxes/${mailboxId}/dashboard`, { signal: opts?.signal }),
+
+	// Org overview
+	getOrgOverview: (opts?: { signal?: AbortSignal }) =>
+		get<OrgOverview>("/api/v1/org/overview", { signal: opts?.signal }),
 
 	// Hub
 	getHubContributions: (mailboxId: string, opts?: { signal?: AbortSignal }) =>

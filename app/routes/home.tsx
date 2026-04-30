@@ -1,367 +1,261 @@
-// Copyright (c) 2026 Cloudflare, Inc.
-// Licensed under the Apache 2.0 license found in the LICENSE file or at:
-//     https://opensource.org/licenses/Apache-2.0
+// Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
+import { Loader } from "@cloudflare/kumo";
 import {
-	Button,
-	Dialog,
-	Empty,
-	Input,
-	Loader,
-	Select,
-	Text,
-} from "@cloudflare/kumo";
-import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+	BriefcaseIcon,
+	EnvelopeIcon,
+	ShieldCheckIcon,
+	WarningIcon,
+} from "@phosphor-icons/react";
 import { Link as RouterLink } from "react-router";
-import Logo from "~/components/phishsoc/Logo";
-import { useFeedback } from "~/lib/feedback";
-import api from "~/services/api";
-import {
-	useCreateMailbox,
-	useDeleteMailbox,
-	useMailboxes,
-} from "~/queries/mailboxes";
-import { queryKeys } from "~/queries/keys";
+import Shell from "~/components/phishsoc/Shell";
+import { useAutoProvisionMailboxes } from "~/hooks/useAutoProvisionMailboxes";
+import { useMailboxes } from "~/queries/mailboxes";
+import { useOrgOverview } from "~/queries/org";
+import type { OrgOverview, OrgVerdictMix } from "~/types";
 
 export function meta() {
 	return [{ title: "PhishSOC" }];
 }
 
 export default function HomeRoute() {
-	const feedback = useFeedback();
-	const { data: mailboxes = [], refetch: refetchMailboxes, isFetched: mailboxesFetched } = useMailboxes();
-	const createMailbox = useCreateMailbox();
-	const deleteMailbox = useDeleteMailbox();
-
-	const { data: configData } = useQuery({
-		queryKey: queryKeys.config,
-		queryFn: () => api.getConfig(),
-		staleTime: Infinity, // config rarely changes
-	});
-
-	const domains = configData?.domains ?? [];
-	const emailAddresses = configData?.emailAddresses ?? [];
-
-	const [isCreateOpen, setIsCreateOpen] = useState(false);
-	const [newPrefix, setNewPrefix] = useState("");
-	const [selectedDomain, setSelectedDomain] = useState("");
-	const [newName, setNewName] = useState("");
-	const [isCreating, setIsCreating] = useState(false);
-	const [createError, setCreateError] = useState<string | null>(null);
-	const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-	const [mailboxToDelete, setMailboxToDelete] = useState<{
-		id: string;
-		email: string;
-	} | null>(null);
-	const [isDeleting, setIsDeleting] = useState(false);
-
-	// Set default domain when config loads
-	useEffect(() => {
-		if (domains.length > 0 && !selectedDomain) {
-			setSelectedDomain(domains[0]);
-		}
-	}, [domains, selectedDomain]);
-
-	// Auto-create mailboxes from config (run once when both data sources are ready)
-	const autoCreateDone = useRef(false);
-	useEffect(() => {
-		if (autoCreateDone.current) return;
-		if (emailAddresses.length === 0 || !mailboxesFetched) return;
-		const existingEmails = new Set(
-			mailboxes.map((m) => m.email.toLowerCase()),
-		);
-		const toCreate = emailAddresses.filter(
-			(addr) => !existingEmails.has(addr.toLowerCase()),
-		);
-		if (toCreate.length === 0) {
-			autoCreateDone.current = true;
-			return;
-		}
-		autoCreateDone.current = true;
-		let cancelled = false;
-		Promise.all(
-			toCreate.map((addr) => {
-				const localPart = addr.split("@")[0] || addr;
-				return api.createMailbox(addr, localPart).catch(() => {});
-			}),
-		).then(() => { if (!cancelled) refetchMailboxes(); });
-		return () => { cancelled = true; };
-	}, [emailAddresses, mailboxes, refetchMailboxes]);
-
-	const handleCreate = async (e: FormEvent) => {
-		e.preventDefault();
-		setCreateError(null);
-		if (!newPrefix || !selectedDomain) {
-			setCreateError("Please fill in all fields");
-			return;
-		}
-		const email = `${newPrefix}@${selectedDomain}`;
-		const name = newName || newPrefix;
-		setIsCreating(true);
-		try {
-			await createMailbox.mutateAsync({ email, name });
-			feedback.success("Mailbox created successfully!");
-			setIsCreateOpen(false);
-			setNewPrefix("");
-			setNewName("");
-		} catch (err: unknown) {
-			const message = (err instanceof Error ? err.message : null) || "Failed to create mailbox";
-			setCreateError(message);
-		} finally {
-			setIsCreating(false);
-		}
-	};
-
-	const handleDelete = async () => {
-		if (!mailboxToDelete) return;
-		setIsDeleting(true);
-		try {
-			await deleteMailbox.mutateAsync(mailboxToDelete.id);
-			feedback.info("Mailbox deleted");
-			setIsDeleteOpen(false);
-			setMailboxToDelete(null);
-		} catch {
-			feedback.error("Failed to delete mailbox");
-		} finally {
-			setIsDeleting(false);
-		}
-	};
-
-	const isConfigured = emailAddresses.length > 0;
-	const accounts = isConfigured
-		? emailAddresses.map((addr) => ({
-				id: addr,
-				email: addr,
-				name: addr.split("@")[0] || addr,
-			}))
-		: mailboxes;
-
-	const isLoading = !configData;
+	useAutoProvisionMailboxes();
+	const { data, isLoading, isError, refetch } = useOrgOverview();
+	const { data: mailboxes = [] } = useMailboxes();
 
 	return (
-		<div className="min-h-screen bg-paper-2">
-			<header className="px-6 md:px-10 pt-6 pb-4">
-				<Logo />
-			</header>
-			<div className="mx-auto max-w-2xl px-4 py-8 md:px-6 md:py-16">
-				<div className="mb-8">
-					<div className="flex items-center justify-between">
-						<h1 className="pp-serif text-[40px] leading-none text-ink">Mailboxes</h1>
-						{!isConfigured && (
-							<Button
-								variant="primary"
-								icon={<PlusIcon size={16} />}
-								onClick={() => setIsCreateOpen(true)}
-							>
-								New Mailbox
-							</Button>
-						)}
-					</div>
-					{domains.length > 0 && (
-						<p className="text-sm text-ink-3 mt-1">
-							{domains.join(", ")}
-						</p>
-					)}
-				</div>
+		<Shell>
+			<div className="px-6 md:px-10 py-8 max-w-[1280px] space-y-6">
+				<OrgHeader data={data} mailboxCount={mailboxes.length} />
 
 				{isLoading ? (
 					<div className="flex justify-center py-20">
 						<Loader size="lg" />
 					</div>
-				) : accounts.length > 0 ? (
-					<div className="pp-card overflow-hidden">
-						{accounts.map((account, idx) => (
-							<RouterLink
-								key={account.id}
-								to={`/mailbox/${account.id}`}
-								className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
-									idx > 0 ? "border-t border-line" : ""
-								}`}
-							>
-								<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
-									{account.name.charAt(0).toUpperCase()}
-								</div>
-								<div className="min-w-0 flex-1">
-									<div className="text-sm font-medium text-ink truncate">
-										{account.name}
-									</div>
-									<div className="text-sm text-ink-3">
-										{account.email}
-									</div>
-								</div>
-								{!isConfigured && (
-									<Button
-										variant="ghost"
-										size="sm"
-										shape="square"
-										icon={<TrashIcon size={16} />}
-										aria-label={`Delete mailbox ${account.email}`}
-										onClick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											setMailboxToDelete({
-												id: account.id,
-												email: account.email,
-											});
-											setIsDeleteOpen(true);
-										}}
-									/>
-								)}
-							</RouterLink>
-						))}
-					</div>
-				) : (
-					<div className="pp-card py-16 px-6">
-						<div className="flex flex-col items-center text-center">
-							<div className="mb-4">
-								<EnvelopeIcon
-									size={48}
-									weight="thin"
-									className="text-ink-3"
-								/>
-							</div>
-							<h3 className="text-base font-semibold text-ink mb-1.5">
-								No mailboxes yet
-							</h3>
-							<p className="text-sm text-ink-3 max-w-sm mb-5">
-								{isConfigured
-									? "Your email routing is configured but no mailboxes have been created yet. They will appear here automatically."
-									: "Create a mailbox to start sending and receiving emails with your domain."}
-							</p>
-							{!isConfigured && (
-								<Button
-									variant="primary"
-									icon={<PlusIcon size={16} />}
-									onClick={() => setIsCreateOpen(true)}
-								>
-									Create Mailbox
-								</Button>
-							)}
-						</div>
-					</div>
-				)}
+				) : isError ? (
+					<OrgError onRetry={() => refetch()} />
+				) : data ? (
+					<OrgBody data={data} mailboxCount={mailboxes.length} />
+				) : null}
 			</div>
+		</Shell>
+	);
+}
 
-			{/* Create Dialog */}
-			<Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-				<Dialog size="sm" className="p-6">
-					<Dialog.Title className="text-base font-semibold mb-5">
-						Create New Mailbox
-					</Dialog.Title>
-					<form onSubmit={handleCreate} className="space-y-4">
-						{createError && (
-							<Text variant="error" size="sm">
-								{createError}
-							</Text>
-						)}
-						<div>
-							<span className="text-sm font-medium text-ink mb-1.5 block">
-								Email Address
-							</span>
-							<div className="flex items-center gap-2">
-								<div className="flex-1">
-									<Input
-										aria-label="Address prefix"
-										placeholder="info"
-										size="sm"
-										value={newPrefix}
-										onChange={(e) => setNewPrefix(e.target.value)}
-										required
+function OrgHeader({
+	data,
+	mailboxCount,
+}: { data: OrgOverview | undefined; mailboxCount: number }) {
+	const summary = data
+		? `${data.mailboxesCount} mailbox${data.mailboxesCount === 1 ? "" : "es"} · ${data.domainsCount} domain${data.domainsCount === 1 ? "" : "s"}`
+		: mailboxCount > 0
+			? `${mailboxCount} mailbox${mailboxCount === 1 ? "" : "es"}`
+			: "Org overview";
+	return (
+		<div>
+			<div className="text-[11px] uppercase tracking-[0.08em] text-ink-3 mb-1">
+				Operations · last 24 hours
+			</div>
+			<h1 className="pp-serif text-[40px] leading-none text-ink mb-2">
+				Across the fleet.
+			</h1>
+			<p className="pp-serif text-[24px] leading-tight text-ink-3 max-w-2xl">
+				{summary}
+			</p>
+		</div>
+	);
+}
+
+function OrgError({ onRetry }: { onRetry: () => void }) {
+	return (
+		<div className="pp-card p-6 flex items-start gap-3">
+			<span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-2 text-ink-3 shrink-0">
+				<WarningIcon size={18} />
+			</span>
+			<div>
+				<div className="text-[14px] font-medium text-ink mb-1">
+					Couldn't load the org overview
+				</div>
+				<p className="text-[12.5px] text-ink-3 leading-relaxed mb-2">
+					The overview endpoint didn't respond. Check the worker logs and retry.
+				</p>
+				<button
+					type="button"
+					onClick={onRetry}
+					className="text-[12px] underline text-accent hover:opacity-80"
+				>
+					Retry
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function OrgBody({
+	data,
+	mailboxCount,
+}: { data: OrgOverview; mailboxCount: number }) {
+	if (data.mailboxesCount === 0 && mailboxCount === 0) {
+		return <EmptyOrg />;
+	}
+	return (
+		<>
+			<KpiGrid data={data} />
+			<div className="grid gap-4 lg:grid-cols-3">
+				<VerdictMixCard mix={data.verdictMix} />
+				<TopThreatsCard threats={data.topThreats} />
+			</div>
+		</>
+	);
+}
+
+function EmptyOrg() {
+	return (
+		<div className="pp-card py-16 px-6">
+			<div className="flex flex-col items-center text-center">
+				<div className="mb-4">
+					<EnvelopeIcon size={48} weight="thin" className="text-ink-3" />
+				</div>
+				<h3 className="text-base font-semibold text-ink mb-1.5">
+					No mailboxes yet
+				</h3>
+				<p className="text-sm text-ink-3 max-w-sm mb-5">
+					Provision a mailbox to start aggregating org-wide threat activity.
+				</p>
+				<RouterLink
+					to="/mailboxes"
+					className="text-[13px] underline text-accent hover:opacity-80"
+				>
+					Go to Mailboxes
+				</RouterLink>
+			</div>
+		</div>
+	);
+}
+
+interface Kpi {
+	label: string;
+	value: string;
+}
+
+function KpiGrid({ data }: { data: OrgOverview }) {
+	const kpis: Kpi[] = [
+		{ label: "Threats blocked · 24h", value: String(data.threatsBlocked24h) },
+		{ label: "Threats blocked · 7d", value: String(data.threatsBlocked7d) },
+		{ label: "Open cases", value: String(data.openCasesTotal) },
+		{
+			label: "Pipeline success · 24h",
+			value:
+				data.pipelineHealth.successRate24h === null
+					? "—"
+					: `${Math.round(data.pipelineHealth.successRate24h * 100)}%`,
+		},
+		{ label: "Mailboxes", value: String(data.mailboxesCount) },
+		{ label: "Domains", value: String(data.domainsCount) },
+		{
+			label: "Hub contributions · 24h",
+			value: String(data.hubContributions24h),
+		},
+		{
+			label: "Pipeline runs · 24h",
+			value: String(data.pipelineHealth.runs24h),
+		},
+	];
+	return (
+		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+			{kpis.map((k) => (
+				<div key={k.label} className="pp-card p-4">
+					<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+						{k.label}
+					</div>
+					<div className="pp-serif text-[36px] leading-none text-ink">
+						{k.value}
+					</div>
+				</div>
+			))}
+		</div>
+	);
+}
+
+const VERDICT_LABEL: Record<keyof OrgVerdictMix, string> = {
+	safe: "Safe",
+	suspicious: "Suspicious",
+	phishing: "Phishing",
+	spam: "Spam",
+	bec: "BEC",
+};
+
+function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
+	const entries = (Object.keys(VERDICT_LABEL) as Array<keyof OrgVerdictMix>).map(
+		(k) => ({ key: k, label: VERDICT_LABEL[k], count: mix[k] }),
+	);
+	const total = entries.reduce((sum, e) => sum + e.count, 0);
+	return (
+		<div className="pp-card p-5 lg:col-span-2 flex flex-col gap-3">
+			<div className="flex items-baseline justify-between gap-3">
+				<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 flex items-center gap-1.5">
+					<ShieldCheckIcon size={12} />
+					Verdict mix · 24h
+				</div>
+				<div className="text-[12px] text-ink-3">{total} classified</div>
+			</div>
+			{total === 0 ? (
+				<p className="text-[12.5px] text-ink-3">
+					No classified mail in the window.
+				</p>
+			) : (
+				<ul className="space-y-2">
+					{entries.map((e) => {
+						const pct = total === 0 ? 0 : (e.count / total) * 100;
+						return (
+							<li key={e.key} className="flex items-center gap-3">
+								<div className="text-[12px] text-ink-2 w-24 shrink-0">
+									{e.label}
+								</div>
+								<div className="flex-1 h-1.5 rounded-full bg-paper-3 overflow-hidden">
+									<div
+										className="h-full bg-accent"
+										style={{ width: `${pct}%` }}
+										aria-hidden
 									/>
 								</div>
-								<span className="text-sm text-ink-3">@</span>
-								{domains.length > 1 ? (
-									<div className="flex-1">
-							<Select
-								aria-label="Domain"
-								value={selectedDomain}
-								onValueChange={(value) => {
-									if (value) setSelectedDomain(value);
-								}}
-							>
-											{domains.map((d) => (
-												<Select.Option key={d} value={d}>
-													{d}
-												</Select.Option>
-											))}
-										</Select>
-									</div>
-								) : (
-									<span className="text-sm text-ink-3">
-										{selectedDomain || "no domain"}
-									</span>
-								)}
-							</div>
-						</div>
-						<Input
-							label="Display Name (optional)"
-							placeholder="Info"
-							size="sm"
-							value={newName}
-							onChange={(e) => setNewName(e.target.value)}
-						/>
-						<div className="flex justify-end gap-2 pt-2">
-							<Dialog.Close
-								render={(props) => (
-									<Button {...props} variant="secondary" size="sm">
-										Cancel
-									</Button>
-								)}
-							/>
-							<Button
-								type="submit"
-								variant="primary"
-								size="sm"
-								loading={isCreating}
-								disabled={!selectedDomain}
-							>
-								Create
-							</Button>
-						</div>
-					</form>
-				</Dialog>
-			</Dialog.Root>
+								<div className="pp-mono text-[11px] text-ink-3 tabular-nums w-10 text-right">
+									{e.count}
+								</div>
+							</li>
+						);
+					})}
+				</ul>
+			)}
+		</div>
+	);
+}
 
-			{/* Delete Dialog */}
-			<Dialog.Root
-				open={isDeleteOpen}
-				onOpenChange={(open) => {
-					setIsDeleteOpen(open);
-					if (!open) setMailboxToDelete(null);
-				}}
-			>
-				<Dialog size="sm" className="p-6">
-					<Dialog.Title className="text-base font-semibold mb-2">
-						Delete Mailbox
-					</Dialog.Title>
-					<Dialog.Description className="text-ink-3 text-sm mb-5">
-						Are you sure you want to delete{" "}
-						<strong className="text-ink">
-							{mailboxToDelete?.email}
-						</strong>
-						? This action cannot be undone.
-					</Dialog.Description>
-					<div className="flex justify-end gap-2">
-						<Dialog.Close
-							render={(props) => (
-								<Button {...props} variant="secondary" size="sm">
-									Cancel
-								</Button>
-							)}
-						/>
-						<Button
-							variant="destructive"
-							size="sm"
-							loading={isDeleting}
-							onClick={handleDelete}
-						>
-							Delete
-						</Button>
-					</div>
-				</Dialog>
-			</Dialog.Root>
+function TopThreatsCard({
+	threats,
+}: { threats: OrgOverview["topThreats"] }) {
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<BriefcaseIcon size={12} />
+				Top threats · 24h
+			</div>
+			{threats.length === 0 ? (
+				<p className="text-[12.5px] text-ink-3">No threats actioned yet.</p>
+			) : (
+				<ul className="space-y-2">
+					{threats.map((t) => (
+						<li key={t.category} className="flex items-baseline justify-between gap-3">
+							<span className="text-[13px] text-ink capitalize">
+								{t.category}
+							</span>
+							<span className="pp-mono text-[12px] text-ink-3 tabular-nums">
+								{t.count}
+							</span>
+						</li>
+					))}
+				</ul>
+			)}
 		</div>
 	);
 }

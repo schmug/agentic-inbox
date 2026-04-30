@@ -30,8 +30,11 @@ import { dmarcRoutes } from "./routes/dmarc";
 import { caseRoutes } from "./routes/cases";
 import { hubUiRoutes } from "./routes/hub-ui";
 import {
+	aggregateOrgOverview,
 	bucketThreatPressure,
 	pipelineSuccessRate,
+	type OrgMailboxSummary,
+	type OrgOverview,
 } from "./lib/dashboard-aggregation";
 
 type AppContext = Context<MailboxContext>;
@@ -114,6 +117,51 @@ app.get("/api/v1/config", (c) => {
 app.get("/api/v1/mailboxes", async (c) => {
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 	return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+});
+
+// -- Org overview ---------------------------------------------------
+
+/** Versioned KV key — bumping the prefix on schema change is a clean rename. */
+const ORG_OVERVIEW_CACHE_KEY = "org-overview:v1";
+const ORG_OVERVIEW_CACHE_TTL_S = 60;
+
+app.get("/api/v1/org/overview", async (c) => {
+	const cached = c.env.BLOOM_KV
+		? await c.env.BLOOM_KV.get(ORG_OVERVIEW_CACHE_KEY, "json").catch(() => null)
+		: null;
+	if (cached) {
+		return c.json(cached as OrgOverview);
+	}
+
+	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const settled = await Promise.allSettled(
+		mailboxes.map((m) =>
+			c.env.MAILBOX
+				.get(c.env.MAILBOX.idFromName(m.id))
+				.getDashboardSummary(),
+		),
+	);
+	const summaries: Array<OrgMailboxSummary | null> = settled.map((r) => {
+		if (r.status !== "fulfilled") {
+			console.error("org-overview: mailbox summary failed:", (r.reason as Error)?.message);
+			return null;
+		}
+		const v = r.value as OrgMailboxSummary;
+		// `threatsBlocked7d` was added by this PR; tolerate older clients.
+		return { ...v, threatsBlocked7d: v.threatsBlocked7d ?? 0 };
+	});
+
+	const overview = aggregateOrgOverview({ mailboxes, summaries });
+
+	if (c.env.BLOOM_KV) {
+		c.executionCtx.waitUntil(
+			c.env.BLOOM_KV.put(ORG_OVERVIEW_CACHE_KEY, JSON.stringify(overview), {
+				expirationTtl: ORG_OVERVIEW_CACHE_TTL_S,
+			}).catch((e) => console.error("org-overview cache write failed:", (e as Error).message)),
+		);
+	}
+
+	return c.json(overview);
 });
 
 app.post("/api/v1/mailboxes", async (c) => {

@@ -160,6 +160,39 @@ export interface DashboardSummary {
 	recentCases: DashboardCase[];
 }
 
+export interface OrgVerdictMix {
+	safe: number;
+	suspicious: number;
+	phishing: number;
+	spam: number;
+	bec: number;
+}
+
+export interface OrgTopThreat {
+	category: string;
+	count: number;
+}
+
+export interface OrgPipelineHealth {
+	successRate24h: number | null;
+	/** p95 latency in ms; null until per-run latency log lands (#71). */
+	p95Ms: number | null;
+	runs24h: number;
+}
+
+export interface OrgOverview {
+	now: string;
+	threatsBlocked24h: number;
+	threatsBlocked7d: number;
+	openCasesTotal: number;
+	mailboxesCount: number;
+	domainsCount: number;
+	verdictMix: OrgVerdictMix;
+	topThreats: OrgTopThreat[];
+	pipelineHealth: OrgPipelineHealth;
+	hubContributions24h: number;
+}
+
 export interface HubContribution {
 	uuid: string;
 	info: string;
