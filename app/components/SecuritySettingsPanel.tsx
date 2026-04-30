@@ -4,6 +4,7 @@
 
 import { Badge, Input, Switch } from "@cloudflare/kumo";
 import { ShieldIcon } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
 import type { SecuritySettings, BusinessHoursSettings, VerdictThresholdSettings } from "~/types";
 
 /**
@@ -121,9 +122,9 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					this prevents an attacker-controlled upstream relay from forging a pass verdict.
 					Leave empty to trust any authserv (less secure).
 				</p>
-				<Input
-					value={(s.trusted_authserv_ids ?? []).join(", ")}
-					onChange={(e) => patch({ trusted_authserv_ids: parseList(e.target.value) })}
+				<ListInput
+					value={s.trusted_authserv_ids ?? []}
+					onChange={(next) => patch({ trusted_authserv_ids: next })}
 					placeholder="mx.cloudflare.net, mx.google.com"
 					disabled={!s.enabled}
 				/>
@@ -137,17 +138,17 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					Without the DMARC requirement, the allowlist alone would let any attacker spoof a trusted From: address.
 				</p>
 				<div className="space-y-3">
-					<Input
+					<ListInput
 						label="Allowed senders (comma-separated)"
-						value={(s.allowlist_senders ?? []).join(", ")}
-						onChange={(e) => patch({ allowlist_senders: parseList(e.target.value) })}
+						value={s.allowlist_senders ?? []}
+						onChange={(next) => patch({ allowlist_senders: next })}
 						placeholder="ceo@company.com, payroll@vendor.com"
 						disabled={!s.enabled}
 					/>
-					<Input
+					<ListInput
 						label="Allowed domains (comma-separated; subdomains are included)"
-						value={(s.allowlist_domains ?? []).join(", ")}
-						onChange={(e) => patch({ allowlist_domains: parseList(e.target.value) })}
+						value={s.allowlist_domains ?? []}
+						onChange={(next) => patch({ allowlist_domains: next })}
 						placeholder="company.com, trustedvendor.com"
 						disabled={!s.enabled}
 					/>
@@ -245,6 +246,75 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 			</div>
 		</div>
 	);
+}
+
+interface ListInputProps {
+	value: string[];
+	onChange: (next: string[]) => void;
+	parse?: (raw: string) => string[];
+	label?: string;
+	placeholder?: string;
+	disabled?: boolean;
+}
+
+/**
+ * Input bound to a `string[]` via comma-separated text.
+ *
+ * The naive pattern (`value={array.join(", ")}` + parse-on-change) collapses
+ * partial entries: typing the comma re-emits the parsed array, the controlled
+ * value drops the trailing separator, and the next character lands appended
+ * to the previous entry. Repro: typing `dmg, rtf, ace` into such an input
+ * yields a single `["dmgrtface"]` instead of three entries.
+ *
+ * Fix: hold the raw string locally so the user's separators survive between
+ * keystrokes; emit the parsed array on every change for the parent's
+ * Save-on-click flow; only resync the displayed text when the parent's value
+ * diverges from what we last emitted (external load, reset).
+ */
+function ListInput({
+	value,
+	onChange,
+	parse = parseList,
+	label,
+	placeholder,
+	disabled,
+}: ListInputProps) {
+	const [draft, setDraft] = useState(() => value.join(", "));
+	const lastEmitted = useRef<string[]>(value);
+
+	useEffect(() => {
+		if (!arraysEqual(value, lastEmitted.current)) {
+			lastEmitted.current = value;
+			setDraft(value.join(", "));
+		}
+	}, [value]);
+
+	return (
+		<Input
+			label={label}
+			placeholder={placeholder}
+			disabled={disabled}
+			value={draft}
+			onChange={(e) => {
+				const raw = e.target.value;
+				setDraft(raw);
+				const parsed = parse(raw);
+				if (!arraysEqual(parsed, lastEmitted.current)) {
+					lastEmitted.current = parsed;
+					onChange(parsed);
+				}
+			}}
+		/>
+	);
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+	if (a === b) return true;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
 }
 
 function parseList(raw: string): string[] {
