@@ -104,13 +104,17 @@ function KpiGrid({ data }: { data: DashboardSummary }) {
 					: `${Math.round(data.pipelineSuccess * 100)}%`,
 		},
 		{
+			label: "Pipeline p95 · 24h",
+			value: data.p95Ms === null ? "—" : formatLatency(data.p95Ms),
+		},
+		{
 			label: "Hub contributions · 24h",
 			value: String(data.hubContributions),
 		},
 	];
 
 	return (
-		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
 			{kpis.map((k) => (
 				<div key={k.label} className="pp-card p-4">
 					<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
@@ -123,6 +127,12 @@ function KpiGrid({ data }: { data: DashboardSummary }) {
 			))}
 		</div>
 	);
+}
+
+function formatLatency(ms: number): string {
+	if (ms < 1000) return `${ms}ms`;
+	const seconds = ms / 1000;
+	return seconds >= 10 ? `${Math.round(seconds)}s` : `${seconds.toFixed(1)}s`;
 }
 
 function ThreatPressureCard({ values }: { values: number[] }) {

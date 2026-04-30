@@ -198,9 +198,10 @@ function NavContents({
 			</nav>
 
 			{/* Pipeline status pill. State derives from the dashboard summary's
-			    `pipelineSuccess` (#86). Real p50/p95 latency is tracked in #71
-			    and isn't surfaced here yet — the previous static "p50 —"
-			    placeholder was misleading and has been removed. */}
+			    `pipelineSuccess` (#86); real p95 latency is now surfaced as a
+			    KPI on the Operations dashboard (#71). The pill stays scoped to
+			    success/failure so the sidebar reads as a status indicator
+			    rather than a metric. */}
 			{mailboxId && (
 				<button
 					type="button"
