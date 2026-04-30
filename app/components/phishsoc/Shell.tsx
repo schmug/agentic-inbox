@@ -418,14 +418,14 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 							aria-controls="agent-panel"
 							className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
 								isAgentPanelOpen
-									? "bg-accent text-accent-ink border-accent hover:bg-[color-mix(in_oklch,var(--accent)_85%,black)]"
-									: "bg-accent-tint text-accent-ink border-[color-mix(in_oklch,var(--accent)_25%,transparent)] hover:bg-[color-mix(in_oklch,var(--accent-tint)_70%,var(--paper))]"
+									? "bg-accent text-paper border-accent hover:bg-[color-mix(in_oklch,var(--accent)_85%,black)]"
+									: "bg-accent-tint text-accent border-[color-mix(in_oklch,var(--accent)_25%,transparent)] hover:bg-[color-mix(in_oklch,var(--accent-tint)_70%,var(--paper))]"
 							}`}
 						>
 							<SparkleIcon
 								size={13}
 								weight="fill"
-								className={isAgentPanelOpen ? "text-accent-ink" : "text-accent"}
+								className={isAgentPanelOpen ? "text-paper" : "text-accent"}
 							/>
 							Ask co-pilot
 						</button>

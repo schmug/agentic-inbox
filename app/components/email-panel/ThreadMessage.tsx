@@ -44,7 +44,7 @@ function Avatar({ isDraft, isSelf, sender }: { isDraft?: boolean; isSelf: boolea
 				isDraft
 					? "bg-paper-3 text-ink-3"
 					: isSelf
-						? "bg-accent text-accent-ink"
+						? "bg-accent text-paper"
 						: "bg-paper-3 text-ink"
 			}`}
 		>

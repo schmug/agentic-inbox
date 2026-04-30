@@ -4,12 +4,36 @@
 
 import DOMPurify from "dompurify";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useUIStore } from "~/hooks/useUIStore";
 
 interface EmailIframeProps {
 	body: string;
 	/** When true, iframe auto-sizes to content height instead of filling parent */
 	autoSize?: boolean;
 }
+
+// Email-body design system, intentionally distinct from the app tokens because
+// the PhishSOC oklch tokens are not reachable past the CSP boundary inside the
+// sandboxed iframe. Hex values approximate the corresponding `--paper` /
+// `--ink` tokens for each theme so unstyled email bodies blend with the chrome.
+const EMAIL_PALETTES = {
+	light: {
+		bg: "#ffffff",
+		text: "#1a1a1a",
+		link: "#2563eb",
+		quoteBorder: "#d1d5db",
+		quoteText: "#6b7280",
+		preBg: "#f3f4f6",
+	},
+	dark: {
+		bg: "#1a1816",
+		text: "#ebe9e3",
+		link: "#60a5fa",
+		quoteBorder: "#3a352d",
+		quoteText: "#968f80",
+		preBg: "#29241e",
+	},
+} as const;
 
 /**
  * Renders email HTML inside a sandboxed iframe.
@@ -30,6 +54,7 @@ interface EmailIframeProps {
 export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const [height, setHeight] = useState(autoSize ? 100 : 0);
+	const theme = useUIStore((s) => s.theme);
 
 	// Listen for height reports from the sandboxed iframe
 	const handleMessage = useCallback(
@@ -86,11 +111,7 @@ export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 
 		// Use srcdoc so the iframe is truly sandboxed (no same-origin access).
 		// We can't use doc.write() because that requires allow-same-origin.
-		//
-		// The hex colors below render the email body, which is a separate
-		// document from the SOC chrome — the PhishSOC oklch tokens are not
-		// reachable past the CSP boundary. Treat these as the email-body
-		// design system, intentionally distinct from the app tokens.
+		const palette = EMAIL_PALETTES[theme === "dark" ? "dark" : "light"];
 		iframe.srcdoc = `<!DOCTYPE html>
 <html>
 <head>
@@ -100,15 +121,15 @@ export default function EmailIframe({ body, autoSize }: EmailIframeProps) {
 <style>
 * { box-sizing: border-box; }
 html {
-	background: #ffffff;
-	color-scheme: light;
+	background: ${palette.bg};
+	color-scheme: ${theme === "dark" ? "dark" : "light"};
 }
 body {
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	font-size: 14px;
 	line-height: 1.6;
-	color: #1a1a1a;
-	background: #ffffff;
+	color: ${palette.text};
+	background: ${palette.bg};
 	padding: ${padding};
 	margin: 0;
 	word-wrap: break-word;
@@ -118,16 +139,16 @@ body {
 [style*="position: fixed"], [style*="position:fixed"], [style*="position: absolute"], [style*="position:absolute"] {
 	position: relative !important;
 }
-a { color: #2563eb; }
+a { color: ${palette.link}; }
 img { max-width: 100%; height: auto; }
 blockquote {
-	border-left: 3px solid #d1d5db;
+	border-left: 3px solid ${palette.quoteBorder};
 	padding-left: 1em;
 	margin-left: 0;
-	color: #6b7280;
+	color: ${palette.quoteText};
 }
 pre {
-	background: #f3f4f6;
+	background: ${palette.preBg};
 	padding: 12px;
 	border-radius: 6px;
 	overflow-x: auto;
@@ -142,7 +163,7 @@ ul, ol { padding-left: 20px; margin: 4px 0; }
 </head>
 <body>${cleanBody}${heightScript}</body>
 </html>`;
-	}, [body, autoSize]);
+	}, [body, autoSize, theme]);
 
 	return (
 		<iframe

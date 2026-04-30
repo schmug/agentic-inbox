@@ -151,7 +151,7 @@ function MessageBubble({
 			<div
 				className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
 					isUser
-						? "bg-accent text-accent-ink"
+						? "bg-accent text-paper"
 						: "bg-paper-3 text-ink"
 				}`}
 			>
@@ -174,7 +174,7 @@ function MessageBubble({
 								key={key}
 								className={`rounded-lg px-3 py-2 text-[13px] leading-relaxed break-words overflow-wrap-anywhere ${
 									isUser
-										? "bg-accent text-accent-ink rounded-br-sm"
+										? "bg-accent text-paper rounded-br-sm"
 										: "bg-paper-3 text-ink border border-line rounded-bl-sm overflow-hidden"
 								}`}
 							>
