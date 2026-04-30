@@ -73,7 +73,15 @@ export default function SearchResultsRoute() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isError]);
 
-	const handleRowClick = (email: Email) => { selectEmail(email.id); if (!email.read && mailboxId) updateEmail.mutate({ mailboxId, id: email.id, data: { read: true } }); };
+	const handleRowClick = (email: Email) => {
+		selectEmail(email.id);
+		if (!email.read && mailboxId) {
+			updateEmail.mutate(
+				{ mailboxId, id: email.id, data: { read: true } },
+				{ onError: () => feedback.error("Couldn't update email.") },
+			);
+		}
+	};
 	const folderDisplayName = (name: string | null | undefined): string => { if (!name) return ""; const map: Record<string, string> = { inbox: "Inbox", sent: "Sent", draft: "Drafts", archive: "Archive", trash: "Trash", quarantine: "Quarantine" }; return map[name.toLowerCase()] || name; };
 
 	return (
