@@ -10,13 +10,13 @@ import {
 	Loader,
 	Select,
 	Text,
-	useKumoToastManager,
 } from "@cloudflare/kumo";
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link as RouterLink } from "react-router";
 import Logo from "~/components/phishsoc/Logo";
+import { useFeedback } from "~/lib/feedback";
 import api from "~/services/api";
 import {
 	useCreateMailbox,
@@ -30,7 +30,7 @@ export function meta() {
 }
 
 export default function HomeRoute() {
-	const toastManager = useKumoToastManager();
+	const feedback = useFeedback();
 	const { data: mailboxes = [], refetch: refetchMailboxes, isFetched: mailboxesFetched } = useMailboxes();
 	const createMailbox = useCreateMailbox();
 	const deleteMailbox = useDeleteMailbox();
@@ -102,7 +102,7 @@ export default function HomeRoute() {
 		setIsCreating(true);
 		try {
 			await createMailbox.mutateAsync({ email, name });
-			toastManager.add({ title: "Mailbox created successfully!" });
+			feedback.success("Mailbox created successfully!");
 			setIsCreateOpen(false);
 			setNewPrefix("");
 			setNewName("");
@@ -119,11 +119,11 @@ export default function HomeRoute() {
 		setIsDeleting(true);
 		try {
 			await deleteMailbox.mutateAsync(mailboxToDelete.id);
-			toastManager.add({ title: "Mailbox deleted" });
+			feedback.info("Mailbox deleted");
 			setIsDeleteOpen(false);
 			setMailboxToDelete(null);
 		} catch {
-			toastManager.add({ title: "Failed to delete mailbox", variant: "error" });
+			feedback.error("Failed to delete mailbox");
 		} finally {
 			setIsDeleting(false);
 		}

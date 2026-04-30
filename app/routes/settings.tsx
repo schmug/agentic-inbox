@@ -2,10 +2,11 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Input, Loader, useKumoToastManager } from "@cloudflare/kumo";
+import { Badge, Button, Input, Loader } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
+import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import type { SecuritySettings } from "~/types";
@@ -16,7 +17,7 @@ const PROMPT_PLACEHOLDER = `You are an email assistant that helps manage this in
 
 export default function SettingsRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
-	const toastManager = useKumoToastManager();
+	const feedback = useFeedback();
 	const { data: mailbox } = useMailbox(mailboxId);
 	const updateMailboxMutation = useUpdateMailbox();
 
@@ -44,12 +45,9 @@ export default function SettingsRoute() {
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
-			toastManager.add({ title: "Settings saved!" });
+			feedback.success("Settings saved!");
 		} catch {
-			toastManager.add({
-				title: "Failed to save settings",
-				variant: "error",
-			});
+			feedback.error("Failed to save settings");
 		} finally {
 			setIsSaving(false);
 		}
