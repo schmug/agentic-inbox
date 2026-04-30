@@ -71,12 +71,12 @@ export default function SettingsRoute() {
 
 	return (
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
-			<h1 className="text-lg font-semibold text-kumo-default mb-6">Settings</h1>
+			<h1 className="pp-serif text-ink mb-6">Settings</h1>
 
 			<div className="space-y-6">
 				{/* Account */}
-				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
-					<div className="text-sm font-medium text-kumo-default mb-4">
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-4">
 						Account
 					</div>
 					<div className="space-y-3">
@@ -90,11 +90,11 @@ export default function SettingsRoute() {
 				</div>
 
 				{/* Agent System Prompt */}
-				<div className="rounded-lg border border-kumo-line bg-kumo-base p-5">
+				<div className="pp-card p-5">
 					<div className="flex items-center justify-between mb-4">
 						<div className="flex items-center gap-2">
-							<RobotIcon size={16} weight="duotone" className="text-kumo-subtle" />
-							<span className="text-sm font-medium text-kumo-default">
+							<RobotIcon size={16} weight="duotone" className="text-ink-3" />
+							<span className="text-sm font-medium text-ink">
 								AI Agent Prompt
 							</span>
 							{isCustomPrompt ? (
@@ -114,7 +114,7 @@ export default function SettingsRoute() {
 							</Button>
 						)}
 					</div>
-					<p className="text-xs text-kumo-subtle mb-3">
+					<p className="text-xs text-ink-3 mb-3">
 						Customize how the AI agent behaves for this mailbox.
 						Leave empty to use the built-in default prompt.
 					</p>
@@ -123,9 +123,9 @@ export default function SettingsRoute() {
 						onChange={(e) => setAgentPrompt(e.target.value)}
 						placeholder={PROMPT_PLACEHOLDER}
 						rows={12}
-						className="w-full resize-y rounded-lg border border-kumo-line bg-kumo-recessed px-3 py-2 text-xs text-kumo-default placeholder:text-kumo-subtle focus:outline-none focus:ring-1 focus:ring-kumo-ring font-mono leading-relaxed"
+						className="w-full resize-y rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent font-mono leading-relaxed"
 					/>
-					<p className="text-xs text-kumo-subtle mt-2">
+					<p className="text-xs text-ink-3 mt-2">
 						The prompt is sent as the system message to the AI model.
 						It controls the agent's personality, writing style, and behavior rules.
 					</p>
