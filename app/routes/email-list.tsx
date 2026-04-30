@@ -24,6 +24,7 @@ import { Folders } from "shared/folders";
 import { formatListDate } from "shared/dates";
 import MailboxSplitView from "~/components/MailboxSplitView";
 import VerdictBadge from "~/components/VerdictBadge";
+import { useFeedback } from "~/lib/feedback";
 import { getSnippetText } from "~/lib/utils";
 import {
 	useDeleteEmail,
@@ -166,6 +167,7 @@ export default function EmailListRoute() {
 	const updateEmail = useUpdateEmail();
 	const markThreadRead = useMarkThreadRead();
 	const deleteEmail = useDeleteEmail();
+	const feedback = useFeedback();
 
 	const params = useMemo(
 		() => ({
@@ -214,11 +216,14 @@ export default function EmailListRoute() {
 		e.preventDefault();
 		e.stopPropagation();
 		if (mailboxId)
-			updateEmail.mutate({
-				mailboxId,
-				id: email.id,
-				data: { starred: !email.starred },
-			});
+			updateEmail.mutate(
+				{
+					mailboxId,
+					id: email.id,
+					data: { starred: !email.starred },
+				},
+				{ onError: () => feedback.error("Couldn't update email.") },
+			);
 	};
 
 	const handleDelete = (e: React.MouseEvent, emailId: string) => {
@@ -227,7 +232,10 @@ export default function EmailListRoute() {
 		if (mailboxId) {
 			const confirmed = window.confirm("Are you sure you want to delete this email?");
 			if (!confirmed) return;
-			deleteEmail.mutate({ mailboxId, id: emailId });
+			deleteEmail.mutate(
+				{ mailboxId, id: emailId },
+				{ onError: () => feedback.error("Couldn't delete email.") },
+			);
 			if (selectedEmailId === emailId) closePanel();
 		}
 	};
@@ -253,16 +261,22 @@ export default function EmailListRoute() {
 		selectEmail(email.id);
 		if (mailboxId && hasUnread(email)) {
 			if (email.thread_id && email.thread_count && email.thread_count > 1) {
-				markThreadRead.mutate({
-					mailboxId,
-					threadId: email.thread_id,
-				});
+				markThreadRead.mutate(
+					{
+						mailboxId,
+						threadId: email.thread_id,
+					},
+					{ onError: () => feedback.error("Couldn't mark thread read.") },
+				);
 			} else {
-				updateEmail.mutate({
-					mailboxId,
-					id: email.id,
-					data: { read: true },
-				});
+				updateEmail.mutate(
+					{
+						mailboxId,
+						id: email.id,
+						data: { read: true },
+					},
+					{ onError: () => feedback.error("Couldn't update email.") },
+				);
 			}
 		}
 	};
@@ -425,11 +439,14 @@ export default function EmailListRoute() {
 													onClick={(e) => {
 														e.stopPropagation();
 														if (mailboxId)
-															updateEmail.mutate({
-																mailboxId,
-																id: email.id,
-																data: { read: !email.read },
-															});
+															updateEmail.mutate(
+																{
+																	mailboxId,
+																	id: email.id,
+																	data: { read: !email.read },
+																},
+																{ onError: () => feedback.error("Couldn't update email.") },
+															);
 													}}
 													aria-label={email.read ? "Mark unread" : "Mark read"}
 												/>
