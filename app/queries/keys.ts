@@ -33,4 +33,5 @@ export const queryKeys = {
 		sharingGroups: (mailboxId: string) => ["hub", mailboxId, "sharing-groups"] as const,
 	},
 	config: ["config"] as const,
+	textModels: ["ai", "text-models"] as const,
 };

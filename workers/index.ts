@@ -37,6 +37,7 @@ import {
 	type OrgMailboxSummary,
 	type OrgOverview,
 } from "./lib/dashboard-aggregation";
+import { listTextModels } from "./lib/text-models";
 
 type AppContext = Context<MailboxContext>;
 
@@ -111,6 +112,24 @@ app.get("/api/v1/config", (c) => {
 	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
 	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
 	return c.json({ domains, emailAddresses });
+});
+
+// Workers AI text-generation model list (#64). KV-cached read-through to
+// the Cloudflare API; falls back to the curated TEXT_MODELS constant when
+// CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID aren't configured or the
+// upstream call fails.
+app.get("/api/v1/ai/text-models", async (c) => {
+	const env = c.env as typeof c.env & {
+		CLOUDFLARE_API_TOKEN?: string;
+		CLOUDFLARE_ACCOUNT_ID?: string;
+	};
+	const result = await listTextModels({
+		BLOOM_KV: env.BLOOM_KV,
+		CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
+		CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID,
+	});
+	c.header("X-Text-Models-Source", result.source);
+	return c.json({ models: result.models });
 });
 
 // -- Mailboxes ------------------------------------------------------

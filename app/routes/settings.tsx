@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
+import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import type { SecuritySettings } from "~/types";
 import {
@@ -26,6 +27,7 @@ export default function SettingsRoute() {
 	const feedback = useFeedback();
 	const { data: mailbox } = useMailbox(mailboxId);
 	const updateMailboxMutation = useUpdateMailbox();
+	const { models: availableModels } = useTextModels();
 
 	const [displayName, setDisplayName] = useState("");
 	const [agentPrompt, setAgentPrompt] = useState("");
@@ -56,8 +58,8 @@ export default function SettingsRoute() {
 			const enabled = behavior?.autoDraft?.enabled;
 			setAutoDraftEnabled(enabled === undefined ? true : enabled);
 
-			const m = behavior?.agentModel ?? TEXT_MODELS[0];
-			if (TEXT_MODELS.includes(m as (typeof TEXT_MODELS)[number])) {
+			const m = behavior?.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
+			if (availableModels.includes(m)) {
 				setModelChoice(m);
 				setCustomModel("");
 			} else {
@@ -69,6 +71,13 @@ export default function SettingsRoute() {
 			setDraftVerifierModel(behavior?.draftVerifierModel ?? "");
 			setClassifierModel(behavior?.classifierModel ?? "");
 		}
+		// `availableModels` is intentionally not in the dep list — re-running
+		// this effect when the dynamic list resolves would reset every other
+		// piece of edited state (auto-draft toggle, custom prompt, …) back to
+		// the saved values, silently undoing the user's edits. The initial
+		// fallback list (`[...TEXT_MODELS]`) is stable enough to map saved
+		// models on first render.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [mailbox]);
 
 	const handleSave = async () => {
@@ -106,7 +115,7 @@ export default function SettingsRoute() {
 			agentSystemPrompt: agentPrompt.trim() || undefined,
 			security,
 			autoDraft: { enabled: autoDraftEnabled },
-			agentModel: resolvedModel || TEXT_MODELS[0],
+			agentModel: resolvedModel || availableModels[0] || TEXT_MODELS[0],
 			injectionScannerModel: injectionScannerModel.trim() || undefined,
 			draftVerifierModel: draftVerifierModel.trim() || undefined,
 			classifierModel: classifierModel.trim() || undefined,
@@ -228,7 +237,7 @@ export default function SettingsRoute() {
 							onChange={(e) => setModelChoice(e.target.value)}
 							className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
 						>
-							{TEXT_MODELS.map((m) => (
+							{availableModels.map((m) => (
 								<option key={m} value={m}>{m}</option>
 							))}
 							<option value="__custom__">Custom…</option>
