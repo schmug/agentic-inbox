@@ -190,6 +190,8 @@ export interface OrgOverview {
 	mailboxesCount: number;
 	domainsCount: number;
 	verdictMix: OrgVerdictMix;
+	/** 7-day verdict mix (#103). Always present, sums per-mailbox tallies. */
+	verdictMix7d: OrgVerdictMix;
 	topThreats: OrgTopThreat[];
 	pipelineHealth: OrgPipelineHealth;
 	hubContributions24h: number;

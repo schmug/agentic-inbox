@@ -5,6 +5,7 @@ import {
 	aggregateOrgOverview,
 	bucketThreatPressure,
 	computeP95,
+	computeVerdictMix,
 	pipelineSuccessRate,
 	type OrgMailboxSummary,
 } from "../../workers/lib/dashboard-aggregation";
@@ -129,6 +130,50 @@ function summary(partial: Partial<OrgMailboxSummary> = {}): OrgMailboxSummary {
 	};
 }
 
+describe("computeVerdictMix", () => {
+	it("tallies recognized labels and drops unparseable rows", () => {
+		const mix = computeVerdictMix([
+			verdictRow("allow", "safe"),
+			verdictRow("allow", "safe"),
+			verdictRow("tag", "suspicious"),
+			verdictRow("quarantine", "phishing"),
+			verdictRow("block", "phishing"),
+			verdictRow("tag", "spam"),
+			verdictRow("quarantine", "bec"),
+			{ date: NOW.toISOString(), security_verdict: "not-json" },
+			{ date: NOW.toISOString(), security_verdict: null },
+		]);
+		expect(mix).toEqual({
+			safe: 2,
+			suspicious: 1,
+			phishing: 2,
+			spam: 1,
+			bec: 1,
+		});
+	});
+
+	it("returns all-zeros for an empty input", () => {
+		expect(computeVerdictMix([])).toEqual({
+			safe: 0,
+			suspicious: 0,
+			phishing: 0,
+			spam: 0,
+			bec: 0,
+		});
+	});
+
+	it("ignores labels outside the recognized set", () => {
+		const mix = computeVerdictMix([verdictRow("tag", "marketing")]);
+		expect(mix).toEqual({
+			safe: 0,
+			suspicious: 0,
+			phishing: 0,
+			spam: 0,
+			bec: 0,
+		});
+	});
+});
+
 describe("aggregateOrgOverview", () => {
 	it("returns zeroed counters and empty verdict mix for an empty org", () => {
 		const result = aggregateOrgOverview({
@@ -145,6 +190,7 @@ describe("aggregateOrgOverview", () => {
 			domainsCount: 0,
 			topThreats: [],
 			verdictMix: { safe: 0, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
+			verdictMix7d: { safe: 0, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
 			pipelineHealth: { successRate24h: null, p95Ms: null, runs24h: 0 },
 		});
 	});
@@ -209,6 +255,34 @@ describe("aggregateOrgOverview", () => {
 			suspicious: 1,
 			phishing: 2,
 			spam: 1,
+			bec: 1,
+		});
+	});
+
+	it("sums pre-aggregated 7d verdict mixes across mailboxes (#103)", () => {
+		const result = aggregateOrgOverview({
+			mailboxes: [
+				{ id: "a@x.com", email: "a@x.com" },
+				{ id: "b@x.com", email: "b@x.com" },
+				{ id: "c@x.com", email: "c@x.com" },
+			],
+			summaries: [
+				summary({
+					verdictMix7d: { safe: 100, suspicious: 5, phishing: 2, spam: 3, bec: 0 },
+				}),
+				summary({
+					verdictMix7d: { safe: 50, suspicious: 1, phishing: 4, spam: 1, bec: 1 },
+				}),
+				// Older DO replica without verdictMix7d — must be tolerated as zero.
+				summary({}),
+			],
+			now: NOW.toISOString(),
+		});
+		expect(result.verdictMix7d).toEqual({
+			safe: 150,
+			suspicious: 6,
+			phishing: 6,
+			spam: 4,
 			bec: 1,
 		});
 	});

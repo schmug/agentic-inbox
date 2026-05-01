@@ -128,6 +128,13 @@ export interface OrgMailboxSummary {
 	pipelineScan: PipelineSuccessInput;
 	verdictRows: VerdictBucketRow[];
 	/**
+	 * Pre-aggregated 7d verdict mix from the DO (#103). Pre-aggregating
+	 * server-side keeps the org-overview wire payload from doubling — only
+	 * the five-key counts cross the boundary, not the raw 7d rows. Optional
+	 * so older DO replicas mid-deploy degrade gracefully (counted as zero).
+	 */
+	verdictMix7d?: VerdictMix;
+	/**
 	 * Per-pipeline-run durations from `pipeline_runs` (#71). Unioned across
 	 * mailboxes to compute an org-wide p95. Optional so older DO replicas
 	 * mid-deploy degrade gracefully (treated as no samples).
@@ -168,6 +175,12 @@ export interface OrgOverview {
 	mailboxesCount: number;
 	domainsCount: number;
 	verdictMix: VerdictMix;
+	/**
+	 * 7-day verdict mix (#103). Sums each mailbox's pre-aggregated 7d mix.
+	 * Mailboxes with no `verdictMix7d` (older DO replicas mid-deploy)
+	 * contribute zero, so the field is always present.
+	 */
+	verdictMix7d: VerdictMix;
 	topThreats: OrgTopThreat[];
 	pipelineHealth: OrgPipelineHealth;
 	hubContributions24h: number;
@@ -184,6 +197,29 @@ const VERDICT_MIX_KEYS: ReadonlyArray<keyof VerdictMix> = [
 
 function emptyVerdictMix(): VerdictMix {
 	return { safe: 0, suspicious: 0, phishing: 0, spam: 0, bec: 0 };
+}
+
+/**
+ * Pure helper: tally verdict-mix labels from a list of `(date,
+ * security_verdict)` rows. Used by the DO to pre-aggregate the 7-day
+ * window server-side so the org-overview payload doesn't have to ship
+ * raw 7d rows over the wire.
+ */
+export function computeVerdictMix(rows: VerdictBucketRow[]): VerdictMix {
+	const mix = emptyVerdictMix();
+	for (const row of rows) {
+		if (!row.security_verdict) continue;
+		const parsed = parseVerdict(row.security_verdict);
+		if (!parsed) continue;
+		const label = parsed.classification?.label;
+		if (
+			typeof label === "string" &&
+			(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+		) {
+			mix[label as keyof VerdictMix] += 1;
+		}
+	}
+	return mix;
 }
 
 interface AggregateOrgOverviewInput {
@@ -221,6 +257,7 @@ export function aggregateOrgOverview(
 	const allDurationsMs: number[] = [];
 
 	const verdictMix = emptyVerdictMix();
+	const verdictMix7d = emptyVerdictMix();
 	const threatCounts = new Map<string, number>();
 
 	for (const summary of summaries) {
@@ -233,6 +270,14 @@ export function aggregateOrgOverview(
 		pipelineFailed += summary.pipelineScan.failed;
 		if (summary.pipelineDurationsMs?.length) {
 			allDurationsMs.push(...summary.pipelineDurationsMs);
+		}
+
+		// Pre-aggregated 7d mix per mailbox — sum into the org-wide tally.
+		// Optional on the wire so older DO replicas degrade as zeros.
+		if (summary.verdictMix7d) {
+			for (const k of VERDICT_MIX_KEYS) {
+				verdictMix7d[k] += summary.verdictMix7d[k];
+			}
 		}
 
 		for (const row of summary.verdictRows) {
@@ -286,6 +331,7 @@ export function aggregateOrgOverview(
 		mailboxesCount: mailboxes.length,
 		domainsCount: domains.size,
 		verdictMix,
+		verdictMix7d,
 		topThreats,
 		pipelineHealth,
 		hubContributions24h,
