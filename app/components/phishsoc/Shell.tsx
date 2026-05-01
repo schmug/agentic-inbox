@@ -21,6 +21,7 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
 import AgentPanelSlot from "./AgentPanelSlot";
+import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
 
 type PipelineTone = "safe" | "suspect" | "danger" | "muted";
@@ -452,7 +453,12 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 				    Below xl the slot renders a slide-over that owns its own
 				    positioning and doesn't push the main column. */}
 				<div className="flex-1 flex min-h-0 overflow-hidden">
-					<main className="flex-1 min-w-0 overflow-y-auto">{children}</main>
+					<main className="flex-1 min-w-0 overflow-y-auto flex flex-col">
+						{/* Breadcrumb shows org → mailbox → section context.
+						    Hidden at "/" since the org root is implied. */}
+						<Breadcrumb />
+						<div className="flex-1 min-h-0">{children}</div>
+					</main>
 					{rightPanel && <AgentPanelSlot rightPanel={rightPanel} />}
 				</div>
 			</div>
