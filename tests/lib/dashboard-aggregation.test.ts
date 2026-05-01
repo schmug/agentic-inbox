@@ -313,6 +313,102 @@ describe("aggregateOrgOverview", () => {
 		]);
 	});
 
+	it("attaches per-category samples deduped by emailId across mailboxes (#101)", () => {
+		const result = aggregateOrgOverview({
+			mailboxes: [
+				{ id: "a@x.com", email: "a@x.com" },
+				{ id: "b@x.com", email: "b@x.com" },
+			],
+			summaries: [
+				summary({
+					verdictRows: [
+						verdictRow("tag", "phishing"),
+						verdictRow("quarantine", "phishing"),
+						verdictRow("tag", "spam"),
+					],
+					topThreatSamples: {
+						phishing: [
+							{ emailId: "e1", subject: "Reset your password", sender: "fake@bank" },
+							{ emailId: "e2", subject: "Invoice attached", sender: "vendor@x" },
+						],
+						spam: [{ emailId: "e3", subject: "Buy now", sender: "promo@x" }],
+					},
+				}),
+				summary({
+					verdictRows: [verdictRow("block", "phishing")],
+					topThreatSamples: {
+						// e1 also seen in mailbox A — should dedup. e4 is new.
+						phishing: [
+							{ emailId: "e1", subject: "Reset your password", sender: "fake@bank" },
+							{ emailId: "e4", subject: "Wire transfer urgent", sender: "ceo@boss" },
+						],
+					},
+				}),
+			],
+			samplesPerThreat: 3,
+			now: NOW.toISOString(),
+		});
+
+		const phishing = result.topThreats.find((t) => t.category === "phishing")!;
+		expect(phishing.count).toBe(3);
+		expect(phishing.samples).toEqual([
+			{ emailId: "e1", subject: "Reset your password", sender: "fake@bank" },
+			{ emailId: "e2", subject: "Invoice attached", sender: "vendor@x" },
+			{ emailId: "e4", subject: "Wire transfer urgent", sender: "ceo@boss" },
+		]);
+
+		const spam = result.topThreats.find((t) => t.category === "spam")!;
+		expect(spam.count).toBe(1);
+		expect(spam.samples).toEqual([
+			{ emailId: "e3", subject: "Buy now", sender: "promo@x" },
+		]);
+	});
+
+	it("respects samplesPerThreat and slices each category to the cap (#101)", () => {
+		const result = aggregateOrgOverview({
+			mailboxes: [{ id: "a@x.com", email: "a@x.com" }],
+			summaries: [
+				summary({
+					verdictRows: [
+						verdictRow("tag", "phishing"),
+						verdictRow("tag", "phishing"),
+					],
+					topThreatSamples: {
+						phishing: [
+							{ emailId: "e1", subject: "s1", sender: "a" },
+							{ emailId: "e2", subject: "s2", sender: "b" },
+							{ emailId: "e3", subject: "s3", sender: "c" },
+							{ emailId: "e4", subject: "s4", sender: "d" },
+							{ emailId: "e5", subject: "s5", sender: "e" },
+						],
+					},
+				}),
+			],
+			samplesPerThreat: 2,
+			now: NOW.toISOString(),
+		});
+		const phishing = result.topThreats.find((t) => t.category === "phishing")!;
+		expect(phishing.samples).toHaveLength(2);
+		expect(phishing.samples).toEqual([
+			{ emailId: "e1", subject: "s1", sender: "a" },
+			{ emailId: "e2", subject: "s2", sender: "b" },
+		]);
+	});
+
+	it("omits the samples field when no mailbox shipped any (#101 backwards compat)", () => {
+		const result = aggregateOrgOverview({
+			mailboxes: [{ id: "a@x.com", email: "a@x.com" }],
+			summaries: [
+				summary({
+					verdictRows: [verdictRow("tag", "phishing")],
+				}),
+			],
+			now: NOW.toISOString(),
+		});
+		expect(result.topThreats[0]).toEqual({ category: "phishing", count: 1 });
+		expect(result.topThreats[0]).not.toHaveProperty("samples");
+	});
+
 	it("dedupes domain count by lowercased domain", () => {
 		const result = aggregateOrgOverview({
 			mailboxes: [

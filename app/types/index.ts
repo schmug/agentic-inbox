@@ -170,9 +170,21 @@ export interface OrgVerdictMix {
 	bec: number;
 }
 
+export interface OrgTopThreatSample {
+	emailId: string;
+	subject: string;
+	sender: string;
+}
+
 export interface OrgTopThreat {
 	category: string;
 	count: number;
+	/**
+	 * Up to N representative emails per category, deduped across mailboxes
+	 * (#101). Optional so older deploys without samples render the count-only
+	 * card unchanged.
+	 */
+	samples?: OrgTopThreatSample[];
 }
 
 export interface OrgPipelineHealth {

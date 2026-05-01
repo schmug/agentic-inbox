@@ -135,6 +135,14 @@ export interface OrgMailboxSummary {
 	 */
 	verdictMix7d?: VerdictMix;
 	/**
+	 * Pre-aggregated representative emails per actioned classification
+	 * label (#101). Each label maps to up to N most-recent samples from
+	 * this mailbox; the org aggregator unions across mailboxes, dedupes
+	 * by emailId, and slices to top-N per category. Optional so older DO
+	 * replicas mid-deploy degrade gracefully.
+	 */
+	topThreatSamples?: Record<string, OrgTopThreatSample[]>;
+	/**
 	 * Per-pipeline-run durations from `pipeline_runs` (#71). Unioned across
 	 * mailboxes to compute an org-wide p95. Optional so older DO replicas
 	 * mid-deploy degrade gracefully (treated as no samples).
@@ -155,9 +163,22 @@ export interface VerdictMix {
 	bec: number;
 }
 
+/** Representative email surfaced for a top-threats category (#101). */
+export interface OrgTopThreatSample {
+	emailId: string;
+	subject: string;
+	sender: string;
+}
+
 export interface OrgTopThreat {
 	category: string;
 	count: number;
+	/**
+	 * Up to N representative emails for this category, deduped by emailId
+	 * across mailboxes (#101). Optional so older DO replicas mid-deploy
+	 * (which don't ship `topThreatSamples`) gracefully omit the panel.
+	 */
+	samples?: OrgTopThreatSample[];
 }
 
 export interface OrgPipelineHealth {
@@ -234,6 +255,8 @@ interface AggregateOrgOverviewInput {
 	now?: string;
 	/** How many top-threats to surface. Default 5. */
 	topN?: number;
+	/** How many representative samples per top-threat to keep. Default 3. */
+	samplesPerThreat?: number;
 }
 
 /**
@@ -247,6 +270,7 @@ export function aggregateOrgOverview(
 	const { mailboxes, summaries } = input;
 	const now = input.now ?? new Date().toISOString();
 	const topN = input.topN ?? 5;
+	const samplesPerThreat = input.samplesPerThreat ?? 3;
 
 	let threatsBlocked24h = 0;
 	let threatsBlocked7d = 0;
@@ -259,6 +283,8 @@ export function aggregateOrgOverview(
 	const verdictMix = emptyVerdictMix();
 	const verdictMix7d = emptyVerdictMix();
 	const threatCounts = new Map<string, number>();
+	// Per-category collected samples, deduped by emailId across mailboxes.
+	const samplesByCategory = new Map<string, Map<string, OrgTopThreatSample>>();
 
 	for (const summary of summaries) {
 		if (!summary) continue;
@@ -301,10 +327,42 @@ export function aggregateOrgOverview(
 				threatCounts.set(label, (threatCounts.get(label) ?? 0) + 1);
 			}
 		}
+
+		// Pre-aggregated samples per category from this mailbox (#101).
+		// Dedup across mailboxes by emailId — first-seen wins, matching
+		// the DO's "most-recent" ordering since DOs ship samples sorted.
+		if (summary.topThreatSamples) {
+			for (const [category, list] of Object.entries(summary.topThreatSamples)) {
+				if (!Array.isArray(list)) continue;
+				let bucket = samplesByCategory.get(category);
+				if (!bucket) {
+					bucket = new Map<string, OrgTopThreatSample>();
+					samplesByCategory.set(category, bucket);
+				}
+				for (const sample of list) {
+					if (!sample?.emailId) continue;
+					if (!bucket.has(sample.emailId)) {
+						bucket.set(sample.emailId, {
+							emailId: sample.emailId,
+							subject: sample.subject ?? "",
+							sender: sample.sender ?? "",
+						});
+					}
+				}
+			}
+		}
 	}
 
 	const topThreats: OrgTopThreat[] = [...threatCounts.entries()]
-		.map(([category, count]) => ({ category, count }))
+		.map(([category, count]) => {
+			const bucket = samplesByCategory.get(category);
+			const samples = bucket
+				? [...bucket.values()].slice(0, samplesPerThreat)
+				: undefined;
+			return samples && samples.length > 0
+				? { category, count, samples }
+				: { category, count };
+		})
 		.sort((a, b) => b.count - a.count || a.category.localeCompare(b.category))
 		.slice(0, topN);
 

@@ -1526,6 +1526,60 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 		const verdictMix7d = computeVerdictMix(verdictRows7d);
 
+		// Pre-aggregate representative samples per actioned classification
+		// label for the org overview's top-threats panel (#101). Capped at
+		// MAX_THREAT_SAMPLES_PER_LABEL most-recent rows per label; the org
+		// aggregator unions across mailboxes and slices again.
+		const MAX_THREAT_SAMPLES_PER_LABEL = 5;
+		const threatSampleSource = this.db
+			.select({
+				id: schema.emails.id,
+				subject: schema.emails.subject,
+				sender: schema.emails.sender,
+				security_verdict: schema.emails.security_verdict,
+			})
+			.from(schema.emails)
+			.where(
+				and(
+					sql`${schema.emails.date} >= ${dayAgoIso}`,
+					sql`${schema.emails.security_verdict} IS NOT NULL`,
+				),
+			)
+			.orderBy(desc(schema.emails.date))
+			.limit(200)
+			.all();
+
+		const topThreatSamples: Record<
+			string,
+			{ emailId: string; subject: string; sender: string }[]
+		> = {};
+		for (const row of threatSampleSource) {
+			if (!row.security_verdict) continue;
+			let parsed: { action?: unknown; classification?: { label?: unknown } };
+			try {
+				parsed = JSON.parse(row.security_verdict);
+			} catch {
+				continue;
+			}
+			if (
+				parsed.action !== "tag" &&
+				parsed.action !== "quarantine" &&
+				parsed.action !== "block"
+			) {
+				continue;
+			}
+			const label = parsed.classification?.label;
+			if (typeof label !== "string" || label === "safe") continue;
+			const list = (topThreatSamples[label] ??= []);
+			if (list.length < MAX_THREAT_SAMPLES_PER_LABEL) {
+				list.push({
+					emailId: String(row.id ?? ""),
+					subject: row.subject ?? "",
+					sender: row.sender ?? "",
+				});
+			}
+		}
+
 		const recentCases = this.db
 			.select({
 				id: schema.cases.id,
@@ -1550,6 +1604,7 @@ export class MailboxDO extends DurableObject<Env> {
 			pipelineDurationsMs,
 			verdictRows,
 			verdictMix7d,
+			topThreatSamples,
 			recentCases,
 		};
 	}

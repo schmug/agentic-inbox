@@ -64,7 +64,14 @@ const populated: OrgOverview = {
 	verdictMix: { safe: 50, suspicious: 6, phishing: 3, spam: 8, bec: 1 },
 	verdictMix7d: { safe: 360, suspicious: 40, phishing: 21, spam: 56, bec: 7 },
 	topThreats: [
-		{ category: "phishing", count: 9 },
+		{
+			category: "phishing",
+			count: 9,
+			samples: [
+				{ emailId: "e1", subject: "Reset your password", sender: "fake@bank.example" },
+				{ emailId: "e2", subject: "Invoice attached", sender: "billing@evil.example" },
+			],
+		},
 		{ category: "spam", count: 4 },
 	],
 	pipelineHealth: { successRate24h: 0.92, p95Ms: null, runs24h: 200 },
@@ -152,6 +159,37 @@ describe("HomeRoute (org overview)", () => {
 		// Switch back to 24h.
 		await userEvent.click(screen.getByRole("tab", { name: "24h" }));
 		expect(screen.getByText(/68 classified/)).toBeInTheDocument();
+	});
+
+	it("expands a top-threats row to reveal sample emails (#101)", async () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderHome();
+
+		// Samples are inside <details>, hidden until expanded — but jsdom keeps
+		// them in the DOM either way. Easier to assert via the disclosure
+		// element's open state than visibility heuristics.
+		const phishingSummary = screen.getByText("phishing").closest("summary");
+		expect(phishingSummary).toBeTruthy();
+		const details = phishingSummary!.closest("details") as HTMLDetailsElement;
+		expect(details.open).toBe(false);
+
+		await userEvent.click(phishingSummary!);
+		expect(details.open).toBe(true);
+
+		// Sample rows render the subject + sender for each emailId.
+		expect(screen.getByText("Reset your password")).toBeInTheDocument();
+		expect(screen.getByText("fake@bank.example")).toBeInTheDocument();
+		expect(screen.getByText("Invoice attached")).toBeInTheDocument();
+		expect(screen.getByText("billing@evil.example")).toBeInTheDocument();
+	});
+
+	it("renders a top-threats category without samples as a count-only row", () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderHome();
+		// `spam` has no samples in the populated fixture — should render
+		// without a <details> wrapper (older deploys must not regress).
+		const spamLabel = screen.getByText("spam");
+		expect(spamLabel.closest("details")).toBeNull();
 	});
 
 	it("formats p95 latency on the org overview KPI grid", () => {
