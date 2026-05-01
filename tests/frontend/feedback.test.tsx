@@ -30,4 +30,16 @@ describe("useFeedback", () => {
 		expect(add).toHaveBeenNthCalledWith(1, { title: "yay" });
 		expect(add).toHaveBeenNthCalledWith(2, { title: "fyi" });
 	});
+
+	// Identity stability — the returned object must not change across
+	// renders, so consumers can safely include `feedback` in
+	// `useEffect` / `useCallback` dependency arrays without re-firing
+	// on every render. See issue #66.
+	it("returns a reference-stable object across renders", () => {
+		const { result, rerender } = renderHook(() => useFeedback());
+		const first = result.current;
+		rerender();
+		rerender();
+		expect(result.current).toBe(first);
+	});
 });

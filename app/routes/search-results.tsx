@@ -68,10 +68,7 @@ export default function SearchResultsRoute() {
 	const feedback = useFeedback();
 	useEffect(() => {
 		if (isError) feedback.error("Search failed. Try again.");
-		// feedback identity changes every render (returns a fresh object), so we
-		// gate the effect on isError alone to avoid spamming toasts.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isError]);
+	}, [isError, feedback]);
 
 	const handleRowClick = (email: Email) => {
 		selectEmail(email.id);
