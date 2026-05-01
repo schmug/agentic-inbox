@@ -14,7 +14,7 @@ Read the blog post to learn more about Cloudflare Email Service and how to use i
 
 ## How to setup
 
-**Important**: Clicking the 'Deploy to Cloudflare' button is only one part of the setup. You must follow the **After deploying** steps as well. For a full step-by-step guide with screenshots, refer to this comment: 
+**Important**: Clicking the 'Deploy to Cloudflare' button is only one part of the setup. You must follow the **After deploying** steps as well. For a full step-by-step guide with screenshots, refer to the upstream setup walkthrough — its deploy/Email-Routing/Access steps still apply to PhishSOC: 
 https://github.com/cloudflare/agentic-inbox/issues/4#issuecomment-4269118513
 
 ### To set up
