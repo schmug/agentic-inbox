@@ -53,6 +53,23 @@ export const MailboxSettings = z.object({
     })
     .default({ enabled: true }),
   agentModel: z.string().default("@cf/moonshotai/kimi-k2.5"),
+  /**
+   * Optional per-mailbox override for the prompt-injection scanner model
+   * (#67). Falls back to `DEFAULT_INJECTION_SCANNER_MODEL` when undefined.
+   * Wrong choice can let injections through — defaults are intentionally
+   * hardcoded to a tested model.
+   */
+  injectionScannerModel: z.string().optional(),
+  /**
+   * Optional per-mailbox override for the draft-verifier model (#67).
+   * Falls back to `DEFAULT_DRAFT_VERIFIER_MODEL` when undefined.
+   */
+  draftVerifierModel: z.string().optional(),
+  /**
+   * Optional per-mailbox override for the LLM email classifier (#67).
+   * Falls back to `DEFAULT_CLASSIFIER_MODEL` when undefined.
+   */
+  classifierModel: z.string().optional(),
   security: SecuritySettings.optional(),
 }).passthrough();
 
@@ -65,3 +82,17 @@ export const TEXT_MODELS = [
   "@cf/moonshotai/kimi-k2.5",
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 ] as const;
+
+/**
+ * Defaults for the three security-critical AI surfaces (#67). These mirror
+ * the hardcoded values in the worker call sites and are exported so the
+ * settings UI can show them as the placeholder when no override is set.
+ *
+ * Switching the injection-scanner or classifier model can degrade
+ * detection — only override when you know what you're doing.
+ */
+export const DEFAULT_INJECTION_SCANNER_MODEL =
+  "@cf/meta/llama-3.1-8b-instruct-fast";
+export const DEFAULT_DRAFT_VERIFIER_MODEL =
+  "@cf/meta/llama-4-scout-17b-16e-instruct";
+export const DEFAULT_CLASSIFIER_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";

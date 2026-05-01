@@ -10,7 +10,12 @@ import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import type { SecuritySettings } from "~/types";
-import { TEXT_MODELS } from "shared/mailbox-settings";
+import {
+	DEFAULT_CLASSIFIER_MODEL,
+	DEFAULT_DRAFT_VERIFIER_MODEL,
+	DEFAULT_INJECTION_SCANNER_MODEL,
+	TEXT_MODELS,
+} from "shared/mailbox-settings";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -28,6 +33,9 @@ export default function SettingsRoute() {
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
+	const [injectionScannerModel, setInjectionScannerModel] = useState("");
+	const [draftVerifierModel, setDraftVerifierModel] = useState("");
+	const [classifierModel, setClassifierModel] = useState("");
 	const [isSaving, setIsSaving] = useState(false);
 
 	useEffect(() => {
@@ -37,7 +45,13 @@ export default function SettingsRoute() {
 			setSecurity(mailbox.settings?.security);
 
 			const behavior = mailbox.settings as
-				| { autoDraft?: { enabled?: boolean }; agentModel?: string }
+				| {
+						autoDraft?: { enabled?: boolean };
+						agentModel?: string;
+						injectionScannerModel?: string;
+						draftVerifierModel?: string;
+						classifierModel?: string;
+				  }
 				| undefined;
 			const enabled = behavior?.autoDraft?.enabled;
 			setAutoDraftEnabled(enabled === undefined ? true : enabled);
@@ -50,6 +64,10 @@ export default function SettingsRoute() {
 				setModelChoice("__custom__");
 				setCustomModel(m);
 			}
+
+			setInjectionScannerModel(behavior?.injectionScannerModel ?? "");
+			setDraftVerifierModel(behavior?.draftVerifierModel ?? "");
+			setClassifierModel(behavior?.classifierModel ?? "");
 		}
 	}, [mailbox]);
 
@@ -67,6 +85,20 @@ export default function SettingsRoute() {
 			return;
 		}
 
+		// Validate optional security-model overrides — same `@cf/` rule as
+		// the agent model. Empty value means "use default" (#67).
+		const advancedModelInputs: Array<{ label: string; value: string }> = [
+			{ label: "Injection scanner", value: injectionScannerModel.trim() },
+			{ label: "Draft verifier", value: draftVerifierModel.trim() },
+			{ label: "Classifier", value: classifierModel.trim() },
+		];
+		for (const m of advancedModelInputs) {
+			if (m.value && !m.value.startsWith("@cf/")) {
+				feedback.error(`${m.label} model must start with @cf/`);
+				return;
+			}
+		}
+
 		setIsSaving(true);
 		const settings = {
 			...mailbox.settings,
@@ -75,6 +107,9 @@ export default function SettingsRoute() {
 			security,
 			autoDraft: { enabled: autoDraftEnabled },
 			agentModel: resolvedModel || TEXT_MODELS[0],
+			injectionScannerModel: injectionScannerModel.trim() || undefined,
+			draftVerifierModel: draftVerifierModel.trim() || undefined,
+			classifierModel: classifierModel.trim() || undefined,
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
@@ -212,6 +247,72 @@ export default function SettingsRoute() {
 							<code className="pp-mono">@cf/</code>.
 						</p>
 					</div>
+
+					{/* Advanced — security-critical model overrides (#67). Hidden
+					    behind a disclosure so the regular Settings page stays
+					    minimal. Wrong value can let real prompt injection
+					    through, so leave empty to keep the tested defaults. */}
+					<details className="mt-5 group">
+						<summary className="cursor-pointer text-xs font-medium text-ink-2 hover:text-ink select-none">
+							Advanced — security model overrides
+						</summary>
+						<div className="mt-3 space-y-4 border-l-2 border-line pl-4">
+							<p className="text-xs text-ink-3">
+								These models drive security-critical paths. Leave empty to
+								use the tested defaults shown as placeholders. Wrong choices
+								can degrade detection — only override if you know what you
+								are doing.
+							</p>
+							<div>
+								<label
+									htmlFor="advanced-injection-model"
+									className="block text-xs text-ink mb-1"
+								>
+									Prompt-injection scanner
+								</label>
+								<input
+									id="advanced-injection-model"
+									type="text"
+									placeholder={DEFAULT_INJECTION_SCANNER_MODEL}
+									value={injectionScannerModel}
+									onChange={(e) => setInjectionScannerModel(e.target.value)}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+								/>
+							</div>
+							<div>
+								<label
+									htmlFor="advanced-verifier-model"
+									className="block text-xs text-ink mb-1"
+								>
+									Draft verifier
+								</label>
+								<input
+									id="advanced-verifier-model"
+									type="text"
+									placeholder={DEFAULT_DRAFT_VERIFIER_MODEL}
+									value={draftVerifierModel}
+									onChange={(e) => setDraftVerifierModel(e.target.value)}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+								/>
+							</div>
+							<div>
+								<label
+									htmlFor="advanced-classifier-model"
+									className="block text-xs text-ink mb-1"
+								>
+									LLM classifier
+								</label>
+								<input
+									id="advanced-classifier-model"
+									type="text"
+									placeholder={DEFAULT_CLASSIFIER_MODEL}
+									value={classifierModel}
+									onChange={(e) => setClassifierModel(e.target.value)}
+									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
+								/>
+							</div>
+						</div>
+					</details>
 				</div>
 
 				{/* Security */}

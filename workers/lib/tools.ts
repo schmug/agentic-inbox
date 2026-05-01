@@ -27,9 +27,25 @@ import {
 	buildThreadingHeaders,
 } from "./email-helpers";
 import { verifyDraft } from "./ai";
+import { getMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
+
+/**
+ * Run `verifyDraft` honoring the per-mailbox `draftVerifierModel`
+ * override (#67). Centralized here so every tool call site doesn't have
+ * to reload settings — and so the override path is consistent across
+ * Agent-driven drafts and MCP-driven drafts.
+ */
+async function verifyDraftForMailbox(
+	env: Env,
+	mailboxId: string,
+	body: string,
+): Promise<string> {
+	const settings = await getMailboxSettings(env, mailboxId);
+	return verifyDraft(env.AI, body, { model: settings.draftVerifierModel });
+}
 
 // ── Type casts for DO methods not on the base stub type ────────────
 type MailboxSearchStub = {
@@ -136,7 +152,7 @@ export async function toolDraftReply(
 	// Verify/sanitize if requested
 	let processedBody = params.body.trim();
 	if (params.runVerifyDraft) {
-		const sanitized = await verifyDraft(env.AI, processedBody);
+		const sanitized = await verifyDraftForMailbox(env, mailboxId, processedBody);
 		if (!sanitized) {
 			return { error: "Draft verification failed — body could not be verified. Please try again." };
 		}
@@ -217,7 +233,7 @@ export async function toolDraftEmail(
 
 	let processedBody = params.body.trim();
 	if (params.runVerifyDraft) {
-		const sanitized = await verifyDraft(env.AI, processedBody);
+		const sanitized = await verifyDraftForMailbox(env, mailboxId, processedBody);
 		if (!sanitized) {
 			return { error: "Draft verification failed — body could not be verified. Please try again." };
 		}
@@ -294,7 +310,7 @@ export async function toolUpdateDraft(
 	// Verify the body BEFORE deleting the old draft to prevent data loss
 	const newDraftId = crypto.randomUUID();
 	const rawBody = params.bodyHtml ?? oldDraft.body ?? "";
-	const verifiedBody = await verifyDraft(env.AI, rawBody);
+	const verifiedBody = await verifyDraftForMailbox(env, mailboxId, rawBody);
 
 	if (!verifiedBody) {
 		return { error: "Draft verification failed — keeping existing draft unchanged. Please try again." };
@@ -422,7 +438,7 @@ export async function toolSendReply(
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
 	// Verify and append quoted original message
-	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml);
+	const sanitizedBody = await verifyDraftForMailbox(env, mailboxId, params.bodyHtml);
 	if (!sanitizedBody) {
 		return { error: "Draft verification failed — refusing to send unverified content. Please try again." };
 	}
@@ -503,7 +519,7 @@ export async function toolSendEmail(
 	if (!fromDomain) throw new Error("Invalid mailbox email address");
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
 
-	const sanitizedBody = await verifyDraft(env.AI, params.bodyHtml);
+	const sanitizedBody = await verifyDraftForMailbox(env, mailboxId, params.bodyHtml);
 	if (!sanitizedBody) {
 		return { error: "Draft verification failed — refusing to send unverified content. Please try again." };
 	}

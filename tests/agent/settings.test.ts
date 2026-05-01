@@ -24,6 +24,27 @@ describe("MailboxSettings", () => {
     expect(parsed.agentSystemPrompt).toBe("Hi");
   });
 
+  // Per-mailbox security-model overrides (#67). All three are optional and
+  // default to undefined so the worker call sites fall through to their
+  // hardcoded defaults.
+  it("leaves security-model overrides undefined when missing", () => {
+    const parsed = MailboxSettings.parse({});
+    expect(parsed.injectionScannerModel).toBeUndefined();
+    expect(parsed.draftVerifierModel).toBeUndefined();
+    expect(parsed.classifierModel).toBeUndefined();
+  });
+
+  it("round-trips per-mailbox security-model overrides", () => {
+    const parsed = MailboxSettings.parse({
+      injectionScannerModel: "@cf/custom/injection",
+      draftVerifierModel: "@cf/custom/verifier",
+      classifierModel: "@cf/custom/classifier",
+    });
+    expect(parsed.injectionScannerModel).toBe("@cf/custom/injection");
+    expect(parsed.draftVerifierModel).toBe("@cf/custom/verifier");
+    expect(parsed.classifierModel).toBe("@cf/custom/classifier");
+  });
+
   // The security sub-shape is opt-in: an undefined `security` block must
   // round-trip to undefined (no surprise object materialised). The runtime
   // consumer in `workers/security/settings.ts` is the single source of
