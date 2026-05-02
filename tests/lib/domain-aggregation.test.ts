@@ -6,6 +6,8 @@ import {
 	aggregateDomainsList,
 	domainOf,
 	emptyDmarcPosture,
+	reduceDmarcAlignmentRate,
+	type DmarcAlignmentTotals,
 	type DomainMailboxSummary,
 	type OrgMailboxSummary,
 } from "../../workers/lib/dashboard-aggregation";
@@ -243,7 +245,7 @@ describe("aggregateDomainStats", () => {
 		expect(result!.recentCases.map((c) => c.id)).toEqual(["C2", "C1"]);
 	});
 
-	it("returns an all-null DMARC posture (v1 best-effort)", () => {
+	it("falls back to the all-null DMARC posture when the handler doesn't supply one", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",
 			mailboxes: [
@@ -258,6 +260,31 @@ describe("aggregateDomainStats", () => {
 			pct: null,
 			ruaConfigured: null,
 			alignmentRate: null,
+		});
+	});
+
+	it("threads a real DMARC posture through unchanged when supplied", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			dmarcPosture: {
+				p: "reject",
+				sp: "quarantine",
+				pct: 50,
+				ruaConfigured: true,
+				alignmentRate: 0.97,
+			},
+		});
+		expect(result!.dmarcPosture).toEqual({
+			p: "reject",
+			sp: "quarantine",
+			pct: 50,
+			ruaConfigured: true,
+			alignmentRate: 0.97,
 		});
 	});
 
@@ -303,5 +330,52 @@ describe("aggregateDomainStats", () => {
 			"C6",
 			"C5",
 		]);
+	});
+});
+
+describe("reduceDmarcAlignmentRate", () => {
+	function totals(aligned: number, total: number): DmarcAlignmentTotals {
+		return { aligned, total };
+	}
+
+	it("returns null for an empty input", () => {
+		expect(reduceDmarcAlignmentRate([])).toBeNull();
+	});
+
+	it("returns null when total is zero across the fan-out", () => {
+		// No DMARC reports landed in the window — UI should surface
+		// "unavailable" rather than a misleading 0%.
+		expect(reduceDmarcAlignmentRate([totals(0, 0), totals(0, 0)])).toBeNull();
+	});
+
+	it("returns the sum-of-numerators / sum-of-denominators rate", () => {
+		const rate = reduceDmarcAlignmentRate([
+			totals(90, 100),
+			totals(70, 100),
+		]);
+		expect(rate).toBeCloseTo(0.8);
+	});
+
+	it("skips null slots (failed DO calls) without skewing the rate", () => {
+		const rate = reduceDmarcAlignmentRate([
+			totals(95, 100),
+			null,
+			totals(90, 100),
+		]);
+		expect(rate).toBeCloseTo(0.925);
+	});
+
+	it("clamps a misbehaving DO that returns aligned > total to 1.0", () => {
+		const rate = reduceDmarcAlignmentRate([totals(150, 100)]);
+		expect(rate).toBe(1);
+	});
+
+	it("ignores totals with non-finite or negative components", () => {
+		const rate = reduceDmarcAlignmentRate([
+			totals(95, 100),
+			{ aligned: Number.NaN, total: 100 },
+			{ aligned: -1, total: 50 },
+		]);
+		expect(rate).toBeCloseTo(0.95);
 	});
 });

@@ -1426,6 +1426,41 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * Sum DMARC alignment outcomes for `domain` over `[sinceIso, now]`.
+	 *
+	 * Returns `{aligned, total}` where `aligned` counts records whose
+	 * `policy_evaluated` cells show DKIM-pass OR SPF-pass — that's the
+	 * RFC 7489 §6.6.2 alignment definition (either authenticated identifier
+	 * passing satisfies DMARC). The deep-scan path uses AND for "fully
+	 * authenticated"; we deliberately don't reuse it here because the
+	 * apex-domain dashboard wants the looser "DMARC-aligned" rate.
+	 *
+	 * Records with NULL dkim/spf results (older reports that didn't survive
+	 * a parser regression) are counted in `total` but never as `aligned` —
+	 * conservative, since we can't tell. Used by the per-domain stats
+	 * endpoint to compute alignment-rate across all mailboxes whose email
+	 * matches the apex (#138).
+	 */
+	async getDmarcAlignmentTotals(domain: string, sinceIso: string) {
+		const row = [
+			...this.ctx.storage.sql.exec(
+				`SELECT
+				   COALESCE(SUM(r.count), 0) as total,
+				   COALESCE(SUM(CASE WHEN r.dkim_result = 'pass' OR r.spf_result = 'pass' THEN r.count ELSE 0 END), 0) as aligned
+				 FROM dmarc_records r
+				 JOIN dmarc_reports rep ON rep.id = r.report_id
+				 WHERE rep.domain = ?1 AND rep.received_at >= ?2`,
+				domain,
+				sinceIso,
+			),
+		][0] as { total: number | null; aligned: number | null } | undefined;
+		return {
+			aligned: Number(row?.aligned ?? 0) || 0,
+			total: Number(row?.total ?? 0) || 0,
+		};
+	}
+
+	/**
 	 * Aggregate the operations dashboard payload in one round-trip from the
 	 * UI. Each card lives in its own indexed query — see
 	 * `migrations.ts/11_dashboard_indexes` and `12_pipeline_runs` for the

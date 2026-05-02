@@ -468,7 +468,11 @@ export function domainOf(email: string): string | null {
 }
 
 /** Empty DMARC posture sentinel — every field null, signalling
- * "no real ingestion yet" to the UI. */
+ * "no real ingestion yet" to the UI.
+ *
+ * Retained for unit tests and as a defensive fallback; the production handler
+ * builds postures from the DoH TXT lookup + alignment-rate fan-out (#138)
+ * and no longer threads this sentinel into `aggregateDomainStats`. */
 export function emptyDmarcPosture(): DmarcPosture {
 	return {
 		p: null,
@@ -477,6 +481,45 @@ export function emptyDmarcPosture(): DmarcPosture {
 		ruaConfigured: null,
 		alignmentRate: null,
 	};
+}
+
+/** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
+ *
+ * `aligned` is the sum of `count` for records where DMARC alignment passed
+ * (DKIM-pass OR SPF-pass per RFC 7489 §6.6.2 — not the strict `dkim AND spf`
+ * the deep-scan path uses for "fully authenticated"). `total` is the sum
+ * across all records in the window. `null` slots are mailboxes whose DO
+ * call failed; they contribute nothing rather than skewing the rate. */
+export interface DmarcAlignmentTotals {
+	aligned: number;
+	total: number;
+}
+
+/**
+ * Reduce a fan-out of per-mailbox alignment totals into a single rate. Pure
+ * helper so the math is unit-testable without a runtime SQL surface.
+ *
+ * Returns `null` when there's no data — UI surfaces an "unavailable"
+ * affordance rather than rendering "0%" which would imply "every message
+ * failed alignment". `null` slots (failed DO calls) are skipped so a single
+ * unhealthy mailbox doesn't drag the org-wide rate to 0/0.
+ */
+export function reduceDmarcAlignmentRate(
+	totals: ReadonlyArray<DmarcAlignmentTotals | null>,
+): number | null {
+	let aligned = 0;
+	let total = 0;
+	for (const t of totals) {
+		if (!t) continue;
+		if (!Number.isFinite(t.aligned) || !Number.isFinite(t.total)) continue;
+		if (t.aligned < 0 || t.total < 0) continue;
+		aligned += t.aligned;
+		total += t.total;
+	}
+	if (total === 0) return null;
+	// Clamp to [0, 1] — if a misbehaving DO returns aligned > total we'd
+	// rather report 100% than `>1` and have the UI show ">100% aligned".
+	return Math.min(1, aligned / total);
 }
 
 interface AggregateDomainsListInput {
@@ -552,6 +595,13 @@ interface AggregateDomainStatsInput {
 	/** Indices align with `mailboxes`. `null` = DO call failed → contributes 0. */
 	summaries: Array<DomainMailboxSummary | null>;
 	now?: string;
+	/**
+	 * Real apex-domain DMARC posture from the DoH TXT lookup +
+	 * alignment-rate fan-out (#138). When omitted the helper falls back to
+	 * the all-null sentinel — that path is exercised by tests and by the
+	 * forward-compat case where the handler couldn't compute posture.
+	 */
+	dmarcPosture?: DmarcPosture;
 }
 
 /**
@@ -608,7 +658,7 @@ export function aggregateDomainStats(
 		threatsBlocked7d,
 		openCases,
 		verdictMix,
-		dmarcPosture: emptyDmarcPosture(),
+		dmarcPosture: input.dmarcPosture ?? emptyDmarcPosture(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }
