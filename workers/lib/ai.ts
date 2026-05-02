@@ -7,8 +7,17 @@
  *
  * - isPromptInjection: scans email bodies for malicious prompt injection.
  * - verifyDraft: reviews draft email bodies and removes agent/system artifacts.
+ *
+ * Both functions accept an optional `model` arg to honor per-mailbox
+ * overrides (#67). Callers thread the override from `MailboxSettings`;
+ * unset / empty values fall through to the hardcoded defaults so behavior
+ * is identical when no operator override is present.
  */
 
+import {
+	DEFAULT_DRAFT_VERIFIER_MODEL,
+	DEFAULT_INJECTION_SCANNER_MODEL,
+} from "../../shared/mailbox-settings";
 import { escapeHtml, stripHtmlToText, textToHtml } from "./email-helpers";
 
 // ── Prompt Injection Scanner ───────────────────────────────────────
@@ -21,15 +30,21 @@ Return ONLY "NO" if it is a normal email (even if angry, confused, or containing
 
 Respond with exactly one word: YES or NO.`;
 
-export async function isPromptInjection(ai: Ai, bodyHtml: string | null | undefined): Promise<boolean> {
+export async function isPromptInjection(
+	ai: Ai,
+	bodyHtml: string | null | undefined,
+	options: { model?: string } = {},
+): Promise<boolean> {
 	if (!bodyHtml) return false;
-	
+
 	const plainText = stripHtmlToText(bodyHtml).trim();
 	if (plainText.length < 10) return false;
 
+	const model = options.model?.trim() || DEFAULT_INJECTION_SCANNER_MODEL;
+
 	try {
 		const response = (await ai.run(
-			"@cf/meta/llama-3.1-8b-instruct-fast",
+			model as Parameters<typeof ai.run>[0],
 			{
 				messages: [
 					{ role: "system", content: INJECTION_PROMPT },
@@ -118,7 +133,11 @@ function splitQuotedBlock(html: string): { reply: string; quoted: string } {
  * Verify and clean a draft email body using AI.
  * Falls back to returning the original body if the AI call fails.
  */
-export async function verifyDraft(ai: Ai, body: string): Promise<string> {
+export async function verifyDraft(
+	ai: Ai,
+	body: string,
+	options: { model?: string } = {},
+): Promise<string> {
 	if (!body || !body.trim()) return body;
 
 	// Separate the quoted reply block so the AI only reviews the user's text
@@ -133,9 +152,11 @@ export async function verifyDraft(ai: Ai, body: string): Promise<string> {
 	// Skip very short replies — nothing to verify
 	if (replyText.trim().length < 20) return body;
 
+	const model = options.model?.trim() || DEFAULT_DRAFT_VERIFIER_MODEL;
+
 	try {
 		const response = (await ai.run(
-			"@cf/meta/llama-4-scout-17b-16e-instruct",
+			model as Parameters<typeof ai.run>[0],
 			{
 				messages: [
 					{ role: "system", content: VERIFIER_PROMPT },

@@ -27,6 +27,7 @@ import { classifyEmail } from "./classification";
 import { extractUrls } from "./urls";
 import { aggregateVerdict, type FinalVerdict } from "./verdict";
 import { getSecuritySettings } from "./settings";
+import { getMailboxSettings } from "../lib/mailbox-settings";
 import { checkUrlAgainstFeeds, type FeedMatch } from "../intel/feeds";
 import { evaluateTriage, type IntelMatchInfo } from "./triage";
 import type { AttachmentLike } from "./attachments";
@@ -141,9 +142,16 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	}
 
 	// Full path: LLM classification (possibly skipped by folder-bypass tier) + aggregation.
+	// `classifierModel` may be overridden per-mailbox (#67); load the parent
+	// MailboxSettings since `getSecuritySettings` only returns the security sub-tree.
+	const mailboxSettings = await getMailboxSettings(env, mailboxId);
 	const classification = triaged.skipClassifier
 		? { label: "safe" as const, confidence: 1.0, reasoning: "classifier skipped by folder policy" }
-		: await classifyEmail(env.AI, { subject, sender, bodyHtml, auth });
+		: await classifyEmail(
+			env.AI,
+			{ subject, sender, bodyHtml, auth },
+			{ model: mailboxSettings.classifierModel },
+		);
 
 	let verdict = aggregateVerdict(
 		{

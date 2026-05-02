@@ -367,7 +367,9 @@ export class EmailAgent extends AIChatAgent<any> {
 		try {
 			const email = (await stub.getEmail(emailData.emailId)) as EmailFull | null;
 			if (email?.body) {
-				const isInjection = await isPromptInjection(env.AI, email.body);
+				const isInjection = await isPromptInjection(env.AI, email.body, {
+					model: settings.injectionScannerModel,
+				});
 				if (isInjection) {
 					console.warn("Skipping auto-draft due to detected prompt injection:", emailData.emailId);
 					
@@ -415,7 +417,9 @@ export class EmailAgent extends AIChatAgent<any> {
 			// could plant an injection in an earlier email in the thread
 			// that gets included in the agent's prompt.
 			if (threadContext) {
-				const threadInjection = await isPromptInjection(env.AI, threadContext);
+				const threadInjection = await isPromptInjection(env.AI, threadContext, {
+					model: settings.injectionScannerModel,
+				});
 				if (threadInjection) {
 					console.warn("Skipping auto-draft due to prompt injection in thread context:", emailData.threadId);
 					const newMessages = [
@@ -498,7 +502,9 @@ Based on the email content and thread context above, draft a reply using draft_r
 
 			if (!draftToolCalled && result.text.trim()) {
 				// Model generated a draft inline as text -- verify with AI
-				const sanitizedText = await verifyDraft(env.AI, result.text.trim());
+				const sanitizedText = await verifyDraft(env.AI, result.text.trim(), {
+					model: settings.draftVerifierModel,
+				});
 				if (!sanitizedText) {
 					// Inline text was entirely agent commentary, skip
 				} else {

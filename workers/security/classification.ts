@@ -10,6 +10,7 @@
  * The synchronous pipeline keeps latency bounded by avoiding tool loops here.
  */
 
+import { DEFAULT_CLASSIFIER_MODEL } from "../../shared/mailbox-settings";
 import { stripHtmlToText } from "../lib/email-helpers";
 import type { AuthVerdict } from "./auth";
 
@@ -62,6 +63,7 @@ export function __setClassifier(impl: ClassifierImpl | null) {
 export async function classifyEmail(
 	ai: Ai,
 	input: ClassifyInput,
+	options: { model?: string } = {},
 ): Promise<ClassificationResult> {
 	if (overrideClassifier) return overrideClassifier(ai, input);
 	const plain = stripHtmlToText(input.bodyHtml || "").slice(0, 4000);
@@ -72,10 +74,12 @@ SUBJECT: ${input.subject || "(no subject)"}
 BODY:
 ${plain}`;
 
+	const model = options.model?.trim() || DEFAULT_CLASSIFIER_MODEL;
+
 	try {
 		const response = (await Promise.race([
 			ai.run(
-				"@cf/meta/llama-3.1-8b-instruct-fast",
+				model as Parameters<typeof ai.run>[0],
 				{
 					messages: [
 						{ role: "system", content: SYSTEM_PROMPT },
