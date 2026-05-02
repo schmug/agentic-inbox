@@ -83,10 +83,10 @@ function NotConfiguredHint({ mailboxId }: { mailboxId: string | undefined }) {
 			</p>
 			{mailboxId ? (
 				<Link
-					to={`/mailbox/${mailboxId}/settings`}
+					to={`/mailbox/${mailboxId}/settings#hub`}
 					className="inline-flex items-center gap-1.5 text-[12px] text-accent hover:opacity-80 underline"
 				>
-					<GearSixIcon size={14} /> Open settings
+					<GearSixIcon size={14} /> Configure hub credentials
 				</Link>
 			) : null}
 		</div>

@@ -10,7 +10,13 @@ import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
-import type { SecuritySettings } from "~/types";
+import {
+	HubSettingsPanel,
+	normalizeHubConfig,
+	validateHubConfig,
+	type HubFieldErrors,
+} from "~/components/HubSettingsPanel";
+import type { HubConfigSettings, SecuritySettings } from "~/types";
 import {
 	DEFAULT_CLASSIFIER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
@@ -32,6 +38,8 @@ export default function SettingsRoute() {
 	const [displayName, setDisplayName] = useState("");
 	const [agentPrompt, setAgentPrompt] = useState("");
 	const [security, setSecurity] = useState<SecuritySettings | undefined>(undefined);
+	const [hub, setHub] = useState<HubConfigSettings | undefined>(undefined);
+	const [hubErrors, setHubErrors] = useState<HubFieldErrors | undefined>(undefined);
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
@@ -45,6 +53,8 @@ export default function SettingsRoute() {
 			setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 			setAgentPrompt(mailbox.settings?.agentSystemPrompt || "");
 			setSecurity(mailbox.settings?.security);
+			setHub(mailbox.settings?.intel?.hub);
+			setHubErrors(undefined);
 
 			const behavior = mailbox.settings as
 				| {
@@ -108,12 +118,35 @@ export default function SettingsRoute() {
 			}
 		}
 
+		// Validate the hub panel before kicking off a save. `validateHubConfig`
+		// returns `null` when the form is fully empty (treat as "unset"); any
+		// errors here surface inline next to the offending field instead of
+		// silently writing a half-config that the backend would treat as
+		// unconfigured.
+		const hubValidation = validateHubConfig(hub);
+		setHubErrors(hubValidation ?? undefined);
+		if (hubValidation) {
+			feedback.error("Fix the threat-intel hub fields before saving.");
+			return;
+		}
+
+		// Preserve unrelated `intel.*` keys (e.g. #29 peer subscriptions land
+		// here in future) by merging on top of whatever's in mailbox.settings.
+		const normalizedHub = normalizeHubConfig(hub);
+		const existingIntel = mailbox.settings?.intel ?? {};
+		const nextIntel: typeof existingIntel = { ...existingIntel };
+		if (normalizedHub) nextIntel.hub = normalizedHub;
+		else delete nextIntel.hub;
+		const intelToPersist =
+			Object.keys(nextIntel).length === 0 ? undefined : nextIntel;
+
 		setIsSaving(true);
 		const settings = {
 			...mailbox.settings,
 			fromName: displayName,
 			agentSystemPrompt: agentPrompt.trim() || undefined,
 			security,
+			intel: intelToPersist,
 			autoDraft: { enabled: autoDraftEnabled },
 			agentModel: resolvedModel || availableModels[0] || TEXT_MODELS[0],
 			injectionScannerModel: injectionScannerModel.trim() || undefined,
@@ -326,6 +359,18 @@ export default function SettingsRoute() {
 
 				{/* Security */}
 				<SecuritySettingsPanel value={security} onChange={setSecurity} />
+
+				{/* Threat-intel hub (#97) */}
+				<HubSettingsPanel
+					value={hub}
+					onChange={(next) => {
+						setHub(next);
+						// Re-validate eagerly once the user starts editing so
+						// stale errors disappear as the form is fixed.
+						if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
+					}}
+					errors={hubErrors}
+				/>
 
 				{/* Save */}
 				<div className="flex justify-end">
