@@ -144,7 +144,7 @@ describe("runDeepScan + CrowdSec CTI", () => {
 		const fetchMock = makeFetchMock([
 			// URL resolver hits the redirect target.
 			(url) => {
-				if (url.startsWith("https://phish.example.com")) {
+				if (new URL(url).hostname === "phish.example.com") {
 					return new Response("<html><title>Login</title></html>", {
 						status: 200,
 						headers: { "content-type": "text/html" },
@@ -153,10 +153,11 @@ describe("runDeepScan + CrowdSec CTI", () => {
 				return null;
 			},
 			// RDAP — no registration data, treated as no-signal.
-			(url) => (url.startsWith("https://rdap.org/") ? new Response("{}", { status: 200 }) : null),
+			(url) => (new URL(url).hostname === "rdap.org" ? new Response("{}", { status: 200 }) : null),
 			// DoH for the resolved hostname.
 			(url) => {
-				if (url.startsWith("https://cloudflare-dns.com/dns-query")) {
+				const parsed = new URL(url);
+				if (parsed.hostname === "cloudflare-dns.com" && parsed.pathname.startsWith("/dns-query")) {
 					return new Response(
 						JSON.stringify({
 							Answer: [{ name: "phish.example.com.", type: 1, TTL: 60, data: "203.0.113.42" }],
@@ -168,7 +169,8 @@ describe("runDeepScan + CrowdSec CTI", () => {
 			},
 			// CrowdSec CTI for the resolved IP.
 			(url) => {
-				if (url.startsWith("https://cti.api.crowdsec.net/v2/smoke/")) {
+				const parsed = new URL(url);
+				if (parsed.hostname === "cti.api.crowdsec.net" && parsed.pathname.startsWith("/v2/smoke/")) {
 					return new Response(JSON.stringify(CTI_FIXTURE_MALICIOUS), {
 						status: 200,
 						headers: { "content-type": "application/json" },
@@ -193,7 +195,7 @@ describe("runDeepScan + CrowdSec CTI", () => {
 		expect(result.added_score).toBeGreaterThanOrEqual(25);
 		// CTI calls actually happened.
 		const ctiCalls = fetchMock.mock.calls.filter((c) =>
-			String(c[0]).startsWith("https://cti.api.crowdsec.net"),
+			new URL(String(c[0])).hostname === "cti.api.crowdsec.net",
 		);
 		expect(ctiCalls.length).toBe(1);
 	});
@@ -201,7 +203,7 @@ describe("runDeepScan + CrowdSec CTI", () => {
 	it("with no CROWDSEC_CTI_API_KEY: no CTI calls, deep-scan still completes", async () => {
 		const fetchMock = makeFetchMock([
 			(url) => {
-				if (url.startsWith("https://phish.example.com")) {
+				if (new URL(url).hostname === "phish.example.com") {
 					return new Response("<html><title>Login</title></html>", {
 						status: 200,
 						headers: { "content-type": "text/html" },
@@ -209,7 +211,7 @@ describe("runDeepScan + CrowdSec CTI", () => {
 				}
 				return null;
 			},
-			(url) => (url.startsWith("https://rdap.org/") ? new Response("{}", { status: 200 }) : null),
+			(url) => (new URL(url).hostname === "rdap.org" ? new Response("{}", { status: 200 }) : null),
 		]);
 		globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -222,12 +224,12 @@ describe("runDeepScan + CrowdSec CTI", () => {
 		expect(result).toBeDefined();
 		// No CTI HTTP calls were made.
 		const ctiCalls = fetchMock.mock.calls.filter((c) =>
-			String(c[0]).startsWith("https://cti.api.crowdsec.net"),
+			new URL(String(c[0])).hostname === "cti.api.crowdsec.net",
 		);
 		expect(ctiCalls.length).toBe(0);
 		// And no DoH calls — the CTI stage gates DoH on the API key.
 		const dohCalls = fetchMock.mock.calls.filter((c) =>
-			String(c[0]).startsWith("https://cloudflare-dns.com"),
+			new URL(String(c[0])).hostname === "cloudflare-dns.com",
 		);
 		expect(dohCalls.length).toBe(0);
 		// No CTI reasons.
