@@ -18,6 +18,7 @@ This is not a full MISP implementation. Adopters needing complete MISP functiona
 | `POST` | `/orgs/accept` | (public) | Redeems token; returns new `api_key` (shown once). |
 | `GET` | `/orgs/me` | API key | Authenticated org. |
 | `POST` `GET` `DELETE` | `/admin/peers[/:uuid]` | `HUB_ADMIN_KEY` | Inbound MISP peer config (see [Inbound MISP Sync](#inbound-misp-sync)). |
+| `GET` | `/admin/stats` | `HUB_ADMIN_KEY` | Operational-health snapshot (see [Inspecting the hub](#inspecting-the-hub)). |
 
 ## Auth
 
@@ -112,6 +113,50 @@ For local-org reports to count as corroboration of pulled intel, they must be po
 ### Loop prevention
 
 Events whose `orgc_uuid` matches a local org are skipped on pull. This handles the case where we previously published to the upstream and now see it coming back. Provenance is recorded on `events.source_peer_uuid` for forward-compat with outbound sync.
+
+## Inspecting the hub
+
+For at-a-glance operational health, hit `GET /admin/stats` with the admin key:
+
+```bash
+curl -s https://your-hub.example/admin/stats \
+  -H "Authorization: $HUB_ADMIN_KEY" | jq
+```
+
+You get a single JSON snapshot covering:
+
+- `orgs.total` and `orgs.active_last_7d` (orgs with at least one event in the last 7 days)
+- `events.total` and `events.last_24h`
+- `corroboration.rows` and `corroboration.promoted` (rows that meet `score ≥ 2.0 AND contributors ≥ 2` — same predicate as the destroylist)
+- `destroylist.by_sharing_group[]` — published-feed size per sharing group
+- `peers[]` — for each inbound peer: `last_pulled_at`, `last_error`, `events_pulled_24h`
+- `triage.events_with_tags_pct_24h` and `triage.untagged_older_than_15m` — proxy for triage queue health (queue depth itself isn't queryable from a Worker)
+- `cron.last_run_at` — proxy via `MAX(inbound_peers.last_pulled_ts)` since there's no cron-history table yet
+
+The 24h / 7d windows use `events.date` (the upstream MISP YYYY-MM-DD date), which is the only indexed time column on `events`. That's a coarse proxy for ingest time but keeps the queries off full-table scans.
+
+When `/admin/stats` is not enough, the next-level tools are:
+
+```bash
+# Live request + cron logs
+npx wrangler tail
+
+# Common D1 query recipes (run with --remote in production)
+npx wrangler d1 execute ais-hub --remote --command \
+  "SELECT name, last_pulled_ts, last_error FROM inbound_peers ib
+   JOIN peers p ON p.uuid = ib.peer_uuid ORDER BY name;"
+
+npx wrangler d1 execute ais-hub --remote --command \
+  "SELECT COUNT(*) AS untagged_now FROM events e
+   WHERE created_at < datetime('now','-15 minutes')
+     AND NOT EXISTS (SELECT 1 FROM event_tags et WHERE et.event_uuid = e.uuid);"
+
+npx wrangler d1 execute ais-hub --remote --command \
+  "SELECT sharing_group_uuid, COUNT(*) AS promoted
+     FROM corroboration
+    WHERE score >= 2.0 AND contributor_count >= 2
+    GROUP BY sharing_group_uuid;"
+```
 
 ## Future work
 

@@ -8,6 +8,8 @@
  * /peers          POST   create an inbound peer (also creates peer + synthetic org)
  *                 GET    list inbound peers
  * /peers/:uuid    DELETE remove an inbound peer (cascade-removes peers row)
+ *
+ * /stats          GET    operational-health snapshot — see ./admin/stats.ts
  */
 
 import { Hono } from "hono";

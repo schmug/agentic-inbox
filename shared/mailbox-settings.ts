@@ -45,6 +45,36 @@ const SecuritySettings = z
   })
   .passthrough();
 
+/**
+ * Per-mailbox MISP-compatible threat-intel hub config (#97).
+ *
+ * Mirrors the backend `HubConfig` interface in `workers/lib/hub-config.ts`.
+ * The API key itself is NEVER persisted in R2 — only the *name* of a worker
+ * secret (`api_key_secret_name`) is stored, and the worker resolves the live
+ * value from `c.env` at call time. That way an org can rotate the key with
+ * `wrangler secret put` without rewriting the mailbox JSON.
+ *
+ * `loadHubConfig` requires `url`, `org_uuid`, and `api_key_secret_name` to be
+ * non-empty strings, so the schema marks them required when `hub` is present.
+ * The whole `intel` block is optional + passthrough so unrelated future intel
+ * fields (#29 peer subscriptions) round-trip without a coordinated deploy.
+ */
+const HubConfig = z
+  .object({
+    url: z.string().min(1),
+    org_uuid: z.string().min(1),
+    api_key_secret_name: z.string().min(1),
+    default_sharing_group_uuid: z.string().optional(),
+    auto_report: z.boolean().optional(),
+  })
+  .passthrough();
+
+const IntelSettings = z
+  .object({
+    hub: HubConfig.optional(),
+  })
+  .passthrough();
+
 export const MailboxSettings = z.object({
   agentSystemPrompt: z.string().optional(),
   autoDraft: z
@@ -71,6 +101,7 @@ export const MailboxSettings = z.object({
    */
   classifierModel: z.string().optional(),
   security: SecuritySettings.optional(),
+  intel: IntelSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;
