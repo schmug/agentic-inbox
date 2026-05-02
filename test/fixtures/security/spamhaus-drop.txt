@@ -1,0 +1,10 @@
+; Spamhaus DROP List 2026/01/01 — synthetic test fixture
+; Mirrors the live format: https://www.spamhaus.org/drop/drop.txt
+; Comment lines start with `;` and must be ignored.
+;
+1.10.16.0/20 ; SBL233763
+5.45.207.0/24 ; SBL219423
+not-a-cidr ; SBL000000
+192.0.2.42 ; SBL000001
+;
+46.183.220.0/22 ; SBL301321
