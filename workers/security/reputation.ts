@@ -8,6 +8,8 @@
  * for another — correct behaviour for a personal inbox).
  */
 
+import type { CtiSummary } from "../intel/crowdsec-cti";
+
 export interface SenderReputation {
 	sender: string;
 	first_seen: string;
@@ -17,12 +19,39 @@ export interface SenderReputation {
 	flagged: boolean;
 }
 
-export function scoreReputation(rep: SenderReputation | null): { score: number; reasons: string[] } {
+/**
+ * Optional CTI-informed prior for the first-time-sender branch. When
+ * provided, replaces the legacy flat `+5` with a graduated bonus computed
+ * from CrowdSec CTI on the originating `Received:` IP. See
+ * `firstTimeSenderPriorFromCti` for the score-map and the "highest single
+ * match" rule.
+ */
+export interface FirstTimeSenderPrior {
+	score: number;
+	reason: string;
+}
+
+/**
+ * Score the sender's reputation. The first-time-sender branch optionally
+ * accepts a CTI-informed prior (issue #79); when absent it falls back to
+ * the legacy flat `+5` so callers without a CTI client (or where CTI
+ * returned null — no key, 404, 429, network error) keep the original
+ * behaviour.
+ */
+export function scoreReputation(
+	rep: SenderReputation | null,
+	prior?: FirstTimeSenderPrior,
+): { score: number; reasons: string[] } {
 	const reasons: string[] = [];
 	let score = 0;
 	if (!rep || rep.message_count === 0) {
-		score += 5;
-		reasons.push("first-time sender");
+		if (prior) {
+			score += prior.score;
+			reasons.push(prior.reason);
+		} else {
+			score += 5;
+			reasons.push("first-time sender");
+		}
 		return { score, reasons };
 	}
 	if (rep.flagged) { score += 15; reasons.push("sender previously flagged"); }
@@ -35,4 +64,80 @@ export function scoreReputation(rep: SenderReputation | null): { score: number; 
 		reasons.push(`bad sender history (avg ${rep.avg_score.toFixed(0)})`);
 	}
 	return { score, reasons };
+}
+
+/**
+ * Map a CrowdSec CTI summary onto a graduated first-time-sender prior.
+ *
+ * The score map (issue #79):
+ *
+ *   - reputation `malicious`                                  → +20
+ *   - reputation `suspicious`                                 → +10
+ *   - classifications include `tor` or `vpn:public`           → +10
+ *   - reputation `unknown`                                    → +5  (legacy)
+ *   - reputation `known` / `benign` / `safe`                  → +1  (small floor)
+ *
+ * "Highest-magnitude single match" rule: if multiple categories fire we
+ * pick the largest single bonus and surface its reason — we DO NOT sum.
+ * E.g. `reputation === "malicious"` AND `classifications.includes("tor")`
+ * yields +20 with the `reputation=malicious` reason, not +30.
+ *
+ * The IP is rendered into the reason string so reviewers can correlate the
+ * verdict back to a specific `Received:` hop.
+ */
+export function firstTimeSenderPriorFromCti(
+	ip: string,
+	summary: CtiSummary,
+): FirstTimeSenderPrior {
+	const candidates: FirstTimeSenderPrior[] = [];
+
+	if (summary.reputation === "malicious") {
+		candidates.push({
+			score: 20,
+			reason: `first-time sender from ${ip} CTI reputation=malicious`,
+		});
+	} else if (summary.reputation === "suspicious") {
+		candidates.push({
+			score: 10,
+			reason: `first-time sender from ${ip} CTI reputation=suspicious`,
+		});
+	}
+
+	const flaggedClassification = summary.classifications.find(
+		(c) => c === "tor" || c === "vpn:public",
+	);
+	if (flaggedClassification) {
+		candidates.push({
+			score: 10,
+			reason: `first-time sender from ${ip} classification=${flaggedClassification}`,
+		});
+	}
+
+	if (
+		summary.reputation === "known" ||
+		summary.reputation === "benign" ||
+		summary.reputation === "safe"
+	) {
+		candidates.push({
+			score: 1,
+			reason: `first-time sender from ${ip} CTI reputation=${summary.reputation}`,
+		});
+	}
+
+	if (candidates.length === 0) {
+		// `unknown` reputation with no flagged classifications — treat as the
+		// legacy flat +5 but tag the IP so operators see CTI was consulted.
+		return {
+			score: 5,
+			reason: `first-time sender from ${ip} CTI reputation=unknown`,
+		};
+	}
+
+	// Highest single match wins; ties resolved by insertion order (malicious /
+	// suspicious before classifications before known/benign/safe).
+	let winner = candidates[0];
+	for (const c of candidates.slice(1)) {
+		if (c.score > winner.score) winner = c;
+	}
+	return winner;
 }
