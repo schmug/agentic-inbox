@@ -18,6 +18,8 @@ function renderBreadcrumb(initialEntry: string) {
 		<Routes>
 			<Route path="/" element={<Breadcrumb />} />
 			<Route path="/mailboxes" element={<Breadcrumb />} />
+			<Route path="/domains" element={<Breadcrumb />} />
+			<Route path="/domains/:domain" element={<Breadcrumb />} />
 			<Route path="/mailbox/:mailboxId/*" element={<Breadcrumb />} />
 		</Routes>,
 		{ initialEntries: [initialEntry] },
@@ -49,16 +51,22 @@ describe("Breadcrumb", () => {
 		);
 	});
 
-	it("renders Org › alice@acme.com › Cases › CASE-1 on /mailbox/m1/cases/CASE-1", () => {
+	it("renders Org › acme.com › alice@acme.com › Cases › CASE-1 on /mailbox/m1/cases/CASE-1 (#85)", () => {
 		renderBreadcrumb("/mailbox/m1/cases/CASE-1");
 		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
 		const items = within(nav).getAllByRole("listitem");
-		expect(items).toHaveLength(4);
+		// Org / domain / mailbox / Cases / CASE-1
+		expect(items).toHaveLength(5);
 
 		// Org → / link.
 		expect(within(nav).getByRole("link", { name: "Org" })).toHaveAttribute(
 			"href",
 			"/",
+		);
+		// Domain segment links to the per-domain drill-down.
+		expect(within(nav).getByRole("link", { name: "acme.com" })).toHaveAttribute(
+			"href",
+			"/domains/acme.com",
 		);
 		// Mailbox link uses email.
 		expect(
@@ -77,9 +85,42 @@ describe("Breadcrumb", () => {
 		);
 	});
 
+	it("renders Org › Domains on /domains (#85)", () => {
+		renderBreadcrumb("/domains");
+		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+		const items = within(nav).getAllByRole("listitem");
+		expect(items).toHaveLength(2);
+		expect(within(nav).getByRole("link", { name: "Org" })).toHaveAttribute(
+			"href",
+			"/",
+		);
+		expect(within(nav).getByText("Domains")).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+	});
+
+	it("renders Org › acme.com on /domains/acme.com (#85)", () => {
+		renderBreadcrumb("/domains/acme.com");
+		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+		const items = within(nav).getAllByRole("listitem");
+		expect(items).toHaveLength(2);
+		expect(within(nav).getByRole("link", { name: "Org" })).toHaveAttribute(
+			"href",
+			"/",
+		);
+		expect(within(nav).queryByRole("link", { name: "acme.com" })).toBeNull();
+		expect(within(nav).getByText("acme.com")).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+	});
+
 	it("uses a monospaced separator between segments", () => {
 		const { container } = renderBreadcrumb("/mailbox/m1/dashboard");
-		// Three segments → two separators.
+		// Org / acme.com / mailbox / Dashboard → at least three separators
+		// once the domain segment is injected (#85). The lower bound stays
+		// permissive so the test doesn't drift on future segment changes.
 		const separators = container.querySelectorAll(".pp-mono");
 		expect(separators.length).toBeGreaterThanOrEqual(2);
 		separators.forEach((sep) => {

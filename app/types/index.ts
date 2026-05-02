@@ -235,6 +235,49 @@ export interface OrgOverview {
 	hubContributions24h: number;
 }
 
+/**
+ * DMARC posture surfaced on the per-domain dashboard (#85). v1 best-effort:
+ * we don't have a real DMARC TXT-record / aggregate-report ingestion pipeline
+ * scoped to the apex domain yet, so all fields are nullable. Real ingestion
+ * is out of scope for #85 and tracked separately.
+ */
+export interface DmarcPosture {
+	p: string | null;
+	sp: string | null;
+	pct: number | null;
+	ruaConfigured: boolean | null;
+	alignmentRate: number | null;
+}
+
+/** One row in the `/api/v1/domains` list. */
+export interface DomainListEntry {
+	domain: string;
+	mailboxesCount: number;
+	threatsBlocked24h: number;
+	openCases: number;
+	verdictMix: OrgVerdictMix;
+}
+
+/** Mailbox row inside a `/api/v1/domains/:domain/stats` payload. */
+export interface DomainMailboxRef {
+	id: string;
+	email: string;
+	name: string;
+}
+
+/** `/api/v1/domains/:domain/stats` payload — drill-down dashboard for one domain. */
+export interface DomainStats {
+	now: string;
+	domain: string;
+	mailboxes: DomainMailboxRef[];
+	threatsBlocked24h: number;
+	threatsBlocked7d: number;
+	openCases: number;
+	verdictMix: OrgVerdictMix;
+	dmarcPosture: DmarcPosture;
+	recentCases: DashboardCase[];
+}
+
 export interface HubContribution {
 	uuid: string;
 	info: string;

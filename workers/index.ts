@@ -30,10 +30,17 @@ import { dmarcRoutes } from "./routes/dmarc";
 import { caseRoutes } from "./routes/cases";
 import { hubUiRoutes } from "./routes/hub-ui";
 import {
+	aggregateDomainStats,
+	aggregateDomainsList,
 	aggregateOrgOverview,
 	bucketThreatPressure,
 	computeP95,
+	domainOf,
 	pipelineSuccessRate,
+	type DomainListEntry,
+	type DomainMailboxRef,
+	type DomainMailboxSummary,
+	type DomainStats,
 	type OrgMailboxSummary,
 	type OrgOverview,
 } from "./lib/dashboard-aggregation";
@@ -186,6 +193,126 @@ app.get("/api/v1/org/overview", async (c) => {
 	}
 
 	return c.json(overview);
+});
+
+// -- Per-domain stats + drill-down (#85) ----------------------------
+
+/** Versioned KV keys — bumping the prefix on schema change is a clean rename. */
+const DOMAINS_LIST_CACHE_KEY = "domains:v1";
+const DOMAIN_STATS_CACHE_KEY_PREFIX = "domain-stats:v1:";
+const DOMAIN_CACHE_TTL_S = 60;
+
+/**
+ * Hostname-shape regex. Mirrors RFC 1035 / 5890 lite: at least two labels,
+ * each label 1–63 chars, alphanumeric with internal hyphens, total length
+ * ≤253. Lower-cased before matching. Rejects `acme..com`, `acme/foo`,
+ * IDNs (out of scope for v1), and anything with whitespace.
+ */
+const DOMAIN_REGEX =
+	/^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+app.get("/api/v1/domains", async (c) => {
+	const cached = c.env.BLOOM_KV
+		? await c.env.BLOOM_KV.get(DOMAINS_LIST_CACHE_KEY, "json").catch(() => null)
+		: null;
+	if (cached) {
+		return c.json(cached as DomainListEntry[]);
+	}
+
+	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const settled = await Promise.allSettled(
+		mailboxes.map((m) =>
+			c.env.MAILBOX
+				.get(c.env.MAILBOX.idFromName(m.id))
+				.getDashboardSummary(),
+		),
+	);
+	const summaries: Array<OrgMailboxSummary | null> = settled.map((r) => {
+		if (r.status !== "fulfilled") {
+			console.error("domains-list: mailbox summary failed:", (r.reason as Error)?.message);
+			return null;
+		}
+		const v = r.value as OrgMailboxSummary;
+		return { ...v, threatsBlocked7d: v.threatsBlocked7d ?? 0 };
+	});
+
+	const list = aggregateDomainsList({ mailboxes, summaries });
+
+	if (c.env.BLOOM_KV) {
+		c.executionCtx.waitUntil(
+			c.env.BLOOM_KV.put(DOMAINS_LIST_CACHE_KEY, JSON.stringify(list), {
+				expirationTtl: DOMAIN_CACHE_TTL_S,
+			}).catch((e) => console.error("domains-list cache write failed:", (e as Error).message)),
+		);
+	}
+
+	return c.json(list);
+});
+
+app.get("/api/v1/domains/:domain/stats", async (c) => {
+	const raw = c.req.param("domain") ?? "";
+	const domain = decodeURIComponent(raw).toLowerCase();
+	if (!DOMAIN_REGEX.test(domain)) {
+		return c.json({ error: "Malformed domain" }, 400);
+	}
+
+	const cacheKey = `${DOMAIN_STATS_CACHE_KEY_PREFIX}${domain}`;
+	const cached = c.env.BLOOM_KV
+		? await c.env.BLOOM_KV.get(cacheKey, "json").catch(() => null)
+		: null;
+	if (cached) {
+		return c.json(cached as DomainStats);
+	}
+
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const scoped = allMailboxes.filter((m) => domainOf(m.email) === domain);
+	if (scoped.length === 0) {
+		return c.json({ error: "Domain not found" }, 404);
+	}
+
+	const settled = await Promise.allSettled(
+		scoped.map((m) =>
+			c.env.MAILBOX
+				.get(c.env.MAILBOX.idFromName(m.id))
+				.getDashboardSummary(),
+		),
+	);
+	const summaries: Array<DomainMailboxSummary | null> = settled.map((r) => {
+		if (r.status !== "fulfilled") {
+			console.error("domain-stats: mailbox summary failed:", (r.reason as Error)?.message);
+			return null;
+		}
+		const v = r.value as DomainMailboxSummary;
+		return { ...v, threatsBlocked7d: v.threatsBlocked7d ?? 0 };
+	});
+
+	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
+		id: m.id,
+		email: m.email,
+		name: m.id,
+	}));
+
+	const stats = aggregateDomainStats({
+		domain,
+		mailboxes: mailboxRefs,
+		summaries,
+	});
+	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
+	// which we already guarded above with the 404 — but narrow the type
+	// defensively in case the helper's contract changes later.
+	if (!stats) {
+		return c.json({ error: "Domain not found" }, 404);
+	}
+
+	if (c.env.BLOOM_KV) {
+		c.executionCtx.waitUntil(
+			c.env.BLOOM_KV.put(cacheKey, JSON.stringify(stats), {
+				expirationTtl: DOMAIN_CACHE_TTL_S,
+			}).catch((e) => console.error("domain-stats cache write failed:", (e as Error).message)),
+		);
+	}
+
+	return c.json(stats);
 });
 
 app.post("/api/v1/mailboxes", async (c) => {

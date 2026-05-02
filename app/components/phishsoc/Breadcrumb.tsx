@@ -21,6 +21,7 @@ function segmentsFor(
 	pathname: string,
 	mailboxId: string | undefined,
 	mailboxLabel: string,
+	mailboxEmail: string | undefined,
 ): Segment[] | null {
 	if (pathname === "/" || pathname === "") return null;
 
@@ -30,31 +31,54 @@ function segmentsFor(
 		return [orgRoot, { label: "Mailboxes" }];
 	}
 
+	// `/domains` and `/domains/:domain` (#85). Read the domain from the path
+	// rather than a hook — the breadcrumb has no router param for these
+	// top-level routes. Decode in case a future caller percent-encodes.
+	if (pathname === "/domains" || pathname === "/domains/") {
+		return [orgRoot, { label: "Domains" }];
+	}
+	if (pathname.startsWith("/domains/")) {
+		const tail = pathname.slice("/domains/".length).replace(/\/$/, "");
+		const domain = decodeURIComponent(tail);
+		if (domain) {
+			return [orgRoot, { label: domain }];
+		}
+		return [orgRoot, { label: "Domains" }];
+	}
+
 	if (!mailboxId) return null;
 
 	const base = `/mailbox/${encodeURIComponent(mailboxId)}`;
 	const mailboxSegment: Segment = { label: mailboxLabel, to: base };
+	// Inject a domain segment between Org and the mailbox label when the
+	// mailbox query has resolved. Defensive on the loading case: skip the
+	// extra segment until `mailbox.email` is available so we don't flash
+	// "undefined". Links to the per-domain drill-down at `/domains/:domain`.
+	const domain = mailboxEmail?.split("@")[1]?.toLowerCase();
+	const orgChain: Segment[] = domain
+		? [orgRoot, { label: domain, to: `/domains/${encodeURIComponent(domain)}` }]
+		: [orgRoot];
 
 	const tail = pathname.slice(base.length);
 
 	if (tail === "" || tail === "/") {
-		return [orgRoot, { label: mailboxLabel }];
+		return [...orgChain, { label: mailboxLabel }];
 	}
 
 	if (tail.startsWith("/dashboard")) {
-		return [orgRoot, mailboxSegment, { label: "Dashboard" }];
+		return [...orgChain, mailboxSegment, { label: "Dashboard" }];
 	}
 	if (tail.startsWith("/settings")) {
-		return [orgRoot, mailboxSegment, { label: "Settings" }];
+		return [...orgChain, mailboxSegment, { label: "Settings" }];
 	}
 	if (tail.startsWith("/search")) {
-		return [orgRoot, mailboxSegment, { label: "Search" }];
+		return [...orgChain, mailboxSegment, { label: "Search" }];
 	}
 	if (tail.startsWith("/dmarc")) {
-		return [orgRoot, mailboxSegment, { label: "DMARC" }];
+		return [...orgChain, mailboxSegment, { label: "DMARC" }];
 	}
 	if (tail.startsWith("/hub")) {
-		return [orgRoot, mailboxSegment, { label: "Threat-intel hub" }];
+		return [...orgChain, mailboxSegment, { label: "Threat-intel hub" }];
 	}
 	if (tail.startsWith("/cases")) {
 		const casesSegment: Segment = { label: "Cases", to: `${base}/cases` };
@@ -63,17 +87,17 @@ function segmentsFor(
 		// parent route uses a wildcard match).
 		const caseId = tail.split("/")[2];
 		if (caseId) {
-			return [orgRoot, mailboxSegment, casesSegment, { label: caseId }];
+			return [...orgChain, mailboxSegment, casesSegment, { label: caseId }];
 		}
-		return [orgRoot, mailboxSegment, { label: "Cases" }];
+		return [...orgChain, mailboxSegment, { label: "Cases" }];
 	}
 	if (tail.startsWith("/emails/")) {
 		const folder = tail.split("/")[2] ?? "";
 		const folderLabel = FOLDER_LABELS[folder.toLowerCase()] ?? folder;
-		return [orgRoot, mailboxSegment, { label: folderLabel }];
+		return [...orgChain, mailboxSegment, { label: folderLabel }];
 	}
 
-	return [orgRoot, mailboxSegment];
+	return [...orgChain, mailboxSegment];
 }
 
 export default function Breadcrumb() {
@@ -82,7 +106,12 @@ export default function Breadcrumb() {
 	const { data: mailbox } = useMailbox(mailboxId);
 
 	const mailboxLabel = mailbox?.email ?? mailbox?.name ?? mailboxId ?? "Mailbox";
-	const segments = segmentsFor(location.pathname, mailboxId, mailboxLabel);
+	const segments = segmentsFor(
+		location.pathname,
+		mailboxId,
+		mailboxLabel,
+		mailbox?.email,
+	);
 
 	if (!segments || segments.length === 0) return null;
 

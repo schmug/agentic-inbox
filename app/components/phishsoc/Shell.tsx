@@ -6,6 +6,7 @@ import {
 	EnvelopeIcon,
 	GaugeIcon,
 	GearSixIcon,
+	GlobeIcon,
 	GraphIcon,
 	ListIcon,
 	MagnifyingGlassIcon,
@@ -178,6 +179,11 @@ function NavContents({
 					icon={<EnvelopeIcon size={16} />}
 					label="Mailboxes"
 					count={mailboxCount > 0 ? mailboxCount : undefined}
+				/>
+				<NavItem
+					to="/domains"
+					icon={<GlobeIcon size={16} />}
+					label="Domains"
 				/>
 				{mailboxId && (
 					<>
