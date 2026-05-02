@@ -36,6 +36,24 @@ export interface FolderPolicySettings {
 	treat_as_verified?: boolean;
 }
 
+/**
+ * Per-mailbox threat-intel hub config (#97). Mirrors the backend `HubConfig`
+ * shape in `workers/lib/hub-config.ts`. `api_key_secret_name` holds the NAME
+ * of a worker secret, not the secret value — the raw key never leaves
+ * `wrangler secret put`.
+ */
+export interface HubConfigSettings {
+	url?: string;
+	org_uuid?: string;
+	api_key_secret_name?: string;
+	default_sharing_group_uuid?: string;
+	auto_report?: boolean;
+}
+
+export interface IntelSettings {
+	hub?: HubConfigSettings;
+}
+
 export interface SecuritySettings {
 	enabled?: boolean;
 	learning_mode?: boolean;
@@ -58,6 +76,7 @@ export interface MailboxSettings {
 	autoReply?: { enabled: boolean; subject: string; message: string };
 	agentSystemPrompt?: string;
 	security?: SecuritySettings;
+	intel?: IntelSettings;
 }
 
 export interface Mailbox {
