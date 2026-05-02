@@ -33,6 +33,7 @@ import { Folders } from "../../shared/folders";
 import { checkUrlAgainstFeeds } from "./feeds";
 import { lookupDomainAge } from "./rdap";
 import { resolveUrl } from "./url-resolver";
+import { lookupIp, type CtiSummary } from "./crowdsec-cti";
 import {
 	aggregateAttachmentSignals,
 	detectEncryptedArchive,
@@ -77,10 +78,12 @@ export async function runDeepScan(input: DeepScanInput): Promise<DeepScanResult>
 	const reasons: string[] = [];
 	let added = 0;
 
+	let resolvedHosts: string[] = [];
 	try {
 		const urlDelta = await scanUrls(env, mailboxId, emailId);
 		added += urlDelta.score;
 		reasons.push(...urlDelta.reasons);
+		resolvedHosts = urlDelta.resolvedHosts;
 	} catch (e) {
 		console.error("deep-scan URL stage failed:", (e as Error).message);
 	}
@@ -91,6 +94,17 @@ export async function runDeepScan(input: DeepScanInput): Promise<DeepScanResult>
 		reasons.push(...attDelta.reasons);
 	} catch (e) {
 		console.error("deep-scan attachment stage failed:", (e as Error).message);
+	}
+
+	// CTI runs as a peer stage (not nested inside scanUrls) so its own
+	// per-inbound cap composes with the URL cap rather than getting
+	// squashed by it. Gated on the API key — unconfigured deploys no-op.
+	try {
+		const ctiDelta = await scanCti(env, resolvedHosts);
+		added += ctiDelta.score;
+		reasons.push(...ctiDelta.reasons);
+	} catch (e) {
+		console.error("deep-scan CTI stage failed:", (e as Error).message);
 	}
 
 	added = Math.min(DEEP_SCAN_MAX_ADD, added);
@@ -131,10 +145,10 @@ async function scanUrls(
 	env: Env,
 	mailboxId: string,
 	emailId: string,
-): Promise<{ score: number; reasons: string[] }> {
+): Promise<{ score: number; reasons: string[]; resolvedHosts: string[] }> {
 	const stub = getMailboxStub(env, mailboxId);
 	const urls = await stub.getUrlsForEmail(emailId);
-	if (!urls.length) return { score: 0, reasons: [] };
+	if (!urls.length) return { score: 0, reasons: [], resolvedHosts: [] };
 
 	const reasons: string[] = [];
 	let score = 0;
@@ -189,7 +203,11 @@ async function scanUrls(
 
 	// Cap URL contribution so a particularly nasty-looking link can't
 	// single-handedly burn the whole deep-scan budget.
-	return { score: Math.min(30, score), reasons };
+	return {
+		score: Math.min(30, score),
+		reasons,
+		resolvedHosts: [...seenHosts],
+	};
 }
 
 async function scanAttachments(
@@ -223,6 +241,169 @@ async function scanAttachments(
 	}
 
 	return { score: agg.score, reasons: agg.reasons };
+}
+
+// ── CTI enrichment stage ─────────────────────────────────────────
+
+/**
+ * Cap on score that the CTI stage can add per inbound. Sized so a deeply
+ * enriched redirect chain can't single-handedly exceed `DEEP_SCAN_MAX_ADD`
+ * — we want to leave room for blocklist + URL + attachment signals to
+ * compose. Document this alongside the other deep-scan caps.
+ */
+const CTI_MAX_ADD = 25;
+
+/**
+ * Hard cap on number of unique hostnames the CTI stage will resolve via
+ * DoH. The deep-scan budget is tens-of-seconds end-to-end, and DNS+CTI
+ * fan-out for every host in a long redirect chain would dominate. 8 hosts
+ * is enough for realistic phishing chains (median <3) without burning the
+ * whole budget.
+ */
+const CTI_MAX_HOSTS = 8;
+
+/**
+ * Wall-clock budget shared across all DoH lookups in this stage. Per-host
+ * timeouts inside `resolveHostA` keep the slowest single resolve from
+ * pinning the whole stage — this constant just documents the design intent.
+ */
+const CTI_DOH_TIMEOUT_MS = 2000;
+
+/**
+ * Cap A-records inspected per hostname. Phishing infra typically resolves
+ * to one or two IPs, and CTI lookups are the rate-limited resource — we'd
+ * rather spread a budget across more hostnames than exhaustively enumerate
+ * all the IPs behind one CDN-fronted host.
+ */
+const A_RECORDS_PER_HOST = 2;
+
+interface CtiHit {
+	ip: string;
+	summary: CtiSummary;
+}
+
+/**
+ * Resolve A records for each unique hostname in the redirect-target set,
+ * look each unique IP up in CrowdSec CTI, and aggregate the signals into
+ * deep-scan reasons + a capped score delta. Best-effort; returns zero
+ * contribution when the API key is missing, no hostnames were resolved,
+ * or every lookup produced nothing.
+ */
+async function scanCti(
+	env: Env,
+	hosts: string[],
+): Promise<{ score: number; reasons: string[] }> {
+	if (!env.CROWDSEC_CTI_API_KEY) return { score: 0, reasons: [] };
+	if (!hosts.length) return { score: 0, reasons: [] };
+
+	const uniqueHosts = [...new Set(hosts)].slice(0, CTI_MAX_HOSTS);
+
+	// Resolve all hosts in parallel, each bounded by its own per-request
+	// timeout. The per-request timeout is set well below the overall stage
+	// budget so even N concurrent slow resolvers can't exceed it.
+	const resolved = await Promise.all(uniqueHosts.map((h) => resolveHostA(h)));
+	const ips = new Set<string>();
+	for (const arr of resolved) {
+		for (const ip of arr.slice(0, A_RECORDS_PER_HOST)) {
+			ips.add(ip);
+		}
+	}
+	if (!ips.size) return { score: 0, reasons: [] };
+
+	const lookups = await Promise.all(
+		[...ips].map(async (ip): Promise<CtiHit | null> => {
+			const summary = await lookupIp(env, ip).catch(() => null);
+			return summary ? { ip, summary } : null;
+		}),
+	);
+
+	const reasons: string[] = [];
+	let score = 0;
+	for (const hit of lookups) {
+		if (!hit) continue;
+		const { ip, summary } = hit;
+		// Score deltas per IP — take the largest single match per category to
+		// avoid double-counting (a single phishing IP shouldn't get +25 for
+		// "behaviors:phishing" AND +25 for "behaviors:exploit").
+		let perIp = 0;
+		const hitReasons: string[] = [];
+
+		const dangerousBehavior = summary.behaviors.find((b) => /phish|exploit/i.test(b));
+		if (dangerousBehavior) {
+			perIp = Math.max(perIp, 25);
+			hitReasons.push(`redirect target IP ${ip} behavior=crowdsec:${dangerousBehavior}`);
+		}
+
+		if (summary.reputation === "malicious") {
+			perIp = Math.max(perIp, 15);
+			hitReasons.push(`redirect target IP ${ip} reputation=malicious`);
+		} else if (summary.reputation === "suspicious") {
+			perIp = Math.max(perIp, 10);
+			hitReasons.push(`redirect target IP ${ip} reputation=suspicious`);
+		}
+
+		const flaggedClassification = summary.classifications.find(
+			(c) => c === "tor" || c === "vpn:public" || c === "data_center",
+		);
+		if (flaggedClassification) {
+			perIp = Math.max(perIp, 10);
+			hitReasons.push(
+				`redirect target IP ${ip} classified as crowdsec:${flaggedClassification}`,
+			);
+		}
+
+		if (perIp > 0) {
+			score += perIp;
+			reasons.push(...hitReasons);
+		}
+	}
+
+	return { score: Math.min(CTI_MAX_ADD, score), reasons };
+}
+
+/**
+ * Resolve a hostname to its A records via Cloudflare DNS-over-HTTPS.
+ * workerd has no native `dns.resolve()` — DoH is the standard pattern.
+ *
+ * Returns the IPv4 strings (no AAAA — CrowdSec CTI is keyed primarily on
+ * IPv4 and the reduction in fan-out is meaningful for the budget). Any
+ * failure (timeout, non-200, non-Answer payload) returns an empty array;
+ * the CTI stage treats unresolved hosts as "no signal".
+ */
+async function resolveHostA(host: string): Promise<string[]> {
+	if (!host) return [];
+	let res: Response;
+	try {
+		res = await fetch(
+			`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`,
+			{
+				headers: { accept: "application/dns-json" },
+				signal: AbortSignal.timeout(CTI_DOH_TIMEOUT_MS),
+			},
+		);
+	} catch {
+		return [];
+	}
+	if (!res.ok) return [];
+	let body: unknown;
+	try {
+		body = await res.json();
+	} catch {
+		return [];
+	}
+	const answer = (body as { Answer?: Array<{ type?: number; data?: unknown }> }).Answer;
+	if (!Array.isArray(answer)) return [];
+	const ips: string[] = [];
+	for (const a of answer) {
+		// DNS A records are type=1 in DoH JSON.
+		if (a.type !== 1) continue;
+		if (typeof a.data !== "string") continue;
+		// Be paranoid: the CTI URL path inserts this directly. Reject anything
+		// that isn't a plain dotted-quad.
+		if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(a.data)) continue;
+		ips.push(a.data);
+	}
+	return ips;
 }
 
 /** Extensions for which we do a bounded R2 read to sniff encryption flags. */
