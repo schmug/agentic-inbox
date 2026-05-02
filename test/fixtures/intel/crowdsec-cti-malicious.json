@@ -1,0 +1,46 @@
+{
+  "ip": "203.0.113.42",
+  "ip_range_score": 5,
+  "as_name": "EXAMPLE-ASN",
+  "as_num": 64500,
+  "location": { "country": "US", "city": null },
+  "reverse_dns": null,
+  "behaviors": [
+    {
+      "name": "http:phishing",
+      "label": "http:phishing",
+      "description": "Credential phishing pages observed"
+    },
+    {
+      "name": "http:scan",
+      "label": "http:scan",
+      "description": "Web application scanner"
+    }
+  ],
+  "history": {
+    "first_seen": "2026-04-01T00:00:00Z",
+    "last_seen": "2026-05-01T12:00:00Z",
+    "full_age": 30,
+    "days_age": 30
+  },
+  "classifications": {
+    "false_positives": [],
+    "classifications": [
+      { "name": "tor", "label": "Tor exit node", "description": "Known Tor exit node" }
+    ]
+  },
+  "attack_details": [],
+  "target_countries": { "US": 60, "GB": 40 },
+  "background_noise_score": 0,
+  "scores": {
+    "overall": { "aggressiveness": 4, "threat": 5, "trust": 5, "anomaly": 1, "total": 5 },
+    "last_day": { "aggressiveness": 4, "threat": 5, "trust": 5, "anomaly": 1, "total": 5 },
+    "last_week": { "aggressiveness": 4, "threat": 5, "trust": 5, "anomaly": 1, "total": 5 },
+    "last_month": { "aggressiveness": 4, "threat": 5, "trust": 5, "anomaly": 1, "total": 5 }
+  },
+  "reputation": "malicious",
+  "confidence": "high",
+  "mitre_techniques": [
+    { "name": "T1566", "label": "Phishing", "description": "..." }
+  ]
+}

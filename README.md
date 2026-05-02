@@ -167,6 +167,7 @@ Fires after the sync verdict is stored and only ever *tightens* the decision (sy
 
 - **Redirect-chain resolution** — follows `bit.ly`-style wrappers up to 5 hops so downstream checks see the real destination.
 - **RDAP domain age** — queries `rdap.org` for registration date. Domains <7d get +20, <30d get +10. Fails silently on flaky RDAP servers.
+- **CrowdSec CTI enrichment** — *optional, async-only*. When `CROWDSEC_CTI_API_KEY` is set, redirect-target hostnames are resolved via DoH (`cloudflare-dns.com`) and each unique IP is looked up against [CrowdSec CTI](https://docs.crowdsec.net/u/cti_api/intro). Signals: `behaviors` matching `phishing`/`exploit` (+25), `reputation=malicious` (+15), `reputation=suspicious` or `classifications` containing `tor`/`vpn:public`/`data_center` (+10). Capped at +25 per inbound. Responses cached in `BLOOM_KV` for 12h (1h for 404s); 429 rate-limits return `null` without poisoning the cache. Free-tier CTI is rate-limited, so this stage **never runs on the synchronous receive path**. Set the secret with `wrangler secret put CROWDSEC_CTI_API_KEY`; deploys without it just no-op the stage.
 - **Attachment heuristics** — dangerous extensions, macro-enabled Office, `.pdf.exe`-style double extensions, MIME/extension mismatches, archives that advertise a payload in the filename.
 
 ### Threat-intel hub
