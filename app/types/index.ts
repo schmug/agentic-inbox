@@ -254,3 +254,21 @@ export type HubEnvelope<T> = { configured: true; data: T } | { configured: false
 export type HubContributionsResponse = HubEnvelope<HubContribution[]>;
 export type HubDestroylistResponse = HubEnvelope<{ values: string[]; count: number }>;
 export type HubSharingGroupsResponse = HubEnvelope<{ groups: HubSharingGroup[] }>;
+
+/**
+ * Hub invite request — mirrors the hub `POST /orgs/invite` zod schema. All
+ * fields optional; `sharing_group_uuid` binds the invite to a specific
+ * sharing group (the hub returns 403 if the inviter isn't a member).
+ */
+export interface HubInviteRequest {
+	sharing_group_uuid?: string;
+	note?: string;
+	ttl_hours?: number;
+}
+
+/** Hub invite response — token is returned ONCE; the modal must show it
+ * immediately and clear it on close. `expires_at` is an ISO timestamp. */
+export interface HubInviteResponse {
+	token: string;
+	expires_at: string;
+}

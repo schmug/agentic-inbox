@@ -27,6 +27,18 @@ vi.mock("~/queries/hub", () => ({
 	useHubContributions: () => contributionsState,
 	useHubDestroylist: () => destroylistState,
 	useHubSharingGroups: () => sharingGroupsState,
+	// The Sharing groups panel renders a HubInviteModal that calls
+	// `useCreateHubInvite`. The route-level test doesn't drive the modal,
+	// so a no-op stub matching the mutation shape is enough.
+	useCreateHubInvite: () => ({
+		mutate: () => undefined,
+		mutateAsync: async () => ({ token: "", expires_at: "" }),
+		reset: () => undefined,
+		isPending: false,
+		isError: false,
+		isSuccess: false,
+		data: undefined,
+	}),
 }));
 
 import HubRoute from "~/routes/hub";

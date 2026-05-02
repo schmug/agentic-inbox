@@ -1,10 +1,12 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import api from "~/services/api";
 import type {
 	HubContributionsResponse,
 	HubDestroylistResponse,
+	HubInviteRequest,
+	HubInviteResponse,
 	HubSharingGroupsResponse,
 } from "~/types";
 import { queryKeys } from "./keys";
@@ -46,5 +48,23 @@ export function useHubSharingGroups(mailboxId: string | undefined) {
 			api.getHubSharingGroups(mailboxId!, { signal }) as Promise<HubSharingGroupsResponse>,
 		enabled: !!mailboxId,
 		staleTime: STALE_MS,
+	});
+}
+
+/**
+ * Mutation: create a one-time invite via the worker's hub-proxy. Resolves to
+ * `{ token, expires_at }` on success — the caller must show the token in the
+ * UI ONCE and clear it on close. Errors (notably 403 from the hub when the
+ * inviter isn't a member of the requested sharing group) bubble up as
+ * `ApiError`; the worker forwards the hub's response verbatim.
+ */
+export function useCreateHubInvite() {
+	return useMutation<
+		HubInviteResponse,
+		Error,
+		{ mailboxId: string; body: HubInviteRequest }
+	>({
+		mutationFn: ({ mailboxId, body }) =>
+			api.createHubInvite(mailboxId, body) as Promise<HubInviteResponse>,
 	});
 }
