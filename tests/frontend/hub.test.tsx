@@ -27,6 +27,18 @@ vi.mock("~/queries/hub", () => ({
 	useHubContributions: () => contributionsState,
 	useHubDestroylist: () => destroylistState,
 	useHubSharingGroups: () => sharingGroupsState,
+	// The Sharing groups panel renders a HubInviteModal that calls
+	// `useCreateHubInvite`. The route-level test doesn't drive the modal,
+	// so a no-op stub matching the mutation shape is enough.
+	useCreateHubInvite: () => ({
+		mutate: () => undefined,
+		mutateAsync: async () => ({ token: "", expires_at: "" }),
+		reset: () => undefined,
+		isPending: false,
+		isError: false,
+		isSuccess: false,
+		data: undefined,
+	}),
 }));
 
 import HubRoute from "~/routes/hub";
@@ -68,9 +80,11 @@ describe("HubRoute", () => {
 		sharingGroupsState = unconfigured();
 		renderHub();
 		expect(screen.getByText(/hub not configured/i)).toBeInTheDocument();
+		// Deep-links to the hub panel anchor so a fresh operator lands on the
+		// right form (#97).
 		expect(
-			screen.getByRole("link", { name: /open settings/i }),
-		).toHaveAttribute("href", "/mailbox/m1/settings");
+			screen.getByRole("link", { name: /configure hub credentials/i }),
+		).toHaveAttribute("href", "/mailbox/m1/settings#hub");
 		expect(screen.queryByText(/my contributions/i)).not.toBeInTheDocument();
 	});
 

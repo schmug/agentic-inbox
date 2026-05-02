@@ -34,6 +34,7 @@ const populated: DashboardSummary = {
 	threatsBlocked: 3,
 	openCases: 7,
 	hubContributions: 2,
+	corroboration: 4,
 	pipelineSuccess: 0.92,
 	p95Ms: 1500,
 	threatPressure: [0, 1, 0, 2, 1, 0, 3, 0, 0, 1, 0, 0],
@@ -78,17 +79,21 @@ describe("DashboardRoute", () => {
 		// down on the underlying 1.4499999… binary representation.
 		expect(screen.getByText("1.5s")).toBeInTheDocument();
 		expect(screen.getByText("2")).toBeInTheDocument();
+		// Hub corroboration card (#72) renders alongside Hub contributions.
+		expect(screen.getByText(/hub corroboration · 24h/i)).toBeInTheDocument();
+		expect(screen.getByText("4")).toBeInTheDocument();
 		expect(screen.getByText(/suspicious wire request/i)).toBeInTheDocument();
 		expect(screen.getByText(/credential phish/i)).toBeInTheDocument();
 	});
 
-	it("renders '—' for pipelineSuccess and p95 when no scans have run, and 'No cases yet.' when empty", () => {
+	it("renders '—' for pipelineSuccess, p95, and corroboration when null, and 'No cases yet.' when empty", () => {
 		queryState = {
 			data: {
 				now: populated.now,
 				threatsBlocked: 0,
 				openCases: 0,
 				hubContributions: 0,
+				corroboration: null,
 				pipelineSuccess: null,
 				p95Ms: null,
 				threatPressure: new Array(12).fill(0),
@@ -98,10 +103,27 @@ describe("DashboardRoute", () => {
 			isError: false,
 		};
 		renderDashboard();
-		// Both the pipeline-success and pipeline-p95 cards render the "—"
-		// placeholder when their respective values are null.
-		expect(screen.getAllByText("—")).toHaveLength(2);
+		// Three KPI cards (pipeline-success, pipeline-p95, hub-corroboration)
+		// render the "—" placeholder when their respective values are null.
+		expect(screen.getAllByText("—")).toHaveLength(3);
 		expect(screen.getByText(/no cases yet/i)).toBeInTheDocument();
+	});
+
+	it("renders sibling KPI cards unaffected when corroboration is null", () => {
+		// Hub outage shouldn't blank the rest of the dashboard — the hub
+		// contributions card and the threats-blocked count stay populated.
+		queryState = {
+			data: { ...populated, corroboration: null },
+			isLoading: false,
+			isError: false,
+		};
+		renderDashboard();
+		expect(screen.getByText(/hub contributions · 24h/i)).toBeInTheDocument();
+		expect(screen.getByText("2")).toBeInTheDocument(); // hubContributions
+		expect(screen.getByText("3")).toBeInTheDocument(); // threatsBlocked
+		expect(screen.getByText(/hub corroboration · 24h/i)).toBeInTheDocument();
+		// Exactly one "—" — the corroboration card.
+		expect(screen.getAllByText("—")).toHaveLength(1);
 	});
 
 	it("links each recent case to /mailbox/:id/cases/:caseId", () => {

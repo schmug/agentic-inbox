@@ -2,10 +2,11 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { GearSixIcon, GraphIcon, WarningIcon } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
-import type { ReactNode } from "react";
+import { GearSixIcon, GraphIcon, UserPlusIcon, WarningIcon } from "@phosphor-icons/react";
+import { Button, Loader } from "@cloudflare/kumo";
+import { useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
+import HubInviteModal from "~/components/HubInviteModal";
 import {
 	useHubContributions,
 	useHubDestroylist,
@@ -43,7 +44,7 @@ export default function HubRoute() {
 				<div className="grid gap-4 lg:grid-cols-2">
 					<ContributionsPanel query={contributions} />
 					<DestroylistPanel query={destroylist} />
-					<SharingGroupsPanel query={sharingGroups} />
+					<SharingGroupsPanel query={sharingGroups} mailboxId={mailboxId} />
 				</div>
 			)}
 		</div>
@@ -82,10 +83,10 @@ function NotConfiguredHint({ mailboxId }: { mailboxId: string | undefined }) {
 			</p>
 			{mailboxId ? (
 				<Link
-					to={`/mailbox/${mailboxId}/settings`}
+					to={`/mailbox/${mailboxId}/settings#hub`}
 					className="inline-flex items-center gap-1.5 text-[12px] text-accent hover:opacity-80 underline"
 				>
-					<GearSixIcon size={14} /> Open settings
+					<GearSixIcon size={14} /> Configure hub credentials
 				</Link>
 			) : null}
 		</div>
@@ -208,7 +209,18 @@ function DestroylistPanel({
 
 function SharingGroupsPanel({
 	query,
-}: { query: ReturnType<typeof useHubSharingGroups> }) {
+	mailboxId,
+}: {
+	query: ReturnType<typeof useHubSharingGroups>;
+	mailboxId: string | undefined;
+}) {
+	// Hub-side gating: a non-member of the requested sharing group gets a
+	// 403 from POST /orgs/invite, which the worker forwards verbatim. The
+	// UI just exposes the button on every row and surfaces the error from
+	// the mutation if it lands.
+	const [invitingGroup, setInvitingGroup] = useState<HubSharingGroup | null>(
+		null,
+	);
 	return (
 		<PanelShell title="Sharing groups">
 			{renderListPanel<HubSharingGroupsResponse, HubSharingGroup>({
@@ -220,23 +232,46 @@ function SharingGroupsPanel({
 				render: (groups) => (
 					<ul className="space-y-2">
 						{groups.map((g) => (
-							<li key={g.uuid} className="flex flex-col">
-								<div className="text-[13px] text-ink">{g.name}</div>
-								{g.description ? (
-									<div className="text-[11px] text-ink-3 truncate">
-										{g.description}
-									</div>
-								) : null}
-								{g.role ? (
-									<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mt-0.5">
-										{g.role}
-									</div>
-								) : null}
+							<li key={g.uuid} className="flex items-start justify-between gap-2">
+								<div className="flex flex-col min-w-0">
+									<div className="text-[13px] text-ink truncate">{g.name}</div>
+									{g.description ? (
+										<div className="text-[11px] text-ink-3 truncate">
+											{g.description}
+										</div>
+									) : null}
+									{g.role ? (
+										<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mt-0.5">
+											{g.role}
+										</div>
+									) : null}
+								</div>
+								<Button
+									type="button"
+									variant="secondary"
+									size="sm"
+									icon={<UserPlusIcon size={12} />}
+									onClick={() => setInvitingGroup(g)}
+								>
+									Invite peer
+								</Button>
 							</li>
 						))}
 					</ul>
 				),
 			})}
+			<HubInviteModal
+				open={invitingGroup !== null}
+				mailboxId={mailboxId}
+				sharingGroup={
+					invitingGroup
+						? { uuid: invitingGroup.uuid, name: invitingGroup.name }
+						: null
+				}
+				onOpenChange={(open) => {
+					if (!open) setInvitingGroup(null);
+				}}
+			/>
 		</PanelShell>
 	);
 }
