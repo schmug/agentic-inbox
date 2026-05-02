@@ -91,3 +91,55 @@ hubUiRoutes.get("/sharing-groups", async (c) => {
 	});
 	return c.json(result);
 });
+
+/**
+ * Issue a one-time invite token via the hub `POST /orgs/invite` endpoint
+ * (#74). The hub owns role gating: a non-member of the requested sharing
+ * group gets a 403 from the hub, which we forward verbatim — we do NOT
+ * substitute fallback behavior on hub error so the UI can show the real
+ * reason. Body shape mirrors the hub: `{ sharing_group_uuid?, note?,
+ * ttl_hours? }`. On success the hub returns `{ token, expires_at }` and
+ * the token is shown ONCE in the modal.
+ */
+hubUiRoutes.post("/invites", async (c) => {
+	const mailboxId = c.req.param("mailboxId");
+	if (!mailboxId) return c.json({ error: "missing mailboxId" }, 400);
+	const creds = await loadHubCredentials(
+		c.env as unknown as Record<string, unknown>,
+		c.env.BUCKET,
+		mailboxId,
+	);
+	if (!creds) return c.json({ error: "hub not configured" }, 412);
+
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	// Only forward the keys the hub expects — drops accidental extras
+	// without rejecting the request locally (the hub validates with zod).
+	const forwardBody: Record<string, unknown> = {};
+	if (body.sharing_group_uuid !== undefined) forwardBody.sharing_group_uuid = body.sharing_group_uuid;
+	if (body.note !== undefined) forwardBody.note = body.note;
+	if (body.ttl_hours !== undefined) forwardBody.ttl_hours = body.ttl_hours;
+
+	const url = `${creds.cfg.url.replace(/\/$/, "")}/orgs/invite`;
+	const upstream = await fetch(url, {
+		method: "POST",
+		headers: {
+			"Authorization": creds.apiKey,
+			"Accept": "application/json",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify(forwardBody),
+		signal: AbortSignal.timeout(10000),
+	}).catch(() => null);
+
+	if (!upstream) return c.json({ error: "hub unreachable" }, 502);
+
+	// Forward the hub's response honestly — both 200/201 and 4xx (notably
+	// 403 "not a member of that sharing group"). Returning JSON shape on
+	// success means the UI never sees a stripped/mangled token.
+	const text = await upstream.text();
+	const contentType = upstream.headers.get("content-type") ?? "application/json";
+	return new Response(text, {
+		status: upstream.status,
+		headers: { "content-type": contentType },
+	});
+});
