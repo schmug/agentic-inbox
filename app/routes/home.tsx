@@ -292,19 +292,58 @@ function TopThreatsCard({
 			{threats.length === 0 ? (
 				<p className="text-[12.5px] text-ink-3">No threats actioned yet.</p>
 			) : (
-				<ul className="space-y-2">
+				<ul className="space-y-1.5">
 					{threats.map((t) => (
-						<li key={t.category} className="flex items-baseline justify-between gap-3">
-							<span className="text-[13px] text-ink capitalize">
-								{t.category}
-							</span>
-							<span className="pp-mono text-[12px] text-ink-3 tabular-nums">
-								{t.count}
-							</span>
-						</li>
+						<TopThreatRow key={t.category} threat={t} />
 					))}
 				</ul>
 			)}
 		</div>
+	);
+}
+
+function TopThreatRow({
+	threat,
+}: { threat: OrgOverview["topThreats"][number] }) {
+	const samples = threat.samples ?? [];
+	if (samples.length === 0) {
+		return (
+			<li className="flex items-baseline justify-between gap-3 py-1">
+				<span className="text-[13px] text-ink capitalize">{threat.category}</span>
+				<span className="pp-mono text-[12px] text-ink-3 tabular-nums">
+					{threat.count}
+				</span>
+			</li>
+		);
+	}
+	return (
+		<li>
+			<details className="group">
+				<summary className="flex items-baseline justify-between gap-3 py-1 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:text-ink">
+					<span className="text-[13px] text-ink capitalize flex items-center gap-1.5">
+						<span
+							aria-hidden
+							className="pp-mono text-[10px] text-ink-3 transition-transform group-open:rotate-90"
+						>
+							›
+						</span>
+						{threat.category}
+					</span>
+					<span className="pp-mono text-[12px] text-ink-3 tabular-nums">
+						{threat.count}
+					</span>
+				</summary>
+				<ul className="mt-1 mb-1.5 ml-3 space-y-1 border-l border-line pl-3">
+					{samples.map((s) => (
+						<li key={s.emailId} className="text-[12px] leading-tight">
+							<div className="text-ink truncate">{s.subject || "(no subject)"}</div>
+							<div className="text-ink-3 truncate">
+								{s.sender || "(unknown sender)"}
+							</div>
+						</li>
+					))}
+				</ul>
+			</details>
+		</li>
 	);
 }
