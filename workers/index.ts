@@ -149,6 +149,8 @@ app.get("/api/v1/org/overview", async (c) => {
 		}
 		const v = r.value as OrgMailboxSummary;
 		// `threatsBlocked7d` was added by this PR; tolerate older clients.
+		// `verdictMix7d` (#103) is also optional — older DO replicas omit it
+		// and the aggregator treats them as zeros.
 		return { ...v, threatsBlocked7d: v.threatsBlocked7d ?? 0 };
 	});
 

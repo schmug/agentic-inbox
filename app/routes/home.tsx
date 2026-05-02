@@ -7,6 +7,7 @@ import {
 	ShieldCheckIcon,
 	WarningIcon,
 } from "@phosphor-icons/react";
+import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
 import { useAutoProvisionMailboxes } from "~/hooks/useAutoProvisionMailboxes";
@@ -102,7 +103,10 @@ function OrgBody({
 		<>
 			<KpiGrid data={data} />
 			<div className="grid gap-4 lg:grid-cols-3">
-				<VerdictMixCard mix={data.verdictMix} />
+				<VerdictMixCard
+					mix24h={data.verdictMix}
+					mix7d={data.verdictMix7d}
+				/>
 				<TopThreatsCard threats={data.topThreats} />
 			</div>
 		</>
@@ -192,7 +196,17 @@ const VERDICT_LABEL: Record<keyof OrgVerdictMix, string> = {
 	bec: "BEC",
 };
 
-function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
+type VerdictWindow = "24h" | "7d";
+
+function VerdictMixCard({
+	mix24h,
+	mix7d,
+}: {
+	mix24h: OrgVerdictMix;
+	mix7d: OrgVerdictMix;
+}) {
+	const [window, setWindow] = useState<VerdictWindow>("24h");
+	const mix = window === "24h" ? mix24h : mix7d;
 	const entries = (Object.keys(VERDICT_LABEL) as Array<keyof OrgVerdictMix>).map(
 		(k) => ({ key: k, label: VERDICT_LABEL[k], count: mix[k] }),
 	);
@@ -202,7 +216,29 @@ function VerdictMixCard({ mix }: { mix: OrgVerdictMix }) {
 			<div className="flex items-baseline justify-between gap-3">
 				<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 flex items-center gap-1.5">
 					<ShieldCheckIcon size={12} />
-					Verdict mix · 24h
+					Verdict mix
+				</div>
+				<div
+					role="tablist"
+					aria-label="Verdict-mix window"
+					className="flex items-center gap-1 rounded-md bg-paper-2 p-0.5"
+				>
+					{(["24h", "7d"] as const).map((w) => (
+						<button
+							key={w}
+							type="button"
+							role="tab"
+							aria-selected={window === w}
+							onClick={() => setWindow(w)}
+							className={`px-2 py-0.5 rounded text-[11px] tabular-nums transition-colors ${
+								window === w
+									? "bg-paper text-ink shadow-sm"
+									: "text-ink-3 hover:text-ink"
+							}`}
+						>
+							{w}
+						</button>
+					))}
 				</div>
 				<div className="text-[12px] text-ink-3">{total} classified</div>
 			</div>

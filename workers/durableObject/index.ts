@@ -11,6 +11,7 @@ import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { attachmentObjectKey } from "../lib/attachments";
+import { computeVerdictMix } from "../lib/dashboard-aggregation";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1512,6 +1513,19 @@ export class MailboxDO extends DurableObject<Env> {
 			.where(sql`${schema.emails.date} >= ${dayAgoIso}`)
 			.all();
 
+		// 7-day verdict mix (#103). Aggregated server-side here so the
+		// org-overview wire payload doesn't have to ship the raw 7d rows
+		// — only the five-key counts cross the boundary.
+		const verdictRows7d = this.db
+			.select({
+				date: schema.emails.date,
+				security_verdict: schema.emails.security_verdict,
+			})
+			.from(schema.emails)
+			.where(sql`${schema.emails.date} >= ${weekAgoIso}`)
+			.all();
+		const verdictMix7d = computeVerdictMix(verdictRows7d);
+
 		const recentCases = this.db
 			.select({
 				id: schema.cases.id,
@@ -1535,6 +1549,7 @@ export class MailboxDO extends DurableObject<Env> {
 			pipelineScan: { completed, failed },
 			pipelineDurationsMs,
 			verdictRows,
+			verdictMix7d,
 			recentCases,
 		};
 	}

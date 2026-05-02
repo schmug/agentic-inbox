@@ -62,6 +62,7 @@ const populated: OrgOverview = {
 	domainsCount: 2,
 	hubContributions24h: 4,
 	verdictMix: { safe: 50, suspicious: 6, phishing: 3, spam: 8, bec: 1 },
+	verdictMix7d: { safe: 360, suspicious: 40, phishing: 21, spam: 56, bec: 7 },
 	topThreats: [
 		{ category: "phishing", count: 9 },
 		{ category: "spam", count: 4 },
@@ -78,6 +79,7 @@ const empty: OrgOverview = {
 	domainsCount: 0,
 	hubContributions24h: 0,
 	verdictMix: { safe: 0, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
+	verdictMix7d: { safe: 0, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
 	topThreats: [],
 	pipelineHealth: { successRate24h: null, p95Ms: null, runs24h: 0 },
 };
@@ -134,6 +136,22 @@ describe("HomeRoute (org overview)", () => {
 		renderHome();
 		// Both Pipeline success and Pipeline p95 fall back to "—".
 		expect(screen.getAllByText("—")).toHaveLength(2);
+	});
+
+	it("toggles the verdict-mix card between 24h and 7d windows", async () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderHome();
+
+		// Default view is 24h: total classified count is 50+6+3+8+1 = 68.
+		expect(screen.getByText(/68 classified/)).toBeInTheDocument();
+
+		// Switch to the 7d tab — total becomes 360+40+21+56+7 = 484.
+		await userEvent.click(screen.getByRole("tab", { name: "7d" }));
+		expect(screen.getByText(/484 classified/)).toBeInTheDocument();
+
+		// Switch back to 24h.
+		await userEvent.click(screen.getByRole("tab", { name: "24h" }));
+		expect(screen.getByText(/68 classified/)).toBeInTheDocument();
 	});
 
 	it("formats p95 latency on the org overview KPI grid", () => {
