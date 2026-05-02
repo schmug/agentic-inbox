@@ -30,7 +30,8 @@ import type { Env } from "../types";
 import type { FinalVerdict, VerdictThresholds } from "../security/verdict";
 import { getMailboxStub } from "../lib/email-helpers";
 import { Folders } from "../../shared/folders";
-import { checkUrlAgainstFeeds } from "./feeds";
+import { checkIpAgainstFeeds, checkUrlAgainstFeeds } from "./feeds";
+import { DEFAULT_FEEDS } from "./defaults";
 import { lookupDomainAge } from "./rdap";
 import { resolveUrl } from "./url-resolver";
 import { lookupIp, type CtiSummary } from "./crowdsec-cti";
@@ -96,15 +97,45 @@ export async function runDeepScan(input: DeepScanInput): Promise<DeepScanResult>
 		console.error("deep-scan attachment stage failed:", (e as Error).message);
 	}
 
+	// Resolve the redirect-target hostnames once and share the IP set across
+	// the CTI and IP-feed stages — both consume the same A-record fan-out and
+	// we don't want to double the DoH spend.
+	//
+	// Skip DoH entirely when no consumer is configured: no CTI key AND no
+	// IP-CIDR feed materialised in BLOOM_KV. This keeps deploys without any
+	// IP-based intel from spending DNS queries with nothing to do.
+	let resolvedIps: string[] = [];
+	if (resolvedHosts.length > 0) {
+		const wantIpStage = await ipStageEnabled(env, mailboxId);
+		if (wantIpStage) {
+			try {
+				resolvedIps = await resolveHostsToIps(resolvedHosts);
+			} catch (e) {
+				console.error("deep-scan host resolution failed:", (e as Error).message);
+			}
+		}
+	}
+
 	// CTI runs as a peer stage (not nested inside scanUrls) so its own
 	// per-inbound cap composes with the URL cap rather than getting
 	// squashed by it. Gated on the API key — unconfigured deploys no-op.
 	try {
-		const ctiDelta = await scanCti(env, resolvedHosts);
+		const ctiDelta = await scanCti(env, resolvedIps);
 		added += ctiDelta.score;
 		reasons.push(...ctiDelta.reasons);
 	} catch (e) {
 		console.error("deep-scan CTI stage failed:", (e as Error).message);
+	}
+
+	// IP-CIDR feed lookup (Spamhaus DROP/EDROP and similar). Independent of
+	// CTI — runs even on deploys without `CROWDSEC_CTI_API_KEY`. Same per-IP
+	// set as CTI so the resolution work is amortised across both stages.
+	try {
+		const ipFeedDelta = await scanIpFeeds(env, mailboxId, resolvedIps);
+		added += ipFeedDelta.score;
+		reasons.push(...ipFeedDelta.reasons);
+	} catch (e) {
+		console.error("deep-scan IP-feed stage failed:", (e as Error).message);
 	}
 
 	added = Math.min(DEEP_SCAN_MAX_ADD, added);
@@ -283,24 +314,13 @@ interface CtiHit {
 }
 
 /**
- * Resolve A records for each unique hostname in the redirect-target set,
- * look each unique IP up in CrowdSec CTI, and aggregate the signals into
- * deep-scan reasons + a capped score delta. Best-effort; returns zero
- * contribution when the API key is missing, no hostnames were resolved,
- * or every lookup produced nothing.
+ * Resolve unique hostnames to a deduped IP list via DoH. Shared between the
+ * CTI and IP-CIDR-feed stages so we only spend the DoH budget once per
+ * inbound. Caps both the host fan-out and per-host A-record count.
  */
-async function scanCti(
-	env: Env,
-	hosts: string[],
-): Promise<{ score: number; reasons: string[] }> {
-	if (!env.CROWDSEC_CTI_API_KEY) return { score: 0, reasons: [] };
-	if (!hosts.length) return { score: 0, reasons: [] };
-
+async function resolveHostsToIps(hosts: string[]): Promise<string[]> {
 	const uniqueHosts = [...new Set(hosts)].slice(0, CTI_MAX_HOSTS);
-
-	// Resolve all hosts in parallel, each bounded by its own per-request
-	// timeout. The per-request timeout is set well below the overall stage
-	// budget so even N concurrent slow resolvers can't exceed it.
+	if (!uniqueHosts.length) return [];
 	const resolved = await Promise.all(uniqueHosts.map((h) => resolveHostA(h)));
 	const ips = new Set<string>();
 	for (const arr of resolved) {
@@ -308,10 +328,24 @@ async function scanCti(
 			ips.add(ip);
 		}
 	}
-	if (!ips.size) return { score: 0, reasons: [] };
+	return [...ips];
+}
+
+/**
+ * Look each unique IP up in CrowdSec CTI and aggregate the signals into
+ * deep-scan reasons + a capped score delta. Best-effort; returns zero
+ * contribution when the API key is missing, no IPs were resolved, or
+ * every lookup produced nothing.
+ */
+async function scanCti(
+	env: Env,
+	ips: string[],
+): Promise<{ score: number; reasons: string[] }> {
+	if (!env.CROWDSEC_CTI_API_KEY) return { score: 0, reasons: [] };
+	if (!ips.length) return { score: 0, reasons: [] };
 
 	const lookups = await Promise.all(
-		[...ips].map(async (ip): Promise<CtiHit | null> => {
+		ips.map(async (ip): Promise<CtiHit | null> => {
 			const summary = await lookupIp(env, ip).catch(() => null);
 			return summary ? { ip, summary } : null;
 		}),
@@ -359,6 +393,90 @@ async function scanCti(
 	}
 
 	return { score: Math.min(CTI_MAX_ADD, score), reasons };
+}
+
+/**
+ * Decide whether to spend DoH on resolving redirect-target hostnames. True
+ * if any IP-based stage has something to do: CTI is configured, or any
+ * default `ip-cidr` feed has been materialised into KV.
+ *
+ * We probe each default ip-cidr feed's key directly rather than `list({
+ * prefix })`-ing — KV `get` is cheap, the default-feed list is small, and
+ * we avoid a second code path for fakes/tests that mock only `get`/`put`.
+ * User-configured ip-cidr feeds will only enable the stage if they share
+ * an id with a default; that's a fine constraint while only Spamhaus
+ * DROP/EDROP ship by default.
+ */
+async function ipStageEnabled(env: Env, _mailboxId: string): Promise<boolean> {
+	if (env.CROWDSEC_CTI_API_KEY) return true;
+	if (!env.BLOOM_KV) return false;
+	const cidrFeedIds = DEFAULT_FEEDS.filter((f) => f.kind === "ip-cidr").map((f) => f.id);
+	for (const id of cidrFeedIds) {
+		try {
+			const present = await env.BLOOM_KV.get(`intel:${id}:cidrs`, "text");
+			if (present) return true;
+		} catch {
+			// Treat lookup error as "no signal" — the per-stage code is
+			// best-effort and we'd rather skip DoH than spam it.
+		}
+	}
+	return false;
+}
+
+// ── IP-CIDR feed stage ───────────────────────────────────────────
+
+/**
+ * Cap on the score the IP-feed stage can add per inbound. Sized to match
+ * the CTI cap so neither single stage can dominate the deep-scan budget;
+ * `DEEP_SCAN_MAX_ADD = 40` still bounds the combined contribution.
+ */
+const IP_FEED_MAX_ADD = 25;
+
+/**
+ * Per-IP score bump for an IP-feed match. Mirrors the URL feed-match weight
+ * (`+20` in `scanUrls`) so an IP-listed redirect target gets the same
+ * magnitude of signal as a URL-listed redirect target.
+ */
+const IP_FEED_PER_HIT = 20;
+
+/**
+ * Look each resolved IP up in `ip-cidr` feeds (Spamhaus DROP/EDROP and
+ * any user-configured equivalents). Independent of CTI — works on deploys
+ * without `CROWDSEC_CTI_API_KEY`.
+ *
+ * `checkIpAgainstFeeds` returns the first matching feed per IP; one match
+ * per IP is enough signal that we don't keep scanning the rest of the
+ * feed list for the same IP.
+ */
+async function scanIpFeeds(
+	env: Env,
+	mailboxId: string,
+	ips: string[],
+): Promise<{ score: number; reasons: string[] }> {
+	if (!ips.length) return { score: 0, reasons: [] };
+
+	const reasons: string[] = [];
+	let score = 0;
+	for (const ip of ips) {
+		const match = await checkIpAgainstFeeds(env, mailboxId, ip).catch(() => null);
+		if (!match) continue;
+		score += IP_FEED_PER_HIT;
+		// Feed name preference: human-readable description first word
+		// ("Spamhaus DROP — ..."), falling back to the feed id. The reason
+		// string is operator-facing so a recognizable name matters.
+		const feedLabel = feedDisplayName(match.feedDescription, match.feedId);
+		reasons.push(`redirect target IP ${match.ip} (${match.cidr}) on ${feedLabel}`);
+	}
+	return { score: Math.min(IP_FEED_MAX_ADD, score), reasons };
+}
+
+function feedDisplayName(description: string, fallback: string): string {
+	// Default-feed descriptions are formatted "Name — details"; take the
+	// portion before the em-dash if present.
+	const dash = description.indexOf("—");
+	const head = dash === -1 ? description : description.slice(0, dash);
+	const cleaned = head.trim();
+	return cleaned || fallback;
 }
 
 /**

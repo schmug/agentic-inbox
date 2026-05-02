@@ -156,7 +156,7 @@ Weekends: flagged when weekdays_only is on
 | Auth header parse | µs | SPF/DKIM/DMARC from `Authentication-Results`; gated by trusted authserv-ids |
 | URL extract + homograph/shortener check | ms | Levenshtein vs a high-value-domain list |
 | Sender reputation | ms | Rolling avg score per mailbox; flagged-sender fast path |
-| Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable) |
+| Threat-intel bloom lookup | ms | Against [workers/intel/feeds.ts](workers/intel/feeds.ts) (URLhaus, PhishDestroy, configurable; Spamhaus DROP/EDROP CIDR feeds consumed in deep-scan) |
 | Triage short-circuits | µs | Hard-block on confirmed intel / flagged sender; hard-allow on DMARC pass + allowlist or trusted history |
 | LLM classifier | seconds (5s cap) | Workers AI; fail-closed to `suspicious` on timeout |
 | Verdict aggregation | µs | Pure scoring function; thresholds configurable per mailbox |
@@ -170,6 +170,7 @@ Fires after the sync verdict is stored and only ever *tightens* the decision (sy
 - **Redirect-chain resolution** — follows `bit.ly`-style wrappers up to 5 hops so downstream checks see the real destination.
 - **RDAP domain age** — queries `rdap.org` for registration date. Domains <7d get +20, <30d get +10. Fails silently on flaky RDAP servers.
 - **CrowdSec CTI enrichment** — *optional, async-only*. When `CROWDSEC_CTI_API_KEY` is set, redirect-target hostnames are resolved via DoH (`cloudflare-dns.com`) and each unique IP is looked up against [CrowdSec CTI](https://docs.crowdsec.net/u/cti_api/intro). Signals: `behaviors` matching `phishing`/`exploit` (+25), `reputation=malicious` (+15), `reputation=suspicious` or `classifications` containing `tor`/`vpn:public`/`data_center` (+10). Capped at +25 per inbound. Responses cached in `BLOOM_KV` for 12h (1h for 404s); 429 rate-limits return `null` without poisoning the cache. Free-tier CTI is rate-limited, so this stage **never runs on the synchronous receive path**. Set the secret with `wrangler secret put CROWDSEC_CTI_API_KEY`; deploys without it just no-op the stage.
+- **Spamhaus DROP / EDROP** — *no-auth IP feed*. The cron refresher pulls [Spamhaus DROP](https://www.spamhaus.org/drop/drop.txt) and [EDROP](https://www.spamhaus.org/drop/edrop.txt) every 12h and stores the parsed CIDR list in `BLOOM_KV`. In deep-scan, every redirect-target hostname is resolved via DoH and each unique IP is checked for membership against the DROP/EDROP CIDR set; a match adds +20 (capped at +25 per inbound) and a `redirect target IP <ip> (<cidr>) on Spamhaus DROP` reason. CIDR membership is implemented as a linear scan with IPv4-as-uint32 masking (the lists are small — a few thousand entries — so no index is needed). DoH resolution is shared with the CrowdSec CTI stage so we don't double-spend DNS queries; deploys without DROP feeds and without a CTI key skip DoH entirely.
 - **Attachment heuristics** — dangerous extensions, macro-enabled Office, `.pdf.exe`-style double extensions, MIME/extension mismatches, archives that advertise a payload in the filename.
 
 ### Threat-intel hub

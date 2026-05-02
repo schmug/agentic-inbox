@@ -19,8 +19,17 @@
 export interface FeedDefinition {
 	id: string;
 	url: string;
-	/** `domain` feeds contain registrable hostnames; `url` feeds contain full URLs. */
-	kind: "domain" | "url";
+	/**
+	 * Content type of the feed:
+	 *   - `domain` — registrable hostnames, one per line
+	 *   - `url`    — full URLs, one per line
+	 *   - `ip-cidr` — IPv4 CIDRs (or single IPs treated as `/32`), one per line.
+	 *     Stored differently from `domain`/`url` feeds: bloom filters don't fit
+	 *     CIDR membership, so the refresher writes the parsed CIDR list as a
+	 *     single KV blob and lookup does a linear scan with IPv4-as-uint32
+	 *     masking. See `workers/intel/feeds.ts` for details.
+	 */
+	kind: "domain" | "url" | "ip-cidr";
 	refreshHours: number;
 	/** One-line human description. */
 	description: string;
@@ -45,5 +54,21 @@ export const DEFAULT_FEEDS: FeedDefinition[] = [
 		kind: "url",
 		refreshHours: 6,
 		description: "OpenPhish community phishing URL feed.",
+	},
+	{
+		id: "spamhaus-drop",
+		url: "https://www.spamhaus.org/drop/drop.txt",
+		kind: "ip-cidr",
+		refreshHours: 12,
+		description:
+			"Spamhaus DROP — hijacked netblocks and known spam operations (no auth).",
+	},
+	{
+		id: "spamhaus-edrop",
+		url: "https://www.spamhaus.org/drop/edrop.txt",
+		kind: "ip-cidr",
+		refreshHours: 12,
+		description:
+			"Spamhaus EDROP — extended DROP list of additional spammer netblocks (no auth).",
 	},
 ];
