@@ -1,10 +1,10 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
-import type { OrgOverview } from "~/types";
+import type { DomainListEntry, OrgOverview } from "~/types";
 
 const refetch = vi.fn();
 let queryState: {
@@ -15,6 +15,19 @@ let queryState: {
 
 vi.mock("~/queries/org", () => ({
 	useOrgOverview: () => ({ ...queryState, refetch }),
+}));
+
+// `TopDomainsCard` (#141) consumes `useDomains()`. Default to an empty list
+// so existing assertions (which were written before the widget existed) keep
+// passing; tests that exercise the widget override `domainsState` per case.
+let domainsState: {
+	data: DomainListEntry[] | undefined;
+	isLoading: boolean;
+	isError: boolean;
+} = { data: [], isLoading: false, isError: false };
+
+vi.mock("~/queries/domains", () => ({
+	useDomains: () => ({ ...domainsState, refetch: vi.fn() }),
 }));
 
 // The org-overview home page renders an "N mailboxes" hint sourced from
@@ -48,6 +61,11 @@ function renderHome() {
 		<Routes>
 			<Route path="/" element={<HomeRoute />} />
 			<Route path="/mailboxes" element={<div>Mailboxes page</div>} />
+			<Route path="/domains" element={<div>Domains list page</div>} />
+			<Route
+				path="/domains/:domain"
+				element={<div>Domain detail page</div>}
+			/>
 		</Routes>,
 		{ initialEntries: ["/"] },
 	);
@@ -94,6 +112,10 @@ const empty: OrgOverview = {
 describe("HomeRoute (org overview)", () => {
 	beforeEach(() => {
 		refetch.mockReset();
+		// Reset the domains-query mock to its default empty state. Tests that
+		// exercise the "Top domains" widget override this explicitly so a
+		// stray fixture from a previous test can't bleed across cases.
+		domainsState = { data: [], isLoading: false, isError: false };
 	});
 
 	it("renders the loader while the query is pending", () => {
@@ -200,5 +222,118 @@ describe("HomeRoute (org overview)", () => {
 		};
 		renderHome();
 		expect(screen.getByText("1.5s")).toBeInTheDocument();
+	});
+
+	// ----- Cross-domain comparison + drill-down (#141) ---------------------
+
+	it("renders the Domains KPI as a link to /domains", () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderHome();
+		// "Domains" also appears in the Shell sidebar nav and elsewhere — scope
+		// the lookup to the KPI grid (the only place where the label and the
+		// numeric value are siblings inside the same card).
+		const links = screen
+			.getAllByRole("link")
+			.filter((el) => el.getAttribute("href") === "/domains");
+		// Expect at least one /domains link rendered by HomeRoute itself
+		// (Shell may add another from sidebar nav). The KPI card link wraps
+		// both the "Domains" label and its numeric value, so check for that.
+		const kpiLink = links.find(
+			(el) =>
+				el.textContent?.includes("Domains") &&
+				el.textContent?.includes(String(populated.domainsCount)),
+		);
+		expect(kpiLink).toBeTruthy();
+	});
+
+	it("hides the Top domains widget when only one domain is configured", () => {
+		queryState = {
+			data: { ...populated, domainsCount: 1 },
+			isLoading: false,
+			isError: false,
+		};
+		domainsState = {
+			data: [
+				{
+					domain: "acme.com",
+					mailboxesCount: 3,
+					threatsBlocked24h: 9,
+					openCases: 2,
+					verdictMix: { safe: 10, suspicious: 1, phishing: 1, spam: 1, bec: 0 },
+				},
+			],
+			isLoading: false,
+			isError: false,
+		};
+		renderHome();
+		expect(
+			screen.queryByText(/top domains · 24h/i),
+		).not.toBeInTheDocument();
+	});
+
+	it("renders the Top domains widget sorted by threats blocked desc with per-row drill-down", () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		domainsState = {
+			data: [
+				{
+					domain: "low.example",
+					mailboxesCount: 1,
+					threatsBlocked24h: 1,
+					openCases: 0,
+					verdictMix: { safe: 5, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
+				},
+				{
+					domain: "noisy.example",
+					mailboxesCount: 4,
+					threatsBlocked24h: 42,
+					openCases: 3,
+					verdictMix: { safe: 5, suspicious: 5, phishing: 5, spam: 5, bec: 0 },
+				},
+				{
+					domain: "mid.example",
+					mailboxesCount: 2,
+					threatsBlocked24h: 7,
+					openCases: 1,
+					verdictMix: { safe: 5, suspicious: 1, phishing: 1, spam: 0, bec: 0 },
+				},
+				{
+					domain: "tail.example",
+					mailboxesCount: 1,
+					threatsBlocked24h: 0,
+					openCases: 0,
+					verdictMix: { safe: 5, suspicious: 0, phishing: 0, spam: 0, bec: 0 },
+				},
+			],
+			isLoading: false,
+			isError: false,
+		};
+		renderHome();
+
+		const heading = screen.getByText(/top domains · 24h/i);
+		const card = heading.closest("div.pp-card") as HTMLElement;
+		expect(card).not.toBeNull();
+
+		// First three by threatsBlocked24h desc are noisy → mid → low. The
+		// `tail.example` row (count 0) is past the N=3 cap and should not
+		// appear.
+		const rows = within(card).getAllByRole("listitem");
+		expect(rows).toHaveLength(3);
+		expect(rows[0]).toHaveTextContent("noisy.example");
+		expect(rows[0]).toHaveTextContent("42");
+		expect(rows[1]).toHaveTextContent("mid.example");
+		expect(rows[2]).toHaveTextContent("low.example");
+		expect(within(card).queryByText("tail.example")).not.toBeInTheDocument();
+
+		// Each row is a drill-down link to /domains/:domain.
+		const noisyLink = within(rows[0]).getByRole("link", {
+			name: /noisy\.example/,
+		});
+		expect(noisyLink).toHaveAttribute("href", "/domains/noisy.example");
+
+		// Header has a "View all domains" affordance to /domains.
+		const viewAll = within(card).getByRole("link", {
+			name: /view all domains/i,
+		});
+		expect(viewAll).toHaveAttribute("href", "/domains");
 	});
 });

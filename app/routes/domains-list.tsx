@@ -2,6 +2,7 @@
 
 import { Loader } from "@cloudflare/kumo";
 import { BuildingsIcon, WarningIcon } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
 import { useDomains } from "~/queries/domains";
@@ -11,8 +12,56 @@ export function meta() {
 	return [{ title: "Domains · PhishSOC" }];
 }
 
+/**
+ * Sort keys exposed in the cross-domain comparison UI (#141). All sorting is
+ * done client-side against the data already returned by `/api/v1/domains` —
+ * the list is bounded by the number of provisioned domains per org and is
+ * small enough that a backend pushdown would be premature optimisation.
+ */
+type SortKey = "name" | "threatsBlocked24h" | "openCases" | "mailboxesCount";
+
+const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
+	{ value: "name", label: "Name (A→Z)" },
+	{ value: "threatsBlocked24h", label: "Threats blocked · 24h" },
+	{ value: "openCases", label: "Open cases" },
+	{ value: "mailboxesCount", label: "Mailboxes" },
+];
+
+function sortDomains(
+	domains: DomainListEntry[],
+	key: SortKey,
+): DomainListEntry[] {
+	const next = [...domains];
+	if (key === "name") {
+		// `localeCompare` so a domain like `école.fr` sorts predictably and
+		// we don't fall back to UTF-16 code-unit ordering.
+		next.sort((a, b) => a.domain.localeCompare(b.domain));
+	} else {
+		// Numeric sorts are descending — the operator is asking "which domain
+		// is having the worst day?" and the highest counts belong on top.
+		next.sort((a, b) => b[key] - a[key]);
+	}
+	return next;
+}
+
+function filterDomains(
+	domains: DomainListEntry[],
+	query: string,
+): DomainListEntry[] {
+	const q = query.trim().toLowerCase();
+	if (q === "") return domains;
+	return domains.filter((d) => d.domain.toLowerCase().includes(q));
+}
+
 export default function DomainsListRoute() {
 	const { data, isLoading, isError, refetch } = useDomains();
+	const [sortKey, setSortKey] = useState<SortKey>("name");
+	const [filter, setFilter] = useState("");
+
+	const visible = useMemo(() => {
+		if (!data) return [];
+		return sortDomains(filterDomains(data, filter), sortKey);
+	}, [data, filter, sortKey]);
 
 	return (
 		<Shell>
@@ -29,7 +78,19 @@ export default function DomainsListRoute() {
 					data.length === 0 ? (
 						<EmptyDomains />
 					) : (
-						<DomainsTable domains={data} />
+						<>
+							<DomainsControls
+								sortKey={sortKey}
+								onSortKeyChange={setSortKey}
+								filter={filter}
+								onFilterChange={setFilter}
+							/>
+							{visible.length === 0 ? (
+								<NoDomainsMatch query={filter} onClear={() => setFilter("")} />
+							) : (
+								<DomainsTable domains={visible} />
+							)}
+						</>
 					)
 				) : null}
 			</div>
@@ -100,6 +161,88 @@ function EmptyDomains() {
 					Go to Mailboxes
 				</RouterLink>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * Distinct from `EmptyDomains` (which means "no domains provisioned"). This
+ * state means the operator filtered to a substring that didn't match any
+ * provisioned domain — the right call-to-action is "clear the filter", not
+ * "go provision more mailboxes".
+ */
+function NoDomainsMatch({
+	query,
+	onClear,
+}: { query: string; onClear: () => void }) {
+	return (
+		<div className="pp-card p-6 flex items-start gap-3">
+			<span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-2 text-ink-3 shrink-0">
+				<BuildingsIcon size={18} />
+			</span>
+			<div>
+				<div className="text-[14px] font-medium text-ink mb-1">
+					No domains match "{query}"
+				</div>
+				<p className="text-[12.5px] text-ink-3 leading-relaxed mb-2">
+					Try a different substring, or clear the filter to see every
+					provisioned domain.
+				</p>
+				<button
+					type="button"
+					onClick={onClear}
+					className="text-[12px] underline text-accent hover:opacity-80"
+				>
+					Clear filter
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function DomainsControls({
+	sortKey,
+	onSortKeyChange,
+	filter,
+	onFilterChange,
+}: {
+	sortKey: SortKey;
+	onSortKeyChange: (key: SortKey) => void;
+	filter: string;
+	onFilterChange: (value: string) => void;
+}) {
+	return (
+		<div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+			<label className="flex items-center gap-2 text-[12px] text-ink-3">
+				<span className="uppercase tracking-[0.06em] text-[10.5px]">
+					Filter
+				</span>
+				<input
+					type="search"
+					value={filter}
+					onChange={(e) => onFilterChange(e.target.value)}
+					placeholder="domain substring"
+					aria-label="Filter domains by name"
+					className="rounded-md border border-line bg-paper px-2.5 py-1 text-[13px] text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent w-full sm:w-64"
+				/>
+			</label>
+			<label className="flex items-center gap-2 text-[12px] text-ink-3 sm:ml-auto">
+				<span className="uppercase tracking-[0.06em] text-[10.5px]">
+					Sort
+				</span>
+				<select
+					value={sortKey}
+					onChange={(e) => onSortKeyChange(e.target.value as SortKey)}
+					aria-label="Sort domains"
+					className="rounded-md border border-line bg-paper px-2 py-1 text-[13px] text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+				>
+					{SORT_OPTIONS.map((opt) => (
+						<option key={opt.value} value={opt.value}>
+							{opt.label}
+						</option>
+					))}
+				</select>
+			</label>
 		</div>
 	);
 }
