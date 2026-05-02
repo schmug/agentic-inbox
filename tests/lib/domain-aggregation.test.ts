@@ -1,0 +1,307 @@
+// Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
+
+import { describe, expect, it } from "vitest";
+import {
+	aggregateDomainStats,
+	aggregateDomainsList,
+	domainOf,
+	emptyDmarcPosture,
+	type DomainMailboxSummary,
+	type OrgMailboxSummary,
+} from "../../workers/lib/dashboard-aggregation";
+
+const NOW = new Date("2026-04-29T12:00:00Z");
+
+function verdictRow(action: string, label: string, date = NOW.toISOString()) {
+	return {
+		date,
+		security_verdict: JSON.stringify({
+			action,
+			classification: { label },
+		}),
+	};
+}
+
+function summary(partial: Partial<OrgMailboxSummary> = {}): OrgMailboxSummary {
+	return {
+		threatsBlocked: 0,
+		threatsBlocked7d: 0,
+		openCases: 0,
+		hubContributions: 0,
+		pipelineScan: { completed: 0, failed: 0 },
+		verdictRows: [],
+		...partial,
+	};
+}
+
+function domainSummary(
+	partial: Partial<DomainMailboxSummary> = {},
+): DomainMailboxSummary {
+	return {
+		threatsBlocked: 0,
+		threatsBlocked7d: 0,
+		openCases: 0,
+		hubContributions: 0,
+		pipelineScan: { completed: 0, failed: 0 },
+		verdictRows: [],
+		...partial,
+	};
+}
+
+describe("domainOf", () => {
+	it("lowercases the part after the last @", () => {
+		expect(domainOf("Alice@Acme.COM")).toBe("acme.com");
+	});
+
+	it("returns null for malformed input", () => {
+		expect(domainOf("noatsymbol")).toBeNull();
+		expect(domainOf("trailing@")).toBeNull();
+		// Empty local part is also rejected — `@nopart` is not a valid address.
+		expect(domainOf("@nopart")).toBeNull();
+		expect(domainOf("")).toBeNull();
+	});
+});
+
+describe("emptyDmarcPosture", () => {
+	it("returns an all-null posture sentinel", () => {
+		expect(emptyDmarcPosture()).toEqual({
+			p: null,
+			sp: null,
+			pct: null,
+			ruaConfigured: null,
+			alignmentRate: null,
+		});
+	});
+});
+
+describe("aggregateDomainsList", () => {
+	it("returns empty list when no mailboxes are provisioned", () => {
+		expect(aggregateDomainsList({ mailboxes: [], summaries: [] })).toEqual([]);
+	});
+
+	it("groups mailboxes by lower-cased domain and sums counts", () => {
+		const list = aggregateDomainsList({
+			mailboxes: [
+				{ id: "alice@ACME.com", email: "alice@ACME.com" },
+				{ id: "bob@acme.com", email: "bob@acme.com" },
+				{ id: "carol@example.org", email: "carol@example.org" },
+			],
+			summaries: [
+				summary({
+					threatsBlocked: 3,
+					openCases: 2,
+					verdictRows: [
+						verdictRow("block", "phishing"),
+						verdictRow("tag", "spam"),
+					],
+				}),
+				summary({
+					threatsBlocked: 1,
+					openCases: 1,
+					verdictRows: [verdictRow("quarantine", "phishing")],
+				}),
+				summary({
+					threatsBlocked: 0,
+					openCases: 0,
+					verdictRows: [verdictRow("allow", "safe")],
+				}),
+			],
+		});
+
+		expect(list).toHaveLength(2);
+
+		// Sorted alphabetically by domain.
+		const acme = list.find((d) => d.domain === "acme.com")!;
+		expect(acme).toMatchObject({
+			domain: "acme.com",
+			mailboxesCount: 2,
+			threatsBlocked24h: 4,
+			openCases: 3,
+		});
+		expect(acme.verdictMix).toEqual({
+			safe: 0,
+			suspicious: 0,
+			phishing: 2,
+			spam: 1,
+			bec: 0,
+		});
+
+		const example = list.find((d) => d.domain === "example.org")!;
+		expect(example).toMatchObject({
+			domain: "example.org",
+			mailboxesCount: 1,
+			threatsBlocked24h: 0,
+			openCases: 0,
+		});
+		expect(example.verdictMix).toEqual({
+			safe: 1,
+			suspicious: 0,
+			phishing: 0,
+			spam: 0,
+			bec: 0,
+		});
+	});
+
+	it("treats null (failed) summaries as zero contributions but still counts the mailbox", () => {
+		const list = aggregateDomainsList({
+			mailboxes: [
+				{ id: "a@x.com", email: "a@x.com" },
+				{ id: "b@x.com", email: "b@x.com" },
+			],
+			summaries: [
+				summary({ threatsBlocked: 5, openCases: 1 }),
+				null, // DO call failed
+			],
+		});
+		expect(list).toHaveLength(1);
+		expect(list[0]).toMatchObject({
+			domain: "x.com",
+			mailboxesCount: 2,
+			threatsBlocked24h: 5,
+			openCases: 1,
+		});
+	});
+
+	it("skips mailboxes whose email has no domain part", () => {
+		const list = aggregateDomainsList({
+			mailboxes: [{ id: "malformed", email: "malformed" }],
+			summaries: [summary({ threatsBlocked: 99 })],
+		});
+		expect(list).toEqual([]);
+	});
+});
+
+describe("aggregateDomainStats", () => {
+	it("returns null when no mailboxes match the domain", () => {
+		expect(
+			aggregateDomainStats({
+				domain: "acme.com",
+				mailboxes: [],
+				summaries: [],
+				now: NOW.toISOString(),
+			}),
+		).toBeNull();
+	});
+
+	it("sums per-mailbox counters and includes the mailbox roster", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+				{ id: "bob@acme.com", email: "bob@acme.com", name: "Bob" },
+			],
+			summaries: [
+				domainSummary({
+					threatsBlocked: 3,
+					threatsBlocked7d: 21,
+					openCases: 2,
+					verdictRows: [
+						verdictRow("block", "phishing"),
+						verdictRow("tag", "spam"),
+					],
+					recentCases: [
+						{
+							id: "C2",
+							title: "Newer case",
+							status: "open",
+							updated_at: "2026-04-29T10:00:00Z",
+						},
+					],
+				}),
+				domainSummary({
+					threatsBlocked: 1,
+					threatsBlocked7d: 7,
+					openCases: 0,
+					verdictRows: [verdictRow("quarantine", "phishing")],
+					recentCases: [
+						{
+							id: "C1",
+							title: "Older case",
+							status: "open",
+							updated_at: "2026-04-28T10:00:00Z",
+						},
+					],
+				}),
+			],
+			now: NOW.toISOString(),
+		});
+
+		expect(result).not.toBeNull();
+		expect(result!.domain).toBe("acme.com");
+		expect(result!.mailboxes).toHaveLength(2);
+		expect(result!.threatsBlocked24h).toBe(4);
+		expect(result!.threatsBlocked7d).toBe(28);
+		expect(result!.openCases).toBe(2);
+		expect(result!.verdictMix).toEqual({
+			safe: 0,
+			suspicious: 0,
+			phishing: 2,
+			spam: 1,
+			bec: 0,
+		});
+		// Recent cases are merged across mailboxes and sorted newest-first.
+		expect(result!.recentCases.map((c) => c.id)).toEqual(["C2", "C1"]);
+	});
+
+	it("returns an all-null DMARC posture (v1 best-effort)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.dmarcPosture).toEqual({
+			p: null,
+			sp: null,
+			pct: null,
+			ruaConfigured: null,
+			alignmentRate: null,
+		});
+	});
+
+	it("tolerates null (failed) summaries as zero contributions", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+				{ id: "bob@acme.com", email: "bob@acme.com", name: "Bob" },
+			],
+			summaries: [
+				domainSummary({ threatsBlocked: 7, openCases: 4 }),
+				null,
+			],
+			now: NOW.toISOString(),
+		});
+		expect(result!.threatsBlocked24h).toBe(7);
+		expect(result!.openCases).toBe(4);
+		expect(result!.mailboxes).toHaveLength(2);
+	});
+
+	it("caps recentCases at 5", () => {
+		const cases = Array.from({ length: 10 }, (_, i) => ({
+			id: `C${i}`,
+			title: `Case ${i}`,
+			status: "open",
+			updated_at: `2026-04-${String(20 + i).padStart(2, "0")}T10:00:00Z`,
+		}));
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary({ recentCases: cases })],
+			now: NOW.toISOString(),
+		});
+		expect(result!.recentCases).toHaveLength(5);
+		// Newest five (C9..C5).
+		expect(result!.recentCases.map((c) => c.id)).toEqual([
+			"C9",
+			"C8",
+			"C7",
+			"C6",
+			"C5",
+		]);
+	});
+});

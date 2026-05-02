@@ -395,3 +395,220 @@ export function aggregateOrgOverview(
 		hubContributions24h,
 	};
 }
+
+// ── Per-domain aggregation (#85) ─────────────────────────────────────
+
+/** Recent-case shape mirrored from the per-mailbox dashboard summary. */
+export interface DomainRecentCase {
+	id: string;
+	title: string;
+	status: string;
+	updated_at: string;
+}
+
+/** DMARC posture v1 — best-effort, all fields nullable.
+ *
+ * v1 best-effort — real DMARC report ingestion (parsing apex-domain TXT
+ * records / aggregating rua reports across mailboxes into a single posture)
+ * is out of scope (#85). Per-mailbox DMARC summaries already exist
+ * (`workers/routes/dmarc.ts`) but they're scoped to source-IP rollups, not
+ * apex-domain policy. Until that pipeline ships, we return null fields and
+ * the UI renders an "unavailable" affordance. */
+export interface DmarcPosture {
+	p: string | null;
+	sp: string | null;
+	pct: number | null;
+	ruaConfigured: boolean | null;
+	alignmentRate: number | null;
+}
+
+export interface DomainListEntry {
+	domain: string;
+	mailboxesCount: number;
+	threatsBlocked24h: number;
+	openCases: number;
+	verdictMix: VerdictMix;
+}
+
+export interface DomainMailboxRef {
+	id: string;
+	email: string;
+	name: string;
+}
+
+export interface DomainStats {
+	now: string;
+	domain: string;
+	mailboxes: DomainMailboxRef[];
+	threatsBlocked24h: number;
+	threatsBlocked7d: number;
+	openCases: number;
+	verdictMix: VerdictMix;
+	dmarcPosture: DmarcPosture;
+	recentCases: DomainRecentCase[];
+}
+
+/** Per-mailbox summary tail used by the org-overview path; we reuse the same
+ * shape here so the handler can pass through `getDashboardSummary()` results
+ * unchanged. `recentCases` lives on the live DO summary even though the org
+ * aggregator drops it. */
+export interface DomainMailboxSummary extends OrgMailboxSummary {
+	recentCases?: DomainRecentCase[];
+}
+
+/** Lower-cased domain extracted from an email address, or null when malformed.
+ *
+ * Requires a non-empty local part and a non-empty domain part — `@nopart`
+ * and `noatsymbol` both return null. */
+export function domainOf(email: string): string | null {
+	const at = email.lastIndexOf("@");
+	if (at <= 0 || at === email.length - 1) return null;
+	const domain = email.slice(at + 1).toLowerCase();
+	return domain || null;
+}
+
+/** Empty DMARC posture sentinel — every field null, signalling
+ * "no real ingestion yet" to the UI. */
+export function emptyDmarcPosture(): DmarcPosture {
+	return {
+		p: null,
+		sp: null,
+		pct: null,
+		ruaConfigured: null,
+		alignmentRate: null,
+	};
+}
+
+interface AggregateDomainsListInput {
+	mailboxes: OrgMailboxRef[];
+	/** Indices align with `mailboxes`. `null` = DO call failed → contributes 0. */
+	summaries: Array<OrgMailboxSummary | null>;
+}
+
+/**
+ * Reduce per-mailbox summaries into a per-domain list. Pure function —
+ * mailboxes whose email doesn't have a domain part are skipped silently.
+ */
+export function aggregateDomainsList(
+	input: AggregateDomainsListInput,
+): DomainListEntry[] {
+	const { mailboxes, summaries } = input;
+
+	interface Acc {
+		mailboxesCount: number;
+		threatsBlocked24h: number;
+		openCases: number;
+		verdictMix: VerdictMix;
+	}
+	const byDomain = new Map<string, Acc>();
+
+	for (let i = 0; i < mailboxes.length; i++) {
+		const m = mailboxes[i]!;
+		const domain = domainOf(m.email);
+		if (!domain) continue;
+
+		let acc = byDomain.get(domain);
+		if (!acc) {
+			acc = {
+				mailboxesCount: 0,
+				threatsBlocked24h: 0,
+				openCases: 0,
+				verdictMix: emptyVerdictMix(),
+			};
+			byDomain.set(domain, acc);
+		}
+		acc.mailboxesCount += 1;
+
+		const summary = summaries[i];
+		if (!summary) continue;
+		acc.threatsBlocked24h += summary.threatsBlocked;
+		acc.openCases += summary.openCases;
+
+		// 24h verdict mix — sum each mailbox's parsed `verdictRows`. Mirrors
+		// `aggregateOrgOverview`'s mix derivation so the per-domain numbers
+		// reconcile with the org-wide totals.
+		for (const row of summary.verdictRows) {
+			if (!row.security_verdict) continue;
+			const parsed = parseVerdict(row.security_verdict);
+			if (!parsed) continue;
+			const label = parsed.classification?.label;
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
+				acc.verdictMix[label as keyof VerdictMix] += 1;
+			}
+		}
+	}
+
+	return [...byDomain.entries()]
+		.map(([domain, acc]) => ({ domain, ...acc }))
+		.sort((a, b) => a.domain.localeCompare(b.domain));
+}
+
+interface AggregateDomainStatsInput {
+	domain: string;
+	mailboxes: DomainMailboxRef[];
+	/** Indices align with `mailboxes`. `null` = DO call failed → contributes 0. */
+	summaries: Array<DomainMailboxSummary | null>;
+	now?: string;
+}
+
+/**
+ * Reduce per-mailbox summaries scoped to a single domain. Caller is
+ * responsible for filtering `mailboxes` to only those whose domain matches
+ * (lower-cased). Returns `null` when the input is empty so the handler can
+ * 404 cleanly without rendering a "0 mailboxes" page.
+ */
+export function aggregateDomainStats(
+	input: AggregateDomainStatsInput,
+): DomainStats | null {
+	const { domain, mailboxes, summaries } = input;
+	if (mailboxes.length === 0) return null;
+	const now = input.now ?? new Date().toISOString();
+
+	let threatsBlocked24h = 0;
+	let threatsBlocked7d = 0;
+	let openCases = 0;
+	const verdictMix = emptyVerdictMix();
+	const recentCases: DomainRecentCase[] = [];
+
+	for (const summary of summaries) {
+		if (!summary) continue;
+		threatsBlocked24h += summary.threatsBlocked;
+		threatsBlocked7d += summary.threatsBlocked7d;
+		openCases += summary.openCases;
+
+		for (const row of summary.verdictRows) {
+			if (!row.security_verdict) continue;
+			const parsed = parseVerdict(row.security_verdict);
+			if (!parsed) continue;
+			const label = parsed.classification?.label;
+			if (
+				typeof label === "string" &&
+				(VERDICT_MIX_KEYS as readonly string[]).includes(label)
+			) {
+				verdictMix[label as keyof VerdictMix] += 1;
+			}
+		}
+
+		if (Array.isArray(summary.recentCases)) {
+			recentCases.push(...summary.recentCases);
+		}
+	}
+
+	// Most-recent first, then cap. ISO-8601 strings sort lexically.
+	recentCases.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+
+	return {
+		now,
+		domain,
+		mailboxes,
+		threatsBlocked24h,
+		threatsBlocked7d,
+		openCases,
+		verdictMix,
+		dmarcPosture: emptyDmarcPosture(),
+		recentCases: recentCases.slice(0, 5),
+	};
+}

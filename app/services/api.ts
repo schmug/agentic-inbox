@@ -4,6 +4,8 @@
 
 import type {
 	DashboardSummary,
+	DomainListEntry,
+	DomainStats,
 	Email,
 	Folder,
 	HubContributionsResponse,
@@ -179,6 +181,16 @@ const api = {
 	// Org overview
 	getOrgOverview: (opts?: { signal?: AbortSignal }) =>
 		get<OrgOverview>("/api/v1/org/overview", { signal: opts?.signal }),
+
+	// Domains (#85). Domain identifiers are hostname-shaped (a-z, 0-9, hyphen,
+	// dot); they don't need encodeURIComponent for those characters, but we
+	// still encode defensively in case future IDN handling lands.
+	listDomains: (opts?: { signal?: AbortSignal }) =>
+		get<DomainListEntry[]>("/api/v1/domains", { signal: opts?.signal }),
+	getDomainStats: (domain: string, opts?: { signal?: AbortSignal }) =>
+		get<DomainStats>(`/api/v1/domains/${encodeURIComponent(domain)}/stats`, {
+			signal: opts?.signal,
+		}),
 
 	// Hub
 	getHubContributions: (mailboxId: string, opts?: { signal?: AbortSignal }) =>

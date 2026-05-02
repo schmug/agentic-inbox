@@ -27,6 +27,10 @@ export const queryKeys = {
 	org: {
 		overview: ["org", "overview"] as const,
 	},
+	domains: {
+		list: ["domains"] as const,
+		detail: (domain: string) => ["domains", domain] as const,
+	},
 	hub: {
 		contributions: (mailboxId: string) => ["hub", mailboxId, "contributions"] as const,
 		destroylist: (mailboxId: string) => ["hub", mailboxId, "destroylist"] as const,
