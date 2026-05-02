@@ -38,6 +38,8 @@ import {
 	type OrgOverview,
 } from "./lib/dashboard-aggregation";
 import { listTextModels } from "./lib/text-models";
+import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
+import { loadHubCredentials } from "./lib/hub-config";
 
 type AppContext = Context<MailboxContext>;
 
@@ -215,11 +217,40 @@ app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
 	const threatPressure = bucketThreatPressure(raw.verdictRows);
 	const pipelineSuccess = pipelineSuccessRate(raw.pipelineScan);
 	const p95Ms = computeP95(raw.pipelineDurationsMs);
+
+	// Hub corroboration count (#72). Best-effort: the hub may be down, the
+	// mailbox may have no hub config, or the call may time out. Any of those
+	// → `corroboration: null` and the rest of the dashboard ships unaffected.
+	let corroboration: number | null = null;
+	const mailboxId = c.req.param("mailboxId");
+	if (mailboxId) {
+		try {
+			const creds = await loadHubCredentials(
+				c.env as unknown as Record<string, unknown>,
+				c.env.BUCKET,
+				mailboxId,
+			);
+			if (creds) {
+				const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+				corroboration = await fetchHubCorroborationCount({
+					baseUrl: creds.cfg.url,
+					apiKey: creds.apiKey,
+					orgUuid: creds.cfg.org_uuid,
+					since,
+				});
+			}
+		} catch (e) {
+			console.error("dashboard corroboration fetch failed:", (e as Error)?.message);
+			corroboration = null;
+		}
+	}
+
 	return c.json({
 		now: raw.now,
 		threatsBlocked: raw.threatsBlocked,
 		openCases: raw.openCases,
 		hubContributions: raw.hubContributions,
+		corroboration,
 		pipelineSuccess,
 		p95Ms: p95Ms === null ? null : Math.round(p95Ms),
 		threatPressure,

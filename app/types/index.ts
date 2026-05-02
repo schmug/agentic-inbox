@@ -36,6 +36,24 @@ export interface FolderPolicySettings {
 	treat_as_verified?: boolean;
 }
 
+/**
+ * Per-mailbox threat-intel hub config (#97). Mirrors the backend `HubConfig`
+ * shape in `workers/lib/hub-config.ts`. `api_key_secret_name` holds the NAME
+ * of a worker secret, not the secret value — the raw key never leaves
+ * `wrangler secret put`.
+ */
+export interface HubConfigSettings {
+	url?: string;
+	org_uuid?: string;
+	api_key_secret_name?: string;
+	default_sharing_group_uuid?: string;
+	auto_report?: boolean;
+}
+
+export interface IntelSettings {
+	hub?: HubConfigSettings;
+}
+
 export interface SecuritySettings {
 	enabled?: boolean;
 	learning_mode?: boolean;
@@ -58,6 +76,7 @@ export interface MailboxSettings {
 	autoReply?: { enabled: boolean; subject: string; message: string };
 	agentSystemPrompt?: string;
 	security?: SecuritySettings;
+	intel?: IntelSettings;
 }
 
 export interface Mailbox {
@@ -155,6 +174,13 @@ export interface DashboardSummary {
 	threatsBlocked: number;
 	openCases: number;
 	hubContributions: number;
+	/**
+	 * Count of own attributes corroborated by ≥1 other contributor on the hub
+	 * within the last 24h (#72). Null when the hub is unreachable or the
+	 * mailbox has no hub config — the UI renders "unavailable" rather than
+	 * failing the whole dashboard.
+	 */
+	corroboration: number | null;
 	pipelineSuccess: number | null;
 	/** 95th-percentile pipeline duration over the last 24h, in ms. Null when no completed runs. */
 	p95Ms: number | null;
@@ -235,3 +261,21 @@ export type HubEnvelope<T> = { configured: true; data: T } | { configured: false
 export type HubContributionsResponse = HubEnvelope<HubContribution[]>;
 export type HubDestroylistResponse = HubEnvelope<{ values: string[]; count: number }>;
 export type HubSharingGroupsResponse = HubEnvelope<{ groups: HubSharingGroup[] }>;
+
+/**
+ * Hub invite request — mirrors the hub `POST /orgs/invite` zod schema. All
+ * fields optional; `sharing_group_uuid` binds the invite to a specific
+ * sharing group (the hub returns 403 if the inviter isn't a member).
+ */
+export interface HubInviteRequest {
+	sharing_group_uuid?: string;
+	note?: string;
+	ttl_hours?: number;
+}
+
+/** Hub invite response — token is returned ONCE; the modal must show it
+ * immediately and clear it on close. `expires_at` is an ISO timestamp. */
+export interface HubInviteResponse {
+	token: string;
+	expires_at: string;
+}

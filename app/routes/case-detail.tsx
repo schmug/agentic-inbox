@@ -5,13 +5,10 @@
 import {
 	ArrowLeftIcon,
 	BriefcaseIcon,
-	CompassIcon,
-	ShieldCheckIcon,
 	ShieldWarningIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import ScoreRing from "~/components/phishsoc/ScoreRing";
 import VerdictPill from "~/components/phishsoc/VerdictPill";
 import { statusLabel, statusTone } from "~/components/phishsoc/verdict";
 import { useFeedback } from "~/lib/feedback";
@@ -113,10 +110,6 @@ export default function CaseDetailRoute() {
 	}
 
 	const tone = statusTone(data.status);
-	// Numeric score isn't computed yet — render a clear placeholder rather
-	// than fabricate a value. Real score lands when the security pipeline
-	// is plumbed into the case record.
-	const placeholderScore = data.status === "closed-fp" ? 30 : 80;
 
 	return (
 		<div className="px-6 md:px-10 py-8 max-w-[1280px] space-y-5">
@@ -128,9 +121,11 @@ export default function CaseDetailRoute() {
 				<ArrowLeftIcon size={12} /> Cases
 			</Link>
 
-			{/* Title bar */}
+			{/* Title bar — score badge intentionally omitted. The cases table
+			    doesn't yet persist a verdict score (see issue #87); rendering a
+			    fabricated value misled operators making release decisions, so
+			    we show status only until per-case scoring lands. */}
 			<div className="pp-card p-5 flex items-start gap-5">
-				<ScoreRing score={placeholderScore} />
 				<div className="flex-1 min-w-0">
 					<div className="flex items-center gap-2 mb-1.5">
 						<VerdictPill tone={tone}>{statusLabel(data.status)}</VerdictPill>
@@ -209,31 +204,10 @@ export default function CaseDetailRoute() {
 						</div>
 					)}
 
-					{/* Co-pilot summary — placeholder card matching the design.
-					    Lights up when the AI summarizer is wired to cases. */}
-					<div
-						className="rounded-[14px] p-5 border"
-						style={{
-							background: "var(--accent-tint)",
-							borderColor: "color-mix(in oklch, var(--accent) 25%, transparent)",
-						}}
-					>
-						<div className="flex items-center gap-2 mb-2">
-							<span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent text-paper">
-								<CompassIcon size={14} weight="fill" />
-							</span>
-							<div className="flex-1">
-								<div className="text-[12px] font-medium text-accent-ink">
-									Co-pilot summary
-								</div>
-								<div className="text-[11px] text-ink-3">Coming soon</div>
-							</div>
-						</div>
-						<p className="text-[12.5px] text-accent-ink leading-relaxed opacity-90">
-							When AI summarization lands, you'll see plain-language reasoning
-							here for why the pipeline reached this verdict.
-						</p>
-					</div>
+					{/* Co-pilot summary card intentionally omitted until AI
+					    summarization is wired to cases. A "Coming soon"
+					    placeholder read as a real product surface to operators
+					    — empty space is more honest. */}
 				</div>
 
 				{/* Right column: observables / IOCs + status controls */}
@@ -298,22 +272,11 @@ export default function CaseDetailRoute() {
 						</button>
 					</div>
 
-					{/* Pipeline trace placeholder — full trace lands when the
-					    security pipeline writes per-stage records to the case. */}
-					<div className="pp-card p-5">
-						<div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">
-							Pipeline trace
-						</div>
-						<div className="flex items-start gap-2 text-[12.5px] text-ink-3">
-							<ShieldCheckIcon size={14} className="text-ink-4 mt-0.5" />
-							<span>
-								Stage-level scoring isn't surfaced for cases yet. The
-								security pipeline runs per email — once we link the trace,
-								you'll see auth, URL, reputation, intel, triage, LLM, and
-								verdict stages here.
-							</span>
-						</div>
-					</div>
+					{/* Pipeline trace card intentionally omitted until per-stage
+					    scoring is persisted on the case record. Today the
+					    pipeline runs per-email and stages aren't stored on the
+					    case, so any rendered timeline would be either empty or
+					    fabricated. */}
 				</div>
 			</div>
 		</div>

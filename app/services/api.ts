@@ -8,6 +8,8 @@ import type {
 	Folder,
 	HubContributionsResponse,
 	HubDestroylistResponse,
+	HubInviteRequest,
+	HubInviteResponse,
 	HubSharingGroupsResponse,
 	Mailbox,
 	OrgOverview,
@@ -191,6 +193,8 @@ const api = {
 		get<HubSharingGroupsResponse>(`/api/v1/mailboxes/${mailboxId}/hub/sharing-groups`, {
 			signal: opts?.signal,
 		}),
+	createHubInvite: (mailboxId: string, body: HubInviteRequest) =>
+		post<HubInviteResponse>(`/api/v1/mailboxes/${mailboxId}/hub/invites`, body),
 
 	// AI — Workers AI text-generation model list (#64). Worker
 	// read-through caches against KV with a static fallback, so this
