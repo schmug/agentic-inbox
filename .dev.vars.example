@@ -1,3 +1,11 @@
 # Cloudflare Access (required in production). TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 POLICY_AUD=your-access-policy-audience-tag
 TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+
+# Optional — enable the dynamic Workers AI text-generation model list (#64).
+# When both are set, the worker fetches the live model catalog from the
+# Cloudflare API and caches it in BLOOM_KV for 1h; when missing, the
+# Settings dropdown falls back to the curated TEXT_MODELS constant. The
+# token only needs the AI:Read scope.
+#CLOUDFLARE_API_TOKEN=
+#CLOUDFLARE_ACCOUNT_ID=

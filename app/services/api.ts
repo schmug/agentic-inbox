@@ -191,6 +191,12 @@ const api = {
 		get<HubSharingGroupsResponse>(`/api/v1/mailboxes/${mailboxId}/hub/sharing-groups`, {
 			signal: opts?.signal,
 		}),
+
+	// AI — Workers AI text-generation model list (#64). Worker
+	// read-through caches against KV with a static fallback, so this
+	// endpoint always resolves to a usable list.
+	getTextModels: (opts?: { signal?: AbortSignal }) =>
+		get<{ models: string[] }>("/api/v1/ai/text-models", { signal: opts?.signal }),
 };
 
 export default api;
