@@ -111,10 +111,17 @@ function KpiGrid({ data }: { data: DashboardSummary }) {
 			label: "Hub contributions · 24h",
 			value: String(data.hubContributions),
 		},
+		{
+			// Issue #72: own attributes that received ≥1 additional contributor
+			// on the hub in the last 24h. `null` = hub unreachable / no config;
+			// render an em-dash so the card stays visible without misleading 0.
+			label: "Hub corroboration · 24h",
+			value: data.corroboration === null ? "—" : String(data.corroboration),
+		},
 	];
 
 	return (
-		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
 			{kpis.map((k) => (
 				<div key={k.label} className="pp-card p-4">
 					<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
