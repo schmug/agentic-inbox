@@ -31,7 +31,7 @@ import type { FinalVerdict, VerdictThresholds } from "../security/verdict";
 import { getMailboxStub } from "../lib/email-helpers";
 import { Folders } from "../../shared/folders";
 import { checkUrlAgainstFeeds } from "./feeds";
-import { lookupDomainAge, FRESH_DOMAIN_THRESHOLD_DAYS } from "./rdap";
+import { lookupDomainAge } from "./rdap";
 import { resolveUrl } from "./url-resolver";
 import {
 	aggregateAttachmentSignals,
