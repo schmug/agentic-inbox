@@ -66,7 +66,6 @@ export function parseDmarcXml(xml: string): DmarcReport {
 	for (const rec of allTags(xml, "record")) {
 		const row = tag(rec, "row") ?? "";
 		const identifiers = tag(rec, "identifiers") ?? "";
-		const authResults = tag(rec, "auth_results") ?? "";
 		const policyEval = tag(row, "policy_evaluated") ?? "";
 		const source_ip = tag(row, "source_ip")?.trim();
 		if (!source_ip) continue;

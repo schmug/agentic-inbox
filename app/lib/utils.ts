@@ -10,6 +10,7 @@
  */
 import DOMPurify from "dompurify";
 import { formatQuotedDate } from "shared/dates";
+import { htmlToPlainText as htmlToText } from "shared/html-text";
 import type { Attachment } from "~/types";
 
 export {
@@ -52,47 +53,18 @@ export function toEmailListValue(addresses: string[]): string | string[] | undef
 }
 
 /**
- * Convert HTML content to plain text.
- * Uses DOM APIs so must only be called client-side.
+ * Convert HTML content to plain text. Preserves paragraph breaks where the
+ * source had block-level structure.
  */
 export function htmlToPlainText(html: string): string {
-	// Sanitize with DOMPurify before DOM parsing to prevent XSS during innerHTML assignment.
-	// DOMPurify strips all dangerous content (scripts, event handlers, etc.)
-	// while preserving structural HTML for text extraction.
-	const sanitized = DOMPurify.sanitize(html);
-	const div = document.createElement("div");
-	div.innerHTML = sanitized
-		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-		.replace(/<br\s*\/?>/gi, "\n")
-		.replace(/<\/p>/gi, "\n\n")
-		.replace(/<p[^>]*>/gi, "")
-		.replace(/<div[^>]*>/gi, "")
-		.replace(/<\/div>/gi, "\n");
-	return (div.textContent || div.innerText || "").trim();
+	return htmlToText(html, { preserveLineBreaks: true });
 }
 
 /**
- * Strip all HTML tags from a string.
+ * Strip all HTML tags and collapse whitespace to a single line of plain text.
  */
 export function stripHtml(html: string): string {
-	return html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-}
-
-function decodeHtmlEntities(text: string): string {
-	return text
-		.replace(/&#(\d+);/g, (_match: string, code: string) =>
-			String.fromCharCode(Number(code)),
-		)
-		.replace(/&#x([0-9a-f]+);/gi, (_match: string, hex: string) =>
-			String.fromCharCode(Number.parseInt(hex, 16)),
-		)
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/&apos;/g, "'")
-		.replace(/&nbsp;/g, " ");
+	return htmlToText(html);
 }
 
 export function getSnippetText(
@@ -100,17 +72,7 @@ export function getSnippetText(
 	maxLength = 100,
 ): string {
 	if (!snippet) return "";
-
-	const clean = decodeHtmlEntities(
-		snippet
-			.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-			.replace(/<style[^>]*>[\s\S]*/gi, "")
-			.replace(/<[^>]*>/g, " ")
-			.replace(/<[^>]*$/g, ""),
-	)
-		.replace(/\s+/g, " ")
-		.trim();
-
+	const clean = htmlToText(snippet);
 	if (!clean) return "";
 	return clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
 }

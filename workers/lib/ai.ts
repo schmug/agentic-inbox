@@ -18,7 +18,7 @@ import {
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
 } from "../../shared/mailbox-settings";
-import { escapeHtml, stripHtmlToText, textToHtml } from "./email-helpers";
+import { stripHtmlToText, textToHtml } from "./email-helpers";
 
 // ── Prompt Injection Scanner ───────────────────────────────────────
 

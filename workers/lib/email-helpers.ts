@@ -13,6 +13,7 @@ import type { EmailFull } from "./schemas";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
 import { formatQuotedDate } from "../../shared/dates";
+import { htmlToPlainText } from "../../shared/html-text";
 
 // ── DO Stub ────────────────────────────────────────────────────────
 
@@ -176,17 +177,11 @@ export function textToHtml(text: string): string {
 
 /**
  * Strip HTML tags and normalize whitespace to produce plain text.
- * Removes <style> and <script> blocks first to avoid injecting their
- * content into the output.
+ * Drops `<script>` and `<style>` content via a real tokenizer so that
+ * variants like `</script foo="">` are handled correctly.
  */
 export function stripHtmlToText(html: string): string {
-	if (!html) return "";
-	return html
-		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-		.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-		.replace(/<[^>]+>/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	return htmlToPlainText(html);
 }
 
 /**

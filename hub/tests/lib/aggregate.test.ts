@@ -139,9 +139,6 @@ describe("applyCorroboration", () => {
 		await seedSharingGroup("sg-2");
 
 		// Both orgs submit the same value to sg-1; only org-A submits to sg-2.
-		for (const sg of ["sg-1", "sg-1", "sg-2"]) {
-			const org = sg === "sg-2" ? "org-A" : sg === "sg-1" ? "org-A" : "org-B";
-		}
 		await applyCorroboration(db.d1, {
 			event_uuid: "e1", orgc_uuid: "org-A", sharing_group_uuid: "sg-1",
 			attributes: [{ type: "url", value: "https://x.example" }],
