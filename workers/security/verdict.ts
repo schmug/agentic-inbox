@@ -14,7 +14,7 @@
 import type { AuthVerdict } from "./auth";
 import type { ClassificationResult } from "./classification";
 import type { ExtractedUrl } from "./urls";
-import type { SenderReputation } from "./reputation";
+import type { SenderReputation, FirstTimeSenderPrior } from "./reputation";
 import type { AttachmentLike, AttachmentPolicy } from "./attachments";
 import { scoreAuth } from "./auth";
 import { scoreClassification } from "./classification";
@@ -52,6 +52,13 @@ export interface VerdictInputs {
 	 * (container/macro-office under the defaults).
 	 */
 	attachmentPolicy?: AttachmentPolicy | null;
+	/**
+	 * Optional CTI-informed first-time-sender prior (issue #79). Computed in
+	 * `runSecurityPipeline` from a CrowdSec CTI lookup on the originating
+	 * `Received:` IP. When present and the sender has no history, replaces
+	 * the legacy flat `+5` with a graduated bonus. Absent ⇒ legacy behaviour.
+	 */
+	firstTimeSenderPrior?: FirstTimeSenderPrior;
 }
 
 export interface VerdictThresholds {
@@ -85,7 +92,7 @@ export function aggregateVerdict(
 	score += urls.score;
 	signals.push(...urls.reasons);
 
-	const rep = scoreReputation(inputs.reputation);
+	const rep = scoreReputation(inputs.reputation, inputs.firstTimeSenderPrior);
 	score += rep.score;
 	signals.push(...rep.reasons);
 
