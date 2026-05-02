@@ -14,7 +14,6 @@
 import Database from "better-sqlite3";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import type { D1Database } from "@cloudflare/workers-types";
 
 interface PreparedLike {
 	bind(...args: unknown[]): PreparedLike;
