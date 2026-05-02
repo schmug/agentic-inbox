@@ -150,7 +150,13 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		: await classifyEmail(
 			env.AI,
 			{ subject, sender, bodyHtml, auth },
-			{ model: mailboxSettings.classifierModel },
+			{
+				model: mailboxSettings.classifierModel,
+				// Issue #28: per-mailbox toggle for the narrowed Rule 5 behavior.
+				// `true` (default) → timeouts contribute 0 instead of failing
+				// closed to `suspicious`. `false` preserves the legacy behavior.
+				skipOnTimeout: settings.classification.skip_on_timeout,
+			},
 		);
 
 	let verdict = aggregateVerdict(

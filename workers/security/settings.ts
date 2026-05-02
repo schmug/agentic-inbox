@@ -35,6 +35,22 @@ export interface BusinessHours {
 	boost_on_off_hours: boolean;
 }
 
+/**
+ * Classifier-stage tunables. Currently only one knob: how to treat an LLM
+ * timeout/AbortError. See issue #28 and `workers/security/classification.ts`.
+ */
+export interface ClassificationSettings {
+	/**
+	 * When true (default), an LLM classifier timeout/AbortError contributes
+	 * 0 to the verdict score and tags the email with `llm_unavailable` —
+	 * other pipeline stages (auth, URLs, reputation, intel) still produce a
+	 * verdict. When false, the legacy fail-closed-to-`suspicious` behavior
+	 * is preserved (inverts availability-as-bypass at the cost of some
+	 * false positives during Workers-AI throttling).
+	 */
+	skip_on_timeout: boolean;
+}
+
 export interface MailboxSecuritySettings {
 	enabled: boolean;
 	thresholds: VerdictThresholds;
@@ -85,6 +101,12 @@ export interface MailboxSecuritySettings {
 	 * the full rules.
 	 */
 	attachment_policy: AttachmentPolicy;
+	/**
+	 * Classifier-stage settings (issue #28). Default: skip-on-timeout
+	 * enabled — a Workers-AI timeout/AbortError contributes 0 to the
+	 * score instead of failing closed to `suspicious`.
+	 */
+	classification: ClassificationSettings;
 }
 
 /**
@@ -97,6 +119,16 @@ export interface FolderPolicy {
 	treat_as_verified?: boolean;
 }
 
+/**
+ * Default for the new classification block. Skip-on-timeout is ON so the
+ * common case (Workers-AI throttling, model cold start) doesn't dump a
+ * burst of legitimate mail into the `suspicious` bucket. Operators who want
+ * the legacy fail-closed-to-`suspicious` behavior can flip this to false.
+ */
+export const DEFAULT_CLASSIFICATION_SETTINGS: ClassificationSettings = {
+	skip_on_timeout: true,
+};
+
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	enabled: false, // opt-in — existing mailboxes are unaffected until the user flips this
 	thresholds: DEFAULT_THRESHOLDS,
@@ -108,6 +140,7 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	trusted_auto_allow_min_messages: 10,
 	intel_auto_block: true,
 	attachment_policy: DEFAULT_ATTACHMENT_POLICY,
+	classification: DEFAULT_CLASSIFICATION_SETTINGS,
 };
 
 export async function getSecuritySettings(
@@ -149,6 +182,14 @@ export async function getSecuritySettings(
 					?? DEFAULT_ATTACHMENT_POLICY.custom_blocklist_extensions)
 					.map((e) => e.trim().toLowerCase().replace(/^\./, ""))
 					.filter((e) => e.length > 0),
+			},
+			// Classifier-stage settings (issue #28). Only `skip_on_timeout` is
+			// honoured today; field-by-field merge means partial user blocks
+			// retain the defaults for unset fields rather than getting `false`
+			// silently substituted for "missing".
+			classification: {
+				...DEFAULT_CLASSIFICATION_SETTINGS,
+				...((raw.classification ?? {}) as Partial<ClassificationSettings>),
 			},
 		};
 		return merged;

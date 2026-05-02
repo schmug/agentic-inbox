@@ -38,10 +38,24 @@ const FolderPolicy = z
   })
   .passthrough();
 
+/**
+ * Classifier-stage settings. Currently only the timeout-handling toggle
+ * (issue #28). When `skip_on_timeout` is true (the default), an LLM
+ * classifier timeout/AbortError contributes 0 to the verdict score and
+ * tags the email with `llm_unavailable`. When false, the legacy
+ * fail-closed-to-`suspicious` behavior is preserved for backward compat.
+ */
+const ClassificationSettings = z
+  .object({
+    skip_on_timeout: z.boolean().optional(),
+  })
+  .passthrough();
+
 const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
     folder_policies: z.record(z.string(), FolderPolicy).optional(),
+    classification: ClassificationSettings.optional(),
   })
   .passthrough();
 

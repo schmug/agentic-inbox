@@ -259,6 +259,72 @@ describe("folder-bypass triage (sibling work)", () => {
 	});
 });
 
+describe("LLM timeout — narrowed Rule 5 (issue #28)", () => {
+	it("clean email + classifier timeout → reaches allow (acceptance criterion)", async () => {
+		// Headline acceptance from the issue: with the LLM artificially failing
+		// (timeout), a clean inbound scored well by SPF/DKIM/DMARC + URL +
+		// reputation reaches `allow` and is delivered normally. The benign
+		// newsletter fixture passes DMARC; without the LLM contribution the
+		// verdict floor is dominated by other signals (no homograph, no
+		// shortener, etc.) and lands well below the tag threshold.
+		__setClassifier(async () => {
+			throw new Error("classify-timeout");
+		});
+		const { stub: mailbox } = createFakeMailboxStub();
+		const env = makeFakeEnv({ mailboxId: MAILBOX, stub: mailbox, settings: settings() });
+		const parsed = await loadFixture("benign-newsletter.eml");
+		const result = await runSecurityPipeline({
+			env, mailboxId: MAILBOX, messageId: "m-llm-timeout", targetFolder: "inbox", parsedEmail: parsed,
+		});
+		expect(result.skipped).toBe(false);
+		expect(result.verdict?.action).toBe("allow");
+		// The `llm_unavailable` tag should be visible in the signals so an
+		// operator can tell the verdict was assembled without the classifier.
+		expect(result.verdict?.signals).toContain("llm_unavailable");
+	});
+
+	it("legacy mode (skip_on_timeout=false) → timeout reverts to fail-closed suspicious", async () => {
+		// Backward-compat for operators who explicitly want the old behavior.
+		__setClassifier(async () => {
+			throw new Error("classify-timeout");
+		});
+		const { stub: mailbox } = createFakeMailboxStub();
+		const env = makeFakeEnv({
+			mailboxId: MAILBOX,
+			stub: mailbox,
+			settings: settings({
+				classification: { skip_on_timeout: false },
+			}),
+		});
+		const parsed = await loadFixture("benign-newsletter.eml");
+		const result = await runSecurityPipeline({
+			env, mailboxId: MAILBOX, messageId: "m-legacy", targetFolder: "inbox", parsedEmail: parsed,
+		});
+		// With the old fail-closed behavior, the classifier contributes at the
+		// `suspicious` weight; combined with a clean email's other signals
+		// (≈0), 30*(0.5+0.5*0.3)≈10 sits below the tag threshold but the
+		// classifier label itself must read `suspicious`, not `unavailable`.
+		expect(result.verdict?.classification.label).toBe("suspicious");
+		expect(result.verdict?.signals).not.toContain("llm_unavailable");
+	});
+
+	it("downstream-tightens invariant: real LLM 'suspicious' verdict still contributes (not relaxed)", async () => {
+		// Critical invariant: the new path must not relax a real `suspicious`
+		// verdict. If the classifier actually returned `suspicious` (for
+		// real reasons, not a timeout), the score contribution must persist.
+		__setClassifier(async () => stub({ label: "suspicious", confidence: 0.9 }));
+		const { stub: mailbox } = createFakeMailboxStub();
+		const env = makeFakeEnv({ mailboxId: MAILBOX, stub: mailbox, settings: settings() });
+		const parsed = await loadFixture("benign-newsletter.eml");
+		const result = await runSecurityPipeline({
+			env, mailboxId: MAILBOX, messageId: "m-real-suspicious", targetFolder: "inbox", parsedEmail: parsed,
+		});
+		expect(result.verdict?.classification.label).toBe("suspicious");
+		expect(result.verdict?.signals.join(" ")).toMatch(/classifier: suspicious/);
+		expect(result.verdict?.signals).not.toContain("llm_unavailable");
+	});
+});
+
 // These sibling extensions reference scoring signals that exist in the
 // codebase but need dedicated coverage. Kept as `.todo` placeholders until
 // someone writes the end-to-end fixtures.
