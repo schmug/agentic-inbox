@@ -136,4 +136,26 @@ describe("MailboxSettings", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // classification.skip_on_timeout — issue #28 narrowed Rule 5. Optional, no
+  // schema-level default; the runtime consumer in `workers/security/settings.ts`
+  // owns the default value (true).
+  it("round-trips classification.skip_on_timeout=false", () => {
+    const parsed = MailboxSettings.parse({
+      security: { classification: { skip_on_timeout: false } },
+    });
+    expect(parsed.security?.classification?.skip_on_timeout).toBe(false);
+  });
+
+  it("leaves classification undefined when missing", () => {
+    const parsed = MailboxSettings.parse({});
+    expect(parsed.security?.classification).toBeUndefined();
+  });
+
+  it("rejects a non-boolean skip_on_timeout", () => {
+    const result = MailboxSettings.safeParse({
+      security: { classification: { skip_on_timeout: "yes" } },
+    });
+    expect(result.success).toBe(false);
+  });
 });

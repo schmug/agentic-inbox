@@ -19,7 +19,20 @@ export type ClassificationLabel =
 	| "spam"
 	| "phishing"
 	| "bec"
-	| "suspicious";
+	| "suspicious"
+	/**
+	 * The classifier hit a hard timeout / AbortError before producing a
+	 * verdict. Distinct from `suspicious` (which is also used for parse
+	 * failures and "model returned garbage" — both still fail-closed).
+	 *
+	 * Per the narrowed Rule 5 ("Fail closed on LLM timeouts") in the security
+	 * spec: only the timeout/AbortError path is allowed to skip its
+	 * contribution. Parse-fail and label-not-in-enum paths still fail-closed
+	 * to `suspicious`. See `scoreClassification` below for the consumer side.
+	 *
+	 * Issue: https://github.com/schmug/PhishSOC/issues/28
+	 */
+	| "unavailable";
 
 export interface ClassificationResult {
 	label: ClassificationLabel;
@@ -60,12 +73,32 @@ export function __setClassifier(impl: ClassifierImpl | null) {
 	overrideClassifier = impl;
 }
 
+/**
+ * True if the error is the hard 5s timeout sentinel from the `Promise.race`
+ * below, or a Workers-AI / fetch AbortError.
+ *
+ * The distinction matters: per Rule 5 of the security spec (narrowed by
+ * issue #28), only the timeout/abort path is treated as "I never heard back"
+ * and skips its contribution. Other thrown errors (binding misconfigured,
+ * network 500, JSON-parse-fail inside `parseClassifierOutput`) still
+ * fail-closed to `suspicious`.
+ */
+function isClassifierTimeout(e: unknown): boolean {
+	if (!(e instanceof Error)) return false;
+	if (e.message === "classify-timeout") return true;
+	// Fetch / Workers-AI propagated abort. `name` covers both the Web
+	// Streams AbortError and Node's. `code === "ERR_ABORTED"` is the
+	// undici signal.
+	if (e.name === "AbortError") return true;
+	if ((e as { code?: string }).code === "ERR_ABORTED") return true;
+	return false;
+}
+
 export async function classifyEmail(
 	ai: Ai,
 	input: ClassifyInput,
-	options: { model?: string } = {},
+	options: { model?: string; skipOnTimeout?: boolean } = {},
 ): Promise<ClassificationResult> {
-	if (overrideClassifier) return overrideClassifier(ai, input);
 	const plain = stripHtmlToText(input.bodyHtml || "").slice(0, 4000);
 	const userMessage = `SENDER: ${input.sender}
 AUTH: spf=${input.auth.spf} dkim=${input.auth.dkim} dmarc=${input.auth.dmarc}
@@ -75,8 +108,20 @@ BODY:
 ${plain}`;
 
 	const model = options.model?.trim() || DEFAULT_CLASSIFIER_MODEL;
+	// Default to TRUE: skip-on-timeout is the new behavior. A mailbox that
+	// explicitly opts out via `classification.skip_on_timeout: false` gets
+	// the legacy fail-closed-suspicious-on-timeout behavior for backward
+	// compat. See issue #28 (narrowing of "fail closed on LLM timeouts").
+	const skipOnTimeout = options.skipOnTimeout ?? true;
 
 	try {
+		// The override seam runs INSIDE the try so tests can simulate a
+		// timeout/AbortError by throwing from the injected classifier and
+		// exercise the production catch-block discrimination logic.
+		if (overrideClassifier) {
+			return await overrideClassifier(ai, input);
+		}
+
 		const response = (await Promise.race([
 			ai.run(
 				model as Parameters<typeof ai.run>[0],
@@ -96,10 +141,23 @@ ${plain}`;
 
 		return parseClassifierOutput(response?.response ?? "");
 	} catch (e) {
-		// Fail closed: unparsable / unavailable classifier → suspicious.
+		const message = (e as Error).message;
+		if (isClassifierTimeout(e) && skipOnTimeout) {
+			// Rule 5 narrowed (issue #28): timeout/abort no longer fails closed
+			// to `suspicious`. Instead the classifier signals "unavailable" and
+			// `scoreClassification` contributes 0 to the score with an
+			// `llm_unavailable` reason. Other pipeline stages (auth, URLs,
+			// reputation, intel) still produce a verdict — the LLM is one
+			// signal among many. The "downstream only tightens" invariant is
+			// preserved: this path does not relax a real classifier verdict, it
+			// only opts the classifier out of contributing on transient outage.
+			console.warn("classifyEmail timeout — skipping classifier contribution:", message);
+			return { label: "unavailable", confidence: 0, reasoning: "classifier timeout" };
+		}
+		// Fail closed: unparsable / non-timeout failures → suspicious.
 		// We do NOT quarantine solely on classifier failure; the verdict
 		// aggregator combines with auth / URL / reputation signals.
-		console.error("classifyEmail failed:", (e as Error).message);
+		console.error("classifyEmail failed:", message);
 		return { label: "suspicious", confidence: 0.3, reasoning: "classifier unavailable" };
 	}
 }
@@ -134,7 +192,16 @@ function normalizeLabel(raw: unknown): ClassificationLabel {
 }
 
 export function scoreClassification(result: ClassificationResult): { score: number; reasons: string[] } {
-	const map: Record<ClassificationLabel, number> = {
+	// `unavailable` (issue #28 / Rule 5 narrowed): the classifier hit a
+	// timeout/AbortError. Contribute 0 to the score and tag the verdict so
+	// operators can see why the classifier didn't weigh in. Other scorers
+	// are NOT inflated to compensate — the LLM is one signal among many,
+	// and a clean inbound that scores well on auth + URLs + reputation +
+	// intel still reaches `allow`.
+	if (result.label === "unavailable") {
+		return { score: 0, reasons: ["llm_unavailable"] };
+	}
+	const map: Record<Exclude<ClassificationLabel, "unavailable">, number> = {
 		safe: 0, spam: 20, suspicious: 30, bec: 45, phishing: 50,
 	};
 	const base = map[result.label];
