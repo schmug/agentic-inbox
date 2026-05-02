@@ -174,6 +174,13 @@ export interface DashboardSummary {
 	threatsBlocked: number;
 	openCases: number;
 	hubContributions: number;
+	/**
+	 * Count of own attributes corroborated by ≥1 other contributor on the hub
+	 * within the last 24h (#72). Null when the hub is unreachable or the
+	 * mailbox has no hub config — the UI renders "unavailable" rather than
+	 * failing the whole dashboard.
+	 */
+	corroboration: number | null;
 	pipelineSuccess: number | null;
 	/** 95th-percentile pipeline duration over the last 24h, in ms. Null when no completed runs. */
 	p95Ms: number | null;
