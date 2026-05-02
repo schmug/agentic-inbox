@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { emptyVerdict, parseAuthResults, scoreAuth } from "../../workers/security/auth";
+import {
+	emptyVerdict,
+	extractReceivedFromIp,
+	parseAuthResults,
+	scoreAuth,
+} from "../../workers/security/auth";
 
 function header(name: string, value: string) {
 	return { key: name, value };
@@ -151,5 +156,100 @@ describe("scoreAuth", () => {
 	it("returns zero for all-none (no auth headers present)", () => {
 		const { score } = scoreAuth(emptyVerdict());
 		expect(score).toBe(0);
+	});
+});
+
+describe("extractReceivedFromIp", () => {
+	it("returns undefined when there are no Received headers", () => {
+		expect(extractReceivedFromIp([header("Authentication-Results", "x; spf=pass")])).toBeUndefined();
+	});
+
+	it("returns undefined when rawHeaders is not an array", () => {
+		expect(extractReceivedFromIp(null)).toBeUndefined();
+		expect(extractReceivedFromIp(undefined)).toBeUndefined();
+		expect(extractReceivedFromIp("not-an-array")).toBeUndefined();
+	});
+
+	it("extracts an external IPv4 from a bracketed RFC 5321 Received line", () => {
+		const headers = [
+			header(
+				"Received",
+				"from mail.example.com (mail.example.com [203.0.113.42]) by mx.cloudflare.com",
+			),
+		];
+		expect(extractReceivedFromIp(headers)).toBe("203.0.113.42");
+	});
+
+	it("returns the FIRST external IP (most-recent external hop) when multiple Received lines present", () => {
+		// PostalMime preserves header order: most-recent hop first.
+		const headers = [
+			header(
+				"Received",
+				"from inbound.cloudflare.net (inbound.cloudflare.net [10.0.0.5]) by mx",
+			),
+			header(
+				"Received",
+				"from sender.example.com (sender.example.com [198.51.100.7]) by inbound.cloudflare.net",
+			),
+			header(
+				"Received",
+				"from origin.attacker.example (origin.attacker.example [203.0.113.99]) by sender.example.com",
+			),
+		];
+		// 10.0.0.5 is private and is skipped; the next external hop is 198.51.100.7.
+		expect(extractReceivedFromIp(headers)).toBe("198.51.100.7");
+	});
+
+	it("skips RFC1918 private IPs (10/8, 172.16/12, 192.168/16)", () => {
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from internal (internal [10.1.2.3]) by mx"),
+				header("Received", "from public (public [203.0.113.1]) by internal"),
+			]),
+		).toBe("203.0.113.1");
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from internal (internal [172.16.0.1]) by mx"),
+				header("Received", "from public (public [203.0.113.2]) by internal"),
+			]),
+		).toBe("203.0.113.2");
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from internal (internal [192.168.1.1]) by mx"),
+				header("Received", "from public (public [203.0.113.3]) by internal"),
+			]),
+		).toBe("203.0.113.3");
+	});
+
+	it("skips loopback (127/8) and link-local (169.254/16)", () => {
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from local (local [127.0.0.1]) by mx"),
+				header("Received", "from external (external [203.0.113.4]) by local"),
+			]),
+		).toBe("203.0.113.4");
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from ll (ll [169.254.10.10]) by mx"),
+				header("Received", "from external (external [203.0.113.5]) by ll"),
+			]),
+		).toBe("203.0.113.5");
+	});
+
+	it("returns undefined when every Received line is internal", () => {
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from a (a [10.0.0.1]) by b"),
+				header("Received", "from c (c [192.168.1.1]) by d"),
+			]),
+		).toBeUndefined();
+	});
+
+	it("handles bare-bracket IPv4 without a parenthesized hostname", () => {
+		expect(
+			extractReceivedFromIp([
+				header("Received", "from sender [203.0.113.55] by mx"),
+			]),
+		).toBe("203.0.113.55");
 	});
 });

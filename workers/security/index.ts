@@ -22,7 +22,7 @@
 
 import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
-import { parseAuthResults } from "./auth";
+import { parseAuthResults, extractReceivedFromIp } from "./auth";
 import { classifyEmail } from "./classification";
 import { extractUrls } from "./urls";
 import { aggregateVerdict, type FinalVerdict } from "./verdict";
@@ -33,6 +33,8 @@ import { evaluateTriage, type IntelMatchInfo } from "./triage";
 import type { AttachmentLike } from "./attachments";
 import { scoreOffHours } from "./time-rules";
 import type { VerdictThresholds } from "./verdict";
+import { firstTimeSenderPriorFromCti, type FirstTimeSenderPrior } from "./reputation";
+import { lookupIp } from "../intel/crowdsec-cti";
 
 /**
  * Apply a post-aggregation score bump and recompute the action tier and
@@ -118,6 +120,22 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	const stub = getMailboxStub(env, mailboxId);
 	const reputation = sender ? await stub.getSenderReputation(sender) : null;
 
+	// First-time-sender CTI prior (issue #79). Only fired when the sender has
+	// no prior history (or was never seen), so cardinality is "new senders
+	// per mailbox" — well within the 12h-cached free-tier budget. When CTI
+	// returns null (no API key configured, 404 clean residential, 429 rate-
+	// limit, network error) we fall through and `scoreReputation` keeps the
+	// legacy flat +5. The lookup must NOT fail the email path on transient
+	// errors; `lookupIp` already swallows them and returns null.
+	let firstTimeSenderPrior: FirstTimeSenderPrior | undefined;
+	if ((!reputation || reputation.message_count === 0) && env.CROWDSEC_CTI_API_KEY) {
+		const senderIp = extractReceivedFromIp(parsedEmail.headers);
+		if (senderIp) {
+			const summary = await lookupIp(env, senderIp).catch(() => null);
+			if (summary) firstTimeSenderPrior = firstTimeSenderPriorFromCti(senderIp, summary);
+		}
+	}
+
 	// Triage tiers — may short-circuit the pipeline before we ever touch the LLM.
 	// See workers/security/triage.ts for the rules and invariants.
 	const triaged = evaluateTriage({
@@ -167,6 +185,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 			reputation,
 			attachments,
 			attachmentPolicy: settings.attachment_policy,
+			firstTimeSenderPrior,
 		},
 		settings.thresholds,
 	);
