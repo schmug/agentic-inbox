@@ -68,9 +68,11 @@ describe("HubRoute", () => {
 		sharingGroupsState = unconfigured();
 		renderHub();
 		expect(screen.getByText(/hub not configured/i)).toBeInTheDocument();
+		// Deep-links to the hub panel anchor so a fresh operator lands on the
+		// right form (#97).
 		expect(
-			screen.getByRole("link", { name: /open settings/i }),
-		).toHaveAttribute("href", "/mailbox/m1/settings");
+			screen.getByRole("link", { name: /configure hub credentials/i }),
+		).toHaveAttribute("href", "/mailbox/m1/settings#hub");
 		expect(screen.queryByText(/my contributions/i)).not.toBeInTheDocument();
 	});
 
