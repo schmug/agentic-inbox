@@ -177,41 +177,54 @@ smaller than the next-tier gap.
 
 ---
 
-## Rule 5 — Fail closed on LLM timeouts
+## Rule 5 — Treat LLM timeouts as no-signal, not fail-closed
 
-> Any LLM call in a security path must have a hard timeout. On timeout,
-> on parse failure, on connection failure, on any "I don't know" path, the
-> classifier returns the *suspicious* state, never the *safe* state. A
-> down classifier must never be indistinguishable from a clean message.
+> Any LLM call in a security path must have a hard timeout. A *timeout*
+> (Workers AI throttling, model cold start, AbortError) means the LLM
+> produced no signal — so it should contribute 0 and tag the email
+> `llm_unavailable`, not synthesize a `suspicious` verdict. Parse-fail
+> and model-garbage paths still fail closed to `suspicious`: those
+> represent the LLM returning untrustworthy output, which is genuinely a
+> suspicion signal — distinct from "the LLM didn't answer."
 
 ### What it prevents
 
-Availability-as-bypass. If "no classifier response in 5s" maps to
-`safe`, an attacker who can degrade your classifier (rate-limit you,
-trigger an outage, send a context-window-busting input) has just turned
-denial-of-service into a phishing-delivery primitive. Fail-closed inverts
-the incentive: degrading the classifier raises false positives, not false
-negatives.
+Availability-as-bypass — but without the UX cliff. The original
+"5s cap → `suspicious`" behavior produced a global false-positive spike
+whenever Workers AI throttled. Treating timeout as no-signal lets other
+pipeline stages decide; the verdict still composes correctly because the
+aggregator already handles per-stage absence. The fail-closed half is
+preserved where it actually fires: when the LLM *did* answer but its
+output is unparsable or out of enum, the model is saying something we
+can't trust, and "I can't trust this" is not `safe`.
 
-This rule extends to JSON-parse failures, schema-validation failures, and
-any case where the LLM's structured output isn't a value the consumer
-recognizes. All of these are the LLM saying "I don't know" — and "I don't
-know" must never be `safe`.
+The asymmetry matters. Degrading the classifier (rate-limit, outage,
+context-window busting) no longer flips messages to `suspicious` on its
+own — but auth, URL, reputation, and intel signals still run, and a
+genuine `phishing`/`bec` parse from a slow model still scores normally
+once it lands.
 
 ### How PhishSOC enforces this
 
-- `workers/security/classification.ts` — `classifyEmail` (lines 79-105).
-  - Hard 5-second timeout via `Promise.race` against `setTimeout(..., 5000)`
-    at lines 80-95 (the timeout literal is at line 93).
-  - Catch block at lines 98-104 returns
+- `workers/security/classification.ts` — `classifyEmail` (lines 97-163).
+  - Hard 5-second timeout via `Promise.race` against
+    `setTimeout(..., 5000)` at lines 125-140.
+  - The `isClassifierTimeout` discriminator (lines 86-95) distinguishes
+    timeout / `AbortError` / `ERR_ABORTED` from other thrown errors.
+  - On timeout (lines 145-156) the function returns
+    `{ label: "unavailable", confidence: 0, reasoning: "classifier timeout" }`.
+  - On any other thrown error (lines 160-161) it still fails closed to
     `{ label: "suspicious", confidence: 0.3, reasoning: "classifier unavailable" }`.
-- Parse failures fail-closed too:
-  - "no JSON object found" → suspicious (line 111-113)
-  - "JSON parse failed" → suspicious (line 122-124)
-  - "label not in enum" → suspicious (`normalizeLabel`, lines 127-134)
-
-Confidence stays below 0.5 on every fail-closed path, so downstream
-scaling penalizes the result rather than amplifying it.
+- Parse failures fail-closed too — these are not timeouts:
+  - "no JSON object found" → `suspicious` (line 170)
+  - "JSON parse failed" → `suspicious` (line 181)
+  - "label not in enum" → `suspicious` (`normalizeLabel`, lines 185-192)
+- `scoreClassification` (lines 194-215) maps `unavailable` to score 0
+  with reason `llm_unavailable` (lines 201-203); other labels score
+  through the confidence-scaled table as before.
+- Per-mailbox `security.classification.skip_on_timeout` (default `true`,
+  line 115) controls the new behavior; setting it `false` reverts that
+  mailbox to legacy fail-closed-on-timeout for back-compat.
 
 ---
 
