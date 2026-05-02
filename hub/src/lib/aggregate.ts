@@ -14,8 +14,6 @@
  *   - contributor_count ≥ PROMOTION_CONTRIBUTORS
  */
 
-import type { D1Database } from "@cloudflare/workers-types";
-
 export const PROMOTION_SCORE = 2.0;
 export const PROMOTION_CONTRIBUTORS = 2;
 
