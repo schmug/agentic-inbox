@@ -4,19 +4,26 @@ import { describe, expect, it } from "vitest";
 import { MailboxSettings } from "../../shared/mailbox-settings";
 
 describe("MailboxSettings", () => {
-  it("defaults autoDraft.enabled to true when missing", () => {
+  // Post-#106: schema-layer defaults are deliberately gone. The resolver in
+  // workers/lib/mailbox-settings.ts applies system defaults as the bottom
+  // of the inheritance stack — putting them on the schema would make every
+  // read look like an override (mailbox JSON would round-trip with the
+  // default materialised, indistinguishable from "the user picked this
+  // value" once written back). See tests/lib/resolve-mailbox-settings.test.ts
+  // for default-application coverage.
+  it("leaves autoDraft undefined when missing (default lives in resolver)", () => {
     const parsed = MailboxSettings.parse({});
-    expect(parsed.autoDraft.enabled).toBe(true);
+    expect(parsed.autoDraft).toBeUndefined();
   });
 
-  it("defaults agentModel to the kimi entry when missing", () => {
+  it("leaves agentModel undefined when missing (default lives in resolver)", () => {
     const parsed = MailboxSettings.parse({});
-    expect(parsed.agentModel).toBe("@cf/moonshotai/kimi-k2.5");
+    expect(parsed.agentModel).toBeUndefined();
   });
 
   it("respects an explicit disabled autoDraft", () => {
     const parsed = MailboxSettings.parse({ autoDraft: { enabled: false } });
-    expect(parsed.autoDraft.enabled).toBe(false);
+    expect(parsed.autoDraft?.enabled).toBe(false);
   });
 
   it("preserves arbitrary extra fields (passthrough)", () => {
@@ -24,25 +31,32 @@ describe("MailboxSettings", () => {
     expect(parsed.agentSystemPrompt).toBe("Hi");
   });
 
-  // Per-mailbox security-model overrides (#67). All three are optional and
-  // default to undefined so the worker call sites fall through to their
-  // hardcoded defaults.
-  it("leaves security-model overrides undefined when missing", () => {
+  // Post-#106: the three security-critical model fields
+  // (injectionScannerModel, draftVerifierModel, classifierModel) have been
+  // moved off MailboxSettings entirely. They live on OrgSettings only, with
+  // per-mailbox overrides forbidden in v1 — the wrong choice can let
+  // prompt-injection through. A future feature (per-mailbox model overrides
+  // with user choice / local models / own API keys) will reintroduce them
+  // with explicit UI guardrails. Until then the schema's `.passthrough()`
+  // means stale fields in existing mailbox JSON ride through harmlessly,
+  // but they are NOT typed as MailboxSettings keys.
+  it("does not declare security-model fields on MailboxSettings (now org-only)", () => {
     const parsed = MailboxSettings.parse({});
-    expect(parsed.injectionScannerModel).toBeUndefined();
-    expect(parsed.draftVerifierModel).toBeUndefined();
-    expect(parsed.classifierModel).toBeUndefined();
+    expect((parsed as Record<string, unknown>).injectionScannerModel).toBeUndefined();
+    expect((parsed as Record<string, unknown>).draftVerifierModel).toBeUndefined();
+    expect((parsed as Record<string, unknown>).classifierModel).toBeUndefined();
   });
 
-  it("round-trips per-mailbox security-model overrides", () => {
+  it("ignores stale per-mailbox security-model fields on read (passthrough only)", () => {
+    // Existing R2 mailbox JSON written before #106 may still carry these
+    // fields. They survive the parse via passthrough but the worker call
+    // sites no longer read them — see workers/agent/index.ts and
+    // workers/security/index.ts which now source classifier/verifier/scanner
+    // models from the org tier.
     const parsed = MailboxSettings.parse({
       injectionScannerModel: "@cf/custom/injection",
-      draftVerifierModel: "@cf/custom/verifier",
-      classifierModel: "@cf/custom/classifier",
     });
-    expect(parsed.injectionScannerModel).toBe("@cf/custom/injection");
-    expect(parsed.draftVerifierModel).toBe("@cf/custom/verifier");
-    expect(parsed.classifierModel).toBe("@cf/custom/classifier");
+    expect((parsed as Record<string, unknown>).injectionScannerModel).toBe("@cf/custom/injection");
   });
 
   // The security sub-shape is opt-in: an undefined `security` block must
