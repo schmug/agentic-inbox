@@ -118,19 +118,16 @@ export async function resolveMailboxSettings(
 		getOrgSettings(env),
 	]);
 
-	const security = pickWhole(
-		mailbox.security,
-		org.security,
-		DEFAULT_SECURITY_SETTINGS,
-		mergeSecurityWithDefault,
-	);
+	// Whole-object replace across tiers. Whichever tier supplied the field
+	// wins outright — never deep-merged. Within the winning tier,
+	// mergeSecurityWithDefault completes any unset fields with the system
+	// default so consumers see a fully-populated MailboxSecuritySettings.
+	const securityWinner = mailbox.security ?? org.security;
+	const security = securityWinner
+		? mergeSecurityWithDefault(securityWinner)
+		: DEFAULT_SECURITY_SETTINGS;
 
-	const intelRaw = pickWhole<NonNullable<MailboxSettings["intel"]>>(
-		mailbox.intel,
-		org.intel,
-		{} as NonNullable<MailboxSettings["intel"]>,
-		(value) => value,
-	);
+	const intelRaw = (mailbox.intel ?? org.intel ?? {}) as NonNullable<MailboxSettings["intel"]>;
 
 	return {
 		agentSystemPrompt:
@@ -163,32 +160,17 @@ function resolveAutoDraft(
 	return { enabled: winner.enabled ?? DEFAULT_AUTO_DRAFT_ENABLED };
 }
 
-function pickWhole<T>(
-	mailbox: T | undefined,
-	org: T | undefined,
-	fallback: T,
-	finalize: (value: T) => T,
-): T {
-	if (mailbox !== undefined) return finalize(mailbox);
-	if (org !== undefined) return finalize(org);
-	return fallback;
-}
-
 /**
- * Merge a partial security override (from either tier) with the system
+ * Complete a partial security override (from either tier) with the system
  * default. The override carries whatever keys it set; missing keys fall
  * through to the default. This is NOT cross-tier deep merge — by the time
  * we reach this function, `value` is whichever single tier won the
- * whole-object replace.
- *
- * Without this completion step, a partially-specified security block
- * (`{ enabled: true }` only) would yield a `MailboxSecuritySettings` with
- * `undefined` thresholds, which the verdict pipeline can't tolerate.
+ * whole-object replace, and we're just filling in unset keys from
+ * DEFAULT_SECURITY_SETTINGS so consumers don't see undefined thresholds /
+ * attachment_policy / classification.
  */
-function mergeSecurityWithDefault(
-	value: NonNullable<MailboxSettings["security"]> | NonNullable<OrgSettings["security"]>,
-): MailboxSecuritySettings {
-	const partial = value as Partial<MailboxSecuritySettings>;
+function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
+	const partial = (value ?? {}) as Partial<MailboxSecuritySettings>;
 	return {
 		...DEFAULT_SECURITY_SETTINGS,
 		...partial,
