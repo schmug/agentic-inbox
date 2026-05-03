@@ -357,8 +357,12 @@ export default function SettingsRoute() {
 				) : null}
 				<Link to="/settings" className="underline">/settings</Link>.
 				Editing a field here promotes it to an override that wins for this
-				mailbox; security and intel.hub overrides replace the entire upstream
-				block whole (no deep-merge across tiers).
+				mailbox. Security and <code>intel.hub</code> overrides replace the
+				entire upstream block whole (no deep-merge across tiers) — with one
+				carve-out: <code>allowlist_senders</code> and{" "}
+				<code>allowlist_domains</code> extend the org allowlists rather than
+				replacing them (deduped, lowercased, org entries first) so a
+				per-mailbox entry adds to the org list instead of shadowing it.
 			</p>
 
 			<div className="space-y-6">

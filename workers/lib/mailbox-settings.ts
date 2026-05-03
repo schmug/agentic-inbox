@@ -116,13 +116,28 @@ export interface ResolvedMailboxSettings {
  * (any sub-field), it carries the *whole* security object — the
  * domain/org `security` blocks are NOT deep-merged in. Same for
  * `intel.hub` and `intel.feeds`. This matches the v1 decision in #106's
- * audit (Q3, Q4, Q6); per-array extend-merge semantics are tracked as
- * separate follow-ups (#149, #150).
+ * audit (Q3, Q4, Q6).
+ *
+ * Carve-out (#149): `security.allowlist_senders` and
+ * `security.allowlist_domains` extend across the org and mailbox tiers —
+ * the resolved arrays are `unique(lowercased(org ++ mailbox))` when both
+ * are set. Operator-as-extender is the right model for allowlists;
+ * operator-as-replacer is the right model for everything else
+ * (`thresholds`, `business_hours`, `attachment_policy`,
+ * `folder_policies`, `classification`, `trusted_authserv_ids` all stay
+ * whole-replace). This is per-field, not a generic deep-merge.
+ *
+ * Domain tier intentionally does NOT extend in this pass: when
+ * `domain.security` wins (mailbox absent), it whole-replaces
+ * `org.security` including allowlists. Domain-tier extend semantics
+ * under the same pattern are tracked as the follow-up #150 — pulled out
+ * of #149's scope per the issue's out-of-scope list.
  *
  * `security` is post-normalised (lowercased allowlists, trimmed
  * blocklist extensions, etc.) so consumers don't repeat the case fold at
- * runtime — but the normalisation runs on whichever block won the resolve,
- * NOT field-by-field across tiers.
+ * runtime — for the carve-out fields, normalisation runs on the
+ * post-extend union; for everything else, on whichever block won the
+ * resolve.
  *
  * The domain layer is keyed off the mailboxId's domain part. A malformed
  * mailboxId (no `@`) skips the domain read entirely and falls through to
@@ -144,9 +159,22 @@ export async function resolveMailboxSettings(
 	// unset fields with the system default so consumers see a fully-
 	// populated MailboxSecuritySettings.
 	const securityWinner = mailbox.security ?? domain.security ?? org.security;
-	const security = securityWinner
+	const securityBase = securityWinner
 		? mergeSecurityWithDefault(securityWinner)
 		: DEFAULT_SECURITY_SETTINGS;
+	// Per-field carve-out (#149): when the mailbox tier sets a security
+	// override, the two allowlist arrays extend with the org tier's
+	// allowlists rather than whole-replacing them. Pulled from the *raw*
+	// per-tier blobs (not from the winner) so a mailbox override doesn't
+	// silently shadow upstream entries — which is the regression #149
+	// exists to prevent.
+	//
+	// Domain tier is NOT in the union (out of scope per #149's issue —
+	// tracked as #150). When `domain.security` wins because mailbox is
+	// absent, it whole-replaces org including allowlists, same as today.
+	const security = mailbox.security
+		? extendAllowlistsWithOrg(securityBase, org.security as RawSecurityAllowlists | undefined)
+		: securityBase;
 
 	const intelRaw = (mailbox.intel ?? domain.intel ?? org.intel ?? {}) as NonNullable<MailboxSettings["intel"]>;
 
@@ -212,6 +240,65 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 			...(partial.classification ?? {}),
 		},
 	};
+}
+
+/**
+ * Per-field carve-out (#149) for `allowlist_senders` and
+ * `allowlist_domains` only. Every other security sub-field stays
+ * whole-replace by the winner tier. Resolved value for each carve-out
+ * field is `unique(lowercased(org ++ mailbox))` with stable upstream-first
+ * order (org entries first, mailbox second) so audit logs remain
+ * comparable across tiers.
+ *
+ * Only invoked when the mailbox tier set a security override. Reads from
+ * the *raw* per-tier blobs because the whole-object winner (the mailbox
+ * block) has already discarded upstream entries — the union must still
+ * surface the org's allowlist entries; that's the regression this fix
+ * exists to prevent.
+ *
+ * Domain tier is intentionally NOT in the union — see resolveMailboxSettings
+ * docstring for the #150 follow-up rationale. Strictly per-array, not a
+ * generic deep-merge.
+ */
+/** Allowlist arrays as carried by the raw passthrough Zod blobs — the Zod
+ *  schemas only nominally know `attachment_policy` / `folder_policies` /
+ *  `classification`; the allowlist arrays travel via passthrough so we
+ *  reach for them with this hand-rolled view. */
+type RawSecurityAllowlists = {
+	allowlist_senders?: readonly string[];
+	allowlist_domains?: readonly string[];
+};
+
+function extendAllowlistsWithOrg(
+	base: MailboxSecuritySettings,
+	org: RawSecurityAllowlists | undefined,
+): MailboxSecuritySettings {
+	return {
+		...base,
+		allowlist_senders: unionLowerStable(org?.allowlist_senders, base.allowlist_senders),
+		allowlist_domains: unionLowerStable(org?.allowlist_domains, base.allowlist_domains),
+	};
+}
+
+/**
+ * Stable upstream-first union: concatenate all provided arrays in order,
+ * lowercase each entry, and dedupe by lowercased value (first occurrence
+ * wins so the upstream-first order is preserved). Empty/undefined arrays
+ * contribute nothing.
+ */
+function unionLowerStable(...lists: Array<readonly string[] | undefined>): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const list of lists) {
+		if (!list) continue;
+		for (const raw of list) {
+			const v = raw.toLowerCase();
+			if (seen.has(v)) continue;
+			seen.add(v);
+			out.push(v);
+		}
+	}
+	return out;
 }
 
 /**

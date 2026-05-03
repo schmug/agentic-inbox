@@ -169,6 +169,13 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 					Matched senders skip the classifier and are allowed — <em>only</em> when DMARC also passes.
 					Without the DMARC requirement, the allowlist alone would let any attacker spoof a trusted From: address.
 				</p>
+				<p className="text-xs text-ink-3 mb-3">
+					<strong>Inheritance:</strong> per-mailbox entries here <em>extend</em>
+					the org allowlists rather than replacing them. Resolved list is the
+					deduped, lowercased union with org entries first. Every other security
+					field on this panel is whole-replace: setting it here shadows the
+					upstream tier's value entirely.
+				</p>
 				<div className="space-y-3">
 					<ListInput
 						label="Allowed senders (comma-separated)"
