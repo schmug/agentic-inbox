@@ -62,6 +62,12 @@ const populated: DomainStats = {
 		ruaConfigured: null,
 		alignmentRate: null,
 	},
+	mtaStsPosture: {
+		mode: null,
+		mx: null,
+		maxAge: null,
+		id: null,
+	},
 	recentCases: [],
 };
 
