@@ -8,16 +8,15 @@ import { z } from "zod";
  *
  * The schema is intentionally lenient on the write side (passthrough) so
  * future fields can land without coordinated frontend/backend deploys.
- * Strict on the read side: every consumer that reads a typed field uses
- * `MailboxSettings.parse(...)` which fills in defaults.
  *
- * `security` is a typed sub-shape: only `attachment_policy` and
- * `folder_policies` are validated here — the rest of the object is
- * passthrough so unrelated security fields (allowlist_senders, thresholds,
- * business_hours, etc.) round-trip untouched. Defaults intentionally NOT
- * set in the schema; the runtime consumer in `workers/security/settings.ts`
- * (`getSecuritySettings`) is the single source of default values, and
- * duplicating them here would invite drift.
+ * `security` is a typed sub-shape: only `attachment_policy`,
+ * `folder_policies`, and `classification` are validated here — the rest of
+ * the object is passthrough so unrelated security fields (allowlist_senders,
+ * thresholds, business_hours, etc.) round-trip untouched. Defaults are
+ * intentionally NOT set in the schema; the resolver in
+ * `workers/lib/mailbox-settings.ts` (`resolveMailboxSettings`) applies
+ * `DEFAULT_SECURITY_SETTINGS` (defined in `workers/security/defaults.ts`)
+ * as the bottom of the inheritance stack. See #106.
  */
 
 const AttachmentAction = z.enum(["block", "score", "ignore"]);

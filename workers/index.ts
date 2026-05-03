@@ -20,11 +20,15 @@ import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
-import { getMailboxSettings } from "./lib/mailbox-settings";
+import {
+	resolveMailboxSettings,
+	stripDefaultEqual,
+} from "./lib/mailbox-settings";
+import { getOrgSettings, putOrgSettings } from "./lib/org-settings";
+import { OrgSettings } from "../shared/org-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
 import { runDeepScan } from "./intel/deep-scan";
-import { getSecuritySettings } from "./security/settings";
 import { isDmarcReport, ingestDmarcReport } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
 import { caseRoutes } from "./routes/cases";
@@ -661,7 +665,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) =
 	// move because of a reputation write.
 	if (before?.sender) {
 		try {
-			const settings = await getSecuritySettings(c.env, mailboxId);
+			const settings = (await resolveMailboxSettings(c.env, mailboxId)).security;
 			const destPolicy = settings.folder_policies?.[folderId];
 			const srcPolicy = before.folder_id ? settings.folder_policies?.[before.folder_id] : undefined;
 			if (destPolicy?.treat_as_verified && !srcPolicy?.treat_as_verified) {
@@ -950,7 +954,7 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 	// propagate. Gated on the same `security.enabled` flag as the sync path.
 	if (securityVerdict) {
 		try {
-			const settings = await getSecuritySettings(env, mailboxId);
+			const settings = (await resolveMailboxSettings(env, mailboxId)).security;
 			ctx.waitUntil(
 				runDeepScan({ env, mailboxId, emailId: messageId, thresholds: settings.thresholds })
 					.then(
@@ -969,10 +973,11 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		}
 	}
 
-	// Auto-draft dispatch is gated on per-mailbox settings. The security
-	// pipeline above always runs; only the agent's onNewEmail fetch is
-	// skipped when the operator has disabled auto-draft for this mailbox.
-	const mailboxSettings = await getMailboxSettings(env, mailboxId);
+	// Auto-draft dispatch is gated on resolved settings (mailbox > org >
+	// default). The security pipeline above always runs; only the agent's
+	// onNewEmail fetch is skipped when the operator has disabled auto-draft
+	// for this mailbox (or for the org as a whole).
+	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
 	if (!mailboxSettings.autoDraft.enabled) {
 		return;
 	}

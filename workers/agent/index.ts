@@ -30,8 +30,7 @@ import {
 	toolDiscardDraft,
 } from "../lib/tools";
 import { Folders, FOLDER_TOOL_DESCRIPTION, MOVE_FOLDER_TOOL_DESCRIPTION } from "../../shared/folders";
-import type { MailboxSettings } from "../../shared/mailbox-settings";
-import { getMailboxSettings } from "../lib/mailbox-settings";
+import { resolveMailboxSettings } from "../lib/mailbox-settings";
 import type { Env } from "../types";
 
 // AI SDK v6 changed tool() overloads significantly. We define tools as plain
@@ -90,13 +89,12 @@ You can ONLY draft emails. You do NOT have the ability to send emails directly.
 Use discard_draft to delete drafts that the operator rejects or that are no longer needed.`;
 
 /**
- * Pick the custom system prompt from per-mailbox settings, or fall back
- * to DEFAULT_SYSTEM_PROMPT if the field is absent or blank.
+ * Pick the custom system prompt from the resolved settings, or fall back
+ * to DEFAULT_SYSTEM_PROMPT if the field is absent or blank. The input is
+ * already inheritance-resolved (mailbox > org > undefined).
  */
-function resolveSystemPrompt(settings: MailboxSettings): string {
-	if (typeof settings.agentSystemPrompt === "string" && settings.agentSystemPrompt.trim()) {
-		return settings.agentSystemPrompt;
-	}
+function resolveSystemPrompt(prompt: string | undefined): string {
+	if (typeof prompt === "string" && prompt.trim()) return prompt;
 	return DEFAULT_SYSTEM_PROMPT;
 }
 
@@ -271,8 +269,8 @@ export class EmailAgent extends AIChatAgent<any> {
 		const mailboxId = this.name;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, mailboxId);
-		const settings = await getMailboxSettings(env, mailboxId);
-		const systemPrompt = resolveSystemPrompt(settings);
+		const settings = await resolveMailboxSettings(env, mailboxId);
+		const systemPrompt = resolveSystemPrompt(settings.agentSystemPrompt);
 
 		const result = streamText({
 			model: workersai(settings.agentModel as Parameters<typeof workersai>[0]),
@@ -355,8 +353,8 @@ export class EmailAgent extends AIChatAgent<any> {
 		const env = this.env as Env;
 		const workersai = createWorkersAI({ binding: env.AI });
 		const tools = createEmailTools(env, emailData.mailboxId);
-		const settings = await getMailboxSettings(env, emailData.mailboxId);
-		const systemPrompt = resolveSystemPrompt(settings);
+		const settings = await resolveMailboxSettings(env, emailData.mailboxId);
+		const systemPrompt = resolveSystemPrompt(settings.agentSystemPrompt);
 
 		// Pre-read the email and thread so the agent has full context
 		// without needing to waste tool calls discovering it
