@@ -1,5 +1,4 @@
 import {
-	BellIcon,
 	BriefcaseIcon,
 	BuildingsIcon,
 	CaretRightIcon,
@@ -26,6 +25,7 @@ import type { DomainMailboxRef } from "~/types";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
+import NotificationsBell from "./NotificationsBell";
 
 type PipelineTone = "safe" | "suspect" | "danger" | "muted";
 
@@ -500,13 +500,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						/>
 					</form>
 					<div className="ml-auto flex items-center gap-1.5 shrink-0">
-						<button
-							type="button"
-							className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 hover:bg-paper-2 hover:text-ink transition-colors"
-							aria-label="Notifications"
-						>
-							<BellIcon size={16} />
-						</button>
+						<NotificationsBell mailboxId={mailboxId} />
 						{/* The agent panel only mounts inside `/mailbox/:mailboxId/*`
 						    routes (mailbox.tsx is the only caller passing
 						    `rightPanel={<AgentSidebar />}`). On org-level routes
