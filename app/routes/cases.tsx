@@ -3,8 +3,9 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { CaretRightIcon, PlusIcon } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
+import CreateCaseModal from "~/components/CreateCaseModal";
 import VerdictPill from "~/components/phishsoc/VerdictPill";
 import { statusLabel, statusTone } from "~/components/phishsoc/verdict";
 
@@ -43,6 +44,10 @@ export default function CasesRoute() {
 	const [cases, setCases] = useState<CaseRow[] | null>(null);
 	const [tab, setTab] = useState<string>("open");
 	const [error, setError] = useState<string | null>(null);
+	const [createOpen, setCreateOpen] = useState(false);
+	// Bumped on successful manual-case create so both fetch effects re-run
+	// without a route-level refactor to react-query (issue #190 — UI-only).
+	const [refreshKey, setRefreshKey] = useState(0);
 
 	useEffect(() => {
 		if (!mailboxId) return;
@@ -59,7 +64,7 @@ export default function CasesRoute() {
 				setError("Failed to load cases");
 				setCases([]);
 			});
-	}, [mailboxId, tab]);
+	}, [mailboxId, tab, refreshKey]);
 
 	// Counts for the tab strip — derived from a separate fetch of the full list
 	// so the counts don't drop to zero when the user filters.
@@ -71,6 +76,15 @@ export default function CasesRoute() {
 			.then((r) => setAllCases(r.cases))
 			.catch(() => setAllCases([]));
 	}, [mailboxId, cases]);
+
+	const handleCreated = useCallback(() => {
+		// New cases land at status "open" (DO hardcodes it). Flip the
+		// active tab so the just-created case is visible no matter which
+		// tab the user was on, then bump the refresh key so the list and
+		// counts effects both re-run.
+		setTab("open");
+		setRefreshKey((k) => k + 1);
+	}, []);
 
 	const counts = useMemo(() => {
 		const out: Record<string, number> = { open: 0, "closed-tp": 0, "closed-fp": 0, all: allCases.length };
@@ -94,12 +108,20 @@ export default function CasesRoute() {
 				</div>
 				<button
 					type="button"
+					onClick={() => setCreateOpen(true)}
 					className="inline-flex items-center gap-1.5 rounded-md bg-paper border border-line px-3 py-1.5 text-[13px] text-ink hover:bg-paper-2 transition-colors"
 				>
 					<PlusIcon size={14} />
 					Manual case
 				</button>
 			</div>
+
+			<CreateCaseModal
+				open={createOpen}
+				mailboxId={mailboxId}
+				onOpenChange={setCreateOpen}
+				onCreated={handleCreated}
+			/>
 
 			{/* Filter bar — segmented status tabs. */}
 			<div className="flex items-center gap-1 mb-5 border-b border-line">
