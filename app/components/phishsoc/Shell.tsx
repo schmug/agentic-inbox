@@ -20,7 +20,9 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useDomainStats } from "~/queries/domains";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
+import { useMe } from "~/queries/me";
 import type { DomainMailboxRef, Mailbox } from "~/types";
+import AccountMenu from "./AccountMenu";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
@@ -121,6 +123,9 @@ interface NavContentsProps {
 	onToggleTheme: () => void;
 	onCloseSidebar: () => void;
 	onPipelineClick: () => void;
+	/** Authenticated-user email from `/api/v1/me` (#204). Undefined while
+	 * the query is in flight; AccountMenu handles the loading label. */
+	meEmail: string | undefined;
 	/**
 	 * When the current route is `/domains/:domain`, the active domain plus
 	 * the mailboxes that belong to it (#139). Both fields are gated so other
@@ -148,6 +153,7 @@ function NavContents({
 	onPipelineClick,
 	domain,
 	domainMailboxes,
+	meEmail,
 }: NavContentsProps) {
 	const base = mailboxId ? `/mailbox/${encodeURIComponent(mailboxId)}` : "";
 
@@ -284,11 +290,18 @@ function NavContents({
 				</button>
 			)}
 
-			<div className="border-t border-line px-3 py-2.5 flex items-center justify-end">
+			{/* Auth-aware account menu (#204). The avatar + email row is the
+			    Menu trigger; the popover hosts links to /settings and the
+			    Cloudflare Access sign-out. The theme toggle stays sibling-
+			    visible (right-justified) so it's reachable without opening
+			    the menu — the issue's "Theme toggle remains reachable"
+			    constraint. */}
+			<div className="border-t border-line px-3 py-2 flex items-center gap-1">
+				<AccountMenu email={meEmail} onClose={onCloseSidebar} />
 				<button
 					type="button"
 					onClick={onToggleTheme}
-					className="flex h-7 w-7 items-center justify-center rounded-md text-ink-3 hover:bg-paper-3 hover:text-ink transition-colors"
+					className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-paper-3 hover:text-ink transition-colors"
 					aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
 				>
 					{theme === "dark" ? <SunIcon size={14} /> : <MoonIcon size={14} />}
@@ -324,6 +337,10 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	const { data: mailbox } = useMailbox(mailboxId);
 	const { data: mailboxes } = useMailboxes();
 	const mailboxCount = mailboxes?.length ?? 0;
+	// Authenticated identity for the sidebar account menu (#204). Hoisted
+	// to Shell so the same hook covers both the desktop sidebar render and
+	// the mobile drawer render — only one fetch per page, not two.
+	const { data: me } = useMe();
 
 	const { data: dashboardSummary } = useDashboardSummary(mailboxId);
 	const pipelineState = computePipelineState(dashboardSummary?.pipelineSuccess);
@@ -395,6 +412,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 			}}
 			domain={activeDomain}
 			domainMailboxes={domainStats?.mailboxes}
+			meEmail={me?.email}
 		/>
 	);
 

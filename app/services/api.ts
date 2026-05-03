@@ -112,6 +112,11 @@ const api = {
 	getConfig: () =>
 		get<{ domains: string[]; emailAddresses: string[] }>("/api/v1/config"),
 
+	// Authenticated-user identity (#204). Sourced from the worker's
+	// `/api/v1/me` endpoint, which reads the verified-by-Access
+	// `Cf-Access-Authenticated-User-Email` header.
+	getMe: () => get<{ email: string }>("/api/v1/me"),
+
 	// Mailboxes
 	listMailboxes: () => get<Mailbox[]>("/api/v1/mailboxes"),
 	createMailbox: (email: string, name: string, settings?: unknown) =>
