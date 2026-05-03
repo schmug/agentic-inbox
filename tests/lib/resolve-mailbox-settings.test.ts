@@ -405,7 +405,7 @@ describe("resolveMailboxSettings — security allowlist extend-merge (#149)", ()
 	});
 });
 
-describe("resolveMailboxSettings — security.business_hours per-field merge (#150)", () => {
+describe("resolveMailboxSettings — security.business_hours per-field merge (#150, #164)", () => {
 	const orgFullBH = {
 		timezone: "America/New_York",
 		start_hour: 9,
@@ -465,15 +465,92 @@ describe("resolveMailboxSettings — security.business_hours per-field merge (#1
 		expect(resolved.security.business_hours).toBeUndefined();
 	});
 
-	it("domain-only business_hours (mailbox+org absent) → resolved is undefined (domain tier deferred to follow-up)", async () => {
-		// Pins the spec interpretation: per-field merge applies to mailbox+org
-		// only. The domain tier is intentionally NOT consulted for
-		// business_hours here, even though it participates in the whole-tier
-		// replace for other security sub-fields. Tracked as a follow-up.
+	it("domain-only business_hours (mailbox+org absent) → resolved = domain (#164)", async () => {
+		// Pins the #164 contract: domain participates in the per-field merge
+		// chain. With mailbox + org absent and a full domain block, the
+		// resolved business_hours is the domain block verbatim.
 		const bucket = makeFakeBucket({
 			[DOMAIN_KEY]: { security: { enabled: true, business_hours: orgFullBH } },
 			[MAILBOX_KEY]: {},
 		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual(orgFullBH);
+	});
+
+	it("domain full + mailbox sets only timezone → mailbox timezone wins, other fields from domain (#164)", async () => {
+		// Mailbox > domain per field: mailbox supplies timezone, domain
+		// supplies the four other fields. Org is absent.
+		const domainFullBH = {
+			timezone: "America/Los_Angeles",
+			start_hour: 10,
+			end_hour: 20,
+			weekdays_only: false,
+			boost_on_off_hours: true,
+		};
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: { security: { enabled: true, business_hours: domainFullBH } },
+			[MAILBOX_KEY]: {
+				security: { business_hours: { timezone: "Europe/Berlin" } },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual({
+			timezone: "Europe/Berlin",
+			start_hour: 10,
+			end_hour: 20,
+			weekdays_only: false,
+			boost_on_off_hours: true,
+		});
+	});
+
+	it("domain full + org full + mailbox absent → resolved = domain, org ignored (#164)", async () => {
+		// Domain has every field set, so org is shadowed per field. Mailbox
+		// is absent.
+		const domainFullBH = {
+			timezone: "America/Los_Angeles",
+			start_hour: 10,
+			end_hour: 20,
+			weekdays_only: false,
+			boost_on_off_hours: false,
+		};
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, business_hours: orgFullBH },
+			},
+			[DOMAIN_KEY]: { security: { enabled: true, business_hours: domainFullBH } },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual(domainFullBH);
+	});
+
+	it("org full + domain sets only timezone + mailbox absent → domain timezone wins, other fields from org (#164)", async () => {
+		// Domain partial supplies one field; org fills the rest. Mailbox
+		// absent.
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, business_hours: orgFullBH },
+			},
+			[DOMAIN_KEY]: {
+				security: { business_hours: { timezone: "Europe/Berlin" } },
+			},
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual({
+			timezone: "Europe/Berlin",
+			start_hour: 9,
+			end_hour: 17,
+			weekdays_only: true,
+			boost_on_off_hours: true,
+		});
+	});
+
+	it("all three tiers absent → resolved.security.business_hours is undefined (#164)", async () => {
+		// Stronger restatement of the existing two-tier-absent contract:
+		// even with no domain settings either, business_hours stays
+		// undefined rather than materialising a default block.
+		const bucket = makeFakeBucket({ [MAILBOX_KEY]: {} });
 		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
 		expect(resolved.security.business_hours).toBeUndefined();
 	});
