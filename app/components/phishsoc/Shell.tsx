@@ -292,14 +292,7 @@ function NavContents({
 				</button>
 			)}
 
-			<div className="border-t border-line px-3 py-2.5 flex items-center gap-2">
-				<div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-tint text-accent-ink text-[11px] font-medium">
-					SA
-				</div>
-				<div className="flex-1 min-w-0">
-					<div className="text-[12px] text-ink truncate">SOC analyst</div>
-					<div className="text-[10.5px] text-ink-3 truncate">Preview</div>
-				</div>
+			<div className="border-t border-line px-3 py-2.5 flex items-center justify-end">
 				<button
 					type="button"
 					onClick={onToggleTheme}
