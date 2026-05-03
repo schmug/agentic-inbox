@@ -507,13 +507,34 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						>
 							<BellIcon size={16} />
 						</button>
+						{/* The agent panel only mounts inside `/mailbox/:mailboxId/*`
+						    routes (mailbox.tsx is the only caller passing
+						    `rightPanel={<AgentSidebar />}`). On org-level routes
+						    (`/`, `/settings`, `/mailboxes`, `/domains`,
+						    `/domains/:domain`) clicking the button toggled
+						    internal state but nothing visible happened — silent
+						    no-op (#186). Until an org-scope co-pilot ships
+						    (follow-up #198), gate the trigger on `mailboxId` so
+						    the button only fires where it can do work. We render
+						    `disabled` with a `title` tooltip rather than hiding
+						    so the affordance stays discoverable and the topbar
+						    layout doesn't shift when entering a mailbox. */}
 						<button
 							type="button"
 							onClick={() => toggleAgentPanel()}
-							aria-expanded={isAgentPanelOpen}
+							disabled={!mailboxId}
+							aria-disabled={!mailboxId}
+							title={
+								mailboxId
+									? undefined
+									: "Pick a mailbox to chat with the agent"
+							}
+							aria-expanded={mailboxId ? isAgentPanelOpen : undefined}
 							aria-controls="agent-panel"
 							className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
-								isAgentPanelOpen
+								!mailboxId
+									? "bg-paper-2 text-ink-3 border-line cursor-not-allowed opacity-60"
+									: isAgentPanelOpen
 									? "bg-accent text-paper border-accent hover:bg-[color-mix(in_oklch,var(--accent)_85%,black)]"
 									: "bg-accent-tint text-accent border-[color-mix(in_oklch,var(--accent)_25%,transparent)] hover:bg-[color-mix(in_oklch,var(--accent-tint)_70%,var(--paper))]"
 							}`}
@@ -521,7 +542,13 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 							<SparkleIcon
 								size={13}
 								weight="fill"
-								className={isAgentPanelOpen ? "text-paper" : "text-accent"}
+								className={
+									!mailboxId
+										? "text-ink-3"
+										: isAgentPanelOpen
+										? "text-paper"
+										: "text-accent"
+								}
 							/>
 							Ask co-pilot
 						</button>
