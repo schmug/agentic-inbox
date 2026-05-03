@@ -455,6 +455,15 @@ export interface SpfPostureView {
 	exceedsLimit: boolean | null;
 }
 
+/** TLS-RPT posture (#168). `configured=null` is "lookup unavailable",
+ * `configured=false` is "no `v=TLSRPTv1` record at `_smtp._tls.<domain>`".
+ * `endpoints` is the parsed `rua=` URI list (mailto: / https:); empty list
+ * when the record exists but carries no endpoint. */
+export interface TlsRptPostureView {
+	configured: boolean | null;
+	endpoints: readonly string[] | null;
+}
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -487,6 +496,9 @@ export interface DomainStats {
 	/** SPF posture (#167). All-null when the upstream lookup failed; the
 	 * bounded include-chain resolver caps DoH calls at MAX_LOOKUPS. */
 	spfPosture: SpfPostureView;
+	/** TLS-RPT posture (#168). `configured: null` when the upstream lookup
+	 * failed; `configured: false` when no `v=TLSRPTv1` record is published. */
+	tlsRptPosture: TlsRptPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -547,6 +559,13 @@ export function emptySpfPostureView(): SpfPostureView {
 		totalLookups: null,
 		exceedsLimit: null,
 	};
+}
+
+/** Empty TLS-RPT posture sentinel — `configured=null` distinguishes
+ * "lookup unavailable" from a `configured=false` "no record published"
+ * result. Mirrors the BIMI sentinel shape. */
+export function emptyTlsRptPostureView(): TlsRptPostureView {
+	return { configured: null, endpoints: null };
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -683,6 +702,11 @@ interface AggregateDomainStatsInput {
 	 * include-chain resolver. Omitted defaults to the all-null sentinel.
 	 */
 	spfPosture?: SpfPostureView;
+	/**
+	 * TLS-RPT posture (#168) from the `_smtp._tls.<domain>` DoH lookup.
+	 * Omitted defaults to the all-null sentinel.
+	 */
+	tlsRptPosture?: TlsRptPostureView;
 }
 
 /**
@@ -743,6 +767,7 @@ export function aggregateDomainStats(
 		mtaStsPosture: input.mtaStsPosture ?? emptyMtaStsPostureView(),
 		bimiPosture: input.bimiPosture ?? emptyBimiPostureView(),
 		spfPosture: input.spfPosture ?? emptySpfPostureView(),
+		tlsRptPosture: input.tlsRptPosture ?? emptyTlsRptPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }

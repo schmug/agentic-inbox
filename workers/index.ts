@@ -57,6 +57,7 @@ import { emptyDmarcTxtPosture, fetchDmarcTxtPosture } from "./dmarc/txt";
 import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
 import { emptyBimiPosture, fetchBimiPosture } from "./bimi/posture";
 import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
+import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -317,6 +318,9 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const spfPromise = fetchSpfPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
+	const tlsRptPromise = fetchTlsRptPosture(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
 
 	const [
 		settledSummaries,
@@ -325,6 +329,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		settledMtaSts,
 		settledBimi,
 		settledSpf,
+		settledTlsRpt,
 	] = await Promise.all([
 		Promise.allSettled(summaryPromises),
 		Promise.allSettled(alignmentPromises),
@@ -332,6 +337,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		Promise.allSettled([mtaStsPromise]),
 		Promise.allSettled([bimiPromise]),
 		Promise.allSettled([spfPromise]),
+		Promise.allSettled([tlsRptPromise]),
 	]);
 
 	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
@@ -381,6 +387,11 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			? settledSpf[0].value
 			: emptySpfPosture();
 
+	const tlsRptPosture =
+		settledTlsRpt[0].status === "fulfilled"
+			? settledTlsRpt[0].value
+			: emptyTlsRptPosture();
+
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,
 		email: m.email,
@@ -395,6 +406,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		mtaStsPosture,
 		bimiPosture,
 		spfPosture,
+		tlsRptPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type
