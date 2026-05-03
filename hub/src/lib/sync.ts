@@ -248,8 +248,23 @@ async function finishWithError(env: Env, peer: InboundPeerRow, message: string):
 	return { events_pulled: 0, events_skipped: 0, events_filtered: 0, error: message };
 }
 
+/**
+ * Stable name for this cron in `cron_runs`. /admin/stats reads the same
+ * key — change them together.
+ */
+export const INBOUND_SYNC_CRON_NAME = "inbound_sync";
+
 /** Cron entry — iterate eligible peers, pull each. */
 export async function runInboundSync(env: Env): Promise<void> {
+	// Stamp the run watermark FIRST, before the peer SELECT or any pull —
+	// so an iteration that hangs (slow SELECT, wedged pullFromPeer) is still
+	// observable from /admin/stats. Writing only on success would mask the
+	// exact failure the cron-health card exists to surface.
+	await env.DB
+		.prepare(`INSERT OR REPLACE INTO cron_runs (name, last_run_at) VALUES (?1, ?2)`)
+		.bind(INBOUND_SYNC_CRON_NAME, Date.now())
+		.run();
+
 	const now = new Date().toISOString();
 	const rows = await env.DB
 		.prepare(
