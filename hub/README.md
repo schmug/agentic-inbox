@@ -34,6 +34,15 @@ Header is either `Authorization: <key>` (MISP convention) or `Authorization: Bea
 
 Tune the thresholds in `aggregate.ts`. Manual trust adjustments on `orgs.trust` let you amplify or dampen specific contributors.
 
+### Own-org echo on `destroylist.txt`
+
+The `score ≥ 2.0 AND contributor_count ≥ 2` rule is the standard for *other* orgs' contributions. On a given org's own pull, the hub also echoes that org's own contributions immediately, regardless of `contributor_count`. Concretely, when org A pulls `/feeds/destroylist.txt`, the response is:
+
+- every entry that meets the standard cross-org threshold (visible to every caller — sybil resistance preserved), **plus**
+- every entry where org A is itself a contributor for the relevant `(sharing_group_uuid, attribute_type, value)` row, even if A is the only contributor.
+
+This means sibling mailboxes inside the same org get pre-block coverage from work another mailbox in the org already did, and a fresh single-org deployment can verify the report → publish loop end-to-end without waiting for an unrelated org to corroborate. The asymmetry only fires for the calling org — org B never sees A's solo entries.
+
 ## Agent triage
 
 `hub/src/agent/triage.ts` is a Queue consumer that runs Workers AI against each new event to propose MISP taxonomy tags. **LLM output never affects scoring** — tags are the only mutation the triage agent makes. This is a deliberate invariant: attacker-crafted content is in its input, so anything it returns has to be non-load-bearing.
@@ -107,6 +116,8 @@ curl -X POST https://your-hub.example/admin/peers \
 ### Promotion semantics
 
 Pulled-only intel does **not** solo-promote to the destroylist. The synthetic peer org counts as one contributor; promotion still requires `PROMOTION_CONTRIBUTORS = 2`. CIRCL's IoCs only land on the destroylist after at least one local org independently reports the same value. This is intentional sybil resistance — a compromised upstream cannot single-handedly push entries into your published feed. To boost a trusted peer's intel faster, raise its `default_trust` so it contributes more score per corroboration.
+
+The own-org echo described under [Trust-weighted aggregation](#trust-weighted-aggregation) does **not** apply to synthetic peer orgs: the destroylist route authenticates with mailbox API keys, peer orgs have no API key and are never the caller, so a peer's solo contributions never qualify under the own-org branch on any human caller's pull.
 
 For local-org reports to count as corroboration of pulled intel, they must be posted to the same sharing group configured as `default_sharing_group_uuid` on the peer. Corroboration rows are keyed on `(sharing_group_uuid, attribute_type, value)`, so reports landing in a different group (or `NULL`) form a separate row and never combine.
 

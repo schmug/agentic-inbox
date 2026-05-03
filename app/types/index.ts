@@ -278,6 +278,15 @@ export interface SpfPosture {
 	exceedsLimit: boolean | null;
 }
 
+/** TLS-RPT posture (#168). `configured=null` is "lookup unavailable",
+ * `configured=false` is "no `v=TLSRPTv1` record at `_smtp._tls.<domain>`".
+ * `endpoints` is the parsed `rua=` URI list (mailto: / https:); empty list
+ * when the record exists but carries no endpoint. */
+export interface TlsRptPosture {
+	configured: boolean | null;
+	endpoints: readonly string[] | null;
+}
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -307,6 +316,7 @@ export interface DomainStats {
 	mtaStsPosture: MtaStsPosture;
 	bimiPosture: BimiPosture;
 	spfPosture: SpfPosture;
+	tlsRptPosture: TlsRptPosture;
 	recentCases: DashboardCase[];
 }
 

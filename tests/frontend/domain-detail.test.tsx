@@ -87,6 +87,10 @@ const populated: DomainStats = {
 		totalLookups: null,
 		exceedsLimit: null,
 	},
+	tlsRptPosture: {
+		configured: null,
+		endpoints: null,
+	},
 	recentCases: [
 		{
 			id: "C1",
