@@ -403,7 +403,15 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const key = `mailboxes/${email}.json`;
 	if (await c.env.BUCKET.head(key)) return c.json({ error: "Mailbox already exists" }, 409);
 	const defaultSettings = { fromName: name, forwarding: { enabled: false, email: "" }, signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" } };
-	const finalSettings = { ...defaultSettings, ...settings };
+	// #106 acceptance criterion 6 applies on create too: a fresh mailbox
+	// whose initial PUT-payload includes the rendered form defaults
+	// (`agentModel: "@cf/moonshotai/kimi-k2.5"`, `autoDraft: { enabled: true }`)
+	// must NOT silently shadow every org-level value on the very first
+	// write. defaultSettings (per-mailbox identity fields) is layered AFTER
+	// the strip so fromName/signature/forwarding/autoReply still get
+	// materialised — those are strictly per-mailbox (audit Q8).
+	const cleanedSettings = stripDefaultEqual((settings ?? {}) as MailboxSettings);
+	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email));
 	await stub.getFolders();

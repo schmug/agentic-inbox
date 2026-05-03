@@ -325,6 +325,32 @@ describe("stripDefaultEqual", () => {
 			text: "Cheers",
 		});
 	});
+
+	it("composes correctly with the POST /api/v1/mailboxes default-settings layer", () => {
+		// Simulates the create-mailbox handler in workers/index.ts: a fresh
+		// mailbox PUT-payload that includes the rendered form defaults must
+		// drop the inheritable defaults but keep the per-mailbox-only
+		// identity fields (audit Q8).
+		const incomingFromUI = {
+			agentModel: DEFAULT_MAILBOX_SETTINGS.agentModel,
+			autoDraft: DEFAULT_MAILBOX_SETTINGS.autoDraft,
+			agentSystemPrompt: "stay polite",
+		};
+		const cleaned = stripDefaultEqual(incomingFromUI);
+		const perMailboxIdentity = {
+			fromName: "Daisy",
+			signature: { enabled: false, text: "" },
+		};
+		const finalSettings = { ...perMailboxIdentity, ...cleaned };
+		// agentModel + autoDraft were defaults → dropped → mailbox now
+		// inherits whatever the org tier sets later.
+		expect((finalSettings as Record<string, unknown>).agentModel).toBeUndefined();
+		expect((finalSettings as Record<string, unknown>).autoDraft).toBeUndefined();
+		// Custom prompt survives.
+		expect((finalSettings as Record<string, unknown>).agentSystemPrompt).toBe("stay polite");
+		// Per-mailbox identity untouched.
+		expect((finalSettings as Record<string, unknown>).fromName).toBe("Daisy");
+	});
 });
 
 describe("getMailboxSettings — raw read still works post-#106", () => {
