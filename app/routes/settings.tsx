@@ -32,15 +32,18 @@ interface OrgSettingsShape {
 	intel?: { hub?: HubConfigSettings };
 }
 
-/** Pill rendered next to a per-mailbox field. The "Inherited from org"
- *  variant doubles as a click target — the user has to type / toggle to
- *  promote the field to an override, which matches the resolver contract
- *  ("absent = inherit from one layer up"). */
+/** Pill rendered next to a per-mailbox field. Wrapped in a span carrying
+ *  the data-testid because Kumo's Badge doesn't forward arbitrary props
+ *  to its rendered element. */
 function InheritanceBadge({ inherited }: { inherited: boolean }) {
-	return inherited ? (
-		<Badge variant="secondary" data-testid="inherited-badge">Inherited from org</Badge>
-	) : (
-		<Badge variant="primary" data-testid="override-badge">Override</Badge>
+	return (
+		<span data-testid={inherited ? "inherited-badge" : "override-badge"}>
+			{inherited ? (
+				<Badge variant="secondary">Inherited from org</Badge>
+			) : (
+				<Badge variant="primary">Override</Badge>
+			)}
+		</span>
 	);
 }
 
