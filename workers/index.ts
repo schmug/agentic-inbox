@@ -37,6 +37,9 @@ import {
 	computeP95,
 	domainOf,
 	pipelineSuccessRate,
+	reduceDmarcAlignmentRate,
+	type DmarcAlignmentTotals,
+	type DmarcPosture,
 	type DomainListEntry,
 	type DomainMailboxRef,
 	type DomainMailboxSummary,
@@ -44,6 +47,7 @@ import {
 	type OrgMailboxSummary,
 	type OrgOverview,
 } from "./lib/dashboard-aggregation";
+import { emptyDmarcTxtPosture, fetchDmarcTxtPosture } from "./dmarc/txt";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -201,6 +205,10 @@ app.get("/api/v1/org/overview", async (c) => {
 const DOMAINS_LIST_CACHE_KEY = "domains:v1";
 const DOMAIN_STATS_CACHE_KEY_PREFIX = "domain-stats:v1:";
 const DOMAIN_CACHE_TTL_S = 60;
+/** Window for the apex-domain DMARC alignment-rate reducer (#138). 7 days
+ * matches the rest of the dashboard's "recent" framing without going so far
+ * back that a stale forwarder-fail spike from last month skews the rate. */
+const DMARC_ALIGNMENT_WINDOW_DAYS = 7;
 
 /**
  * Hostname-shape regex. Mirrors RFC 1035 / 5890 lite: at least two labels,
@@ -270,14 +278,35 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		return c.json({ error: "Domain not found" }, 404);
 	}
 
-	const settled = await Promise.allSettled(
-		scoped.map((m) =>
-			c.env.MAILBOX
-				.get(c.env.MAILBOX.idFromName(m.id))
-				.getDashboardSummary(),
-		),
+	// Apex-domain DMARC posture (#138). The TXT lookup over DoH and the
+	// per-mailbox alignment-rate fan-out run as siblings of the dashboard
+	// summary fan-out — wrapping all three in the same Promise.allSettled
+	// keeps a slow upstream off the critical path. Any sibling rejecting
+	// degrades to null fields rather than failing the response.
+	const nowMs = Date.now();
+	const alignmentSinceIso = new Date(
+		nowMs - DMARC_ALIGNMENT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+	).toISOString();
+
+	const summaryPromises = scoped.map((m) =>
+		c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id)).getDashboardSummary(),
 	);
-	const summaries: Array<DomainMailboxSummary | null> = settled.map((r) => {
+	const alignmentPromises = scoped.map((m) =>
+		c.env.MAILBOX
+			.get(c.env.MAILBOX.idFromName(m.id))
+			.getDmarcAlignmentTotals(domain, alignmentSinceIso),
+	);
+	const txtPromise = fetchDmarcTxtPosture(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
+
+	const [settledSummaries, settledAlignments, settledTxt] = await Promise.all([
+		Promise.allSettled(summaryPromises),
+		Promise.allSettled(alignmentPromises),
+		Promise.allSettled([txtPromise]),
+	]);
+
+	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
 		if (r.status !== "fulfilled") {
 			console.error("domain-stats: mailbox summary failed:", (r.reason as Error)?.message);
 			return null;
@@ -285,6 +314,29 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		const v = r.value as DomainMailboxSummary;
 		return { ...v, threatsBlocked7d: v.threatsBlocked7d ?? 0 };
 	});
+
+	const alignmentTotals: Array<DmarcAlignmentTotals | null> = settledAlignments.map(
+		(r) => {
+			if (r.status !== "fulfilled") {
+				console.error(
+					"domain-stats: alignment-totals failed:",
+					(r.reason as Error)?.message,
+				);
+				return null;
+			}
+			return r.value as DmarcAlignmentTotals;
+		},
+	);
+
+	const txtPosture =
+		settledTxt[0].status === "fulfilled"
+			? settledTxt[0].value
+			: emptyDmarcTxtPosture();
+
+	const dmarcPosture: DmarcPosture = {
+		...txtPosture,
+		alignmentRate: reduceDmarcAlignmentRate(alignmentTotals),
+	};
 
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,
@@ -296,6 +348,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		domain,
 		mailboxes: mailboxRefs,
 		summaries,
+		dmarcPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type
