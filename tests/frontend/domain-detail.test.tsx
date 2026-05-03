@@ -107,13 +107,19 @@ describe("DomainDetailRoute", () => {
 		// Open cases = 5.
 		expect(screen.getByText("5")).toBeInTheDocument();
 
-		// Each mailbox links to its per-mailbox dashboard.
-		const aliceLink = screen.getByRole("link", { name: /alice@acme.com/i });
+		// Each mailbox links to its per-mailbox dashboard. Scope to the main
+		// content region — the domain-scoped sidebar nav (#139) also renders
+		// links to the same mailboxes, so the unscoped query would now match
+		// twice.
+		const main = screen.getByRole("main");
+		const aliceLink = within(main).getByRole("link", {
+			name: /alice@acme.com/i,
+		});
 		expect(aliceLink).toHaveAttribute(
 			"href",
 			"/mailbox/alice%40acme.com/dashboard",
 		);
-		const bobLink = screen.getByRole("link", { name: /bob@acme.com/i });
+		const bobLink = within(main).getByRole("link", { name: /bob@acme.com/i });
 		expect(bobLink).toHaveAttribute(
 			"href",
 			"/mailbox/bob%40acme.com/dashboard",

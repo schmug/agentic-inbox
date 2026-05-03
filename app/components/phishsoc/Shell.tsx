@@ -17,10 +17,12 @@ import {
 	XIcon,
 } from "@phosphor-icons/react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { NavLink, useLocation, useNavigate, useParams } from "react-router";
+import { NavLink, useLocation, useMatch, useNavigate, useParams } from "react-router";
 import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
+import { useDomainStats } from "~/queries/domains";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
+import type { DomainMailboxRef } from "~/types";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
@@ -118,6 +120,16 @@ interface NavContentsProps {
 	onToggleTheme: () => void;
 	onSwitchOrg: () => void;
 	onPipelineClick: () => void;
+	/**
+	 * When the current route is `/domains/:domain`, the active domain plus
+	 * the mailboxes that belong to it (#139). Both fields are gated so other
+	 * routes never pay the network cost: `domain` is `undefined` off-route,
+	 * and `domainMailboxes` is `undefined` while the query is pending so the
+	 * sidebar can fall back to the org-level nav instead of flashing an
+	 * empty list.
+	 */
+	domain: string | undefined;
+	domainMailboxes: DomainMailboxRef[] | undefined;
 }
 
 // Shared sidebar contents — rendered inline on `md+` and inside the mobile
@@ -132,6 +144,8 @@ function NavContents({
 	onToggleTheme,
 	onSwitchOrg,
 	onPipelineClick,
+	domain,
+	domainMailboxes,
 }: NavContentsProps) {
 	const orgDomain = mailbox?.email?.split("@")[1] ?? "—";
 	const orgInitial = (mailbox?.name || mailbox?.email || "?")[0]?.toUpperCase();
@@ -214,6 +228,24 @@ function NavContents({
 							icon={<GearSixIcon size={16} />}
 							label="Settings"
 						/>
+					</>
+				)}
+				{/* Domain-scoped block (#139): on `/domains/:domain` surface the
+				    mailboxes that belong to the domain, mirroring the
+				    mailbox-scoped block above. Only render once the query has
+				    resolved — while pending we fall through to the org-level
+				    nav rather than flashing an empty list or "undefined". */}
+				{domain && domainMailboxes && domainMailboxes.length > 0 && (
+					<>
+						<SectionLabel>Mailboxes in {domain}</SectionLabel>
+						{domainMailboxes.map((mb) => (
+							<NavItem
+								key={mb.id}
+								to={`/mailbox/${encodeURIComponent(mb.id)}/dashboard`}
+								icon={<EnvelopeIcon size={16} />}
+								label={mb.email || mb.name || mb.id}
+							/>
+						))}
 					</>
 				)}
 			</nav>
@@ -301,6 +333,17 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	const { data: dashboardSummary } = useDashboardSummary(mailboxId);
 	const pipelineState = computePipelineState(dashboardSummary?.pipelineSuccess);
 
+	// `/domains/:domain` (#139). Use a route match rather than `useParams`
+	// because Shell can be rendered from either the per-domain route or the
+	// per-mailbox route; only the former should pull domain stats. The
+	// `useDomainStats` hook is `enabled: !!domain` internally, so passing
+	// `undefined` off-route is the gate that keeps other pages from paying
+	// the network cost.
+	const domainMatch = useMatch("/domains/:domain");
+	const rawDomain = domainMatch?.params.domain;
+	const activeDomain = rawDomain ? decodeURIComponent(rawDomain) : undefined;
+	const { data: domainStats } = useDomainStats(activeDomain);
+
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const [searchQuery, setSearchQuery] = useState("");
 
@@ -357,6 +400,8 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 				closeSidebar();
 				navigate(`/mailbox/${encodeURIComponent(mailboxId)}/dashboard`);
 			}}
+			domain={activeDomain}
+			domainMailboxes={domainStats?.mailboxes}
 		/>
 	);
 
