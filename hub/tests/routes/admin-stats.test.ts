@@ -112,6 +112,13 @@ describe("GET /admin/stats — happy path with seeded fixtures", () => {
 		insertCorr.run("sg-pub", "domain", "weak.example", 1.0, 1);
 		insertCorr.run("sg-empty", "domain", "lonely.example", 0.5, 1);
 
+		// Cron heartbeat row — what /admin/stats now reads for cron.last_run_at.
+		// (Independent of the per-peer last_pulled_ts seeded below — that's
+		// the property of this fix: a cron heartbeat that doesn't depend on
+		// any peer succeeding.)
+		const cronAt = Date.now() - 30_000;
+		db.raw.prepare(`INSERT INTO cron_runs (name, last_run_at) VALUES (?, ?)`).run("inbound_sync", cronAt);
+
 		// Inbound peer, last pulled ~now, plus one "pulled in last 24h" event.
 		const lastPulled = new Date(Date.now() - 60_000).toISOString();
 		db.raw.prepare(`INSERT INTO peers (uuid, name) VALUES (?, ?)`).run("peer-1", "CIRCL");
@@ -133,7 +140,7 @@ describe("GET /admin/stats — happy path with seeded fixtures", () => {
 			destroylist: { by_sharing_group: Array<{ uuid: string; name: string; size: number }> };
 			peers: Array<{ name: string; last_pulled_at: string | null; last_error: string | null; events_pulled_24h: number }>;
 			triage: { events_with_tags_pct_24h: number; untagged_older_than_15m: number };
-			cron: { last_run_at: string | null };
+			cron: { last_run_at: number | null };
 		};
 
 		expect(body.orgs.total).toBe(2);
@@ -168,6 +175,55 @@ describe("GET /admin/stats — happy path with seeded fixtures", () => {
 		// is too new, ev-stale is outside the 24h date window. So count = 1.
 		expect(body.triage.untagged_older_than_15m).toBe(1);
 
-		expect(body.cron.last_run_at).toBe(lastPulled);
+		expect(body.cron.last_run_at).toBe(cronAt);
+	});
+});
+
+describe("GET /admin/stats — cron.last_run_at", () => {
+	it("returns null when cron_runs is empty (cron has never fired)", async () => {
+		const res = await appReq("/stats", { headers: adminAuth });
+		expect(res.status).toBe(200);
+		const body = await res.json() as { cron: { last_run_at: number | null } };
+		expect(body.cron.last_run_at).toBeNull();
+	});
+
+	it("returns the cron_runs row's epoch-ms timestamp when present", async () => {
+		const stamped = 1_700_000_000_000;
+		db.raw.prepare(`INSERT INTO cron_runs (name, last_run_at) VALUES (?, ?)`).run("inbound_sync", stamped);
+		const res = await appReq("/stats", { headers: adminAuth });
+		expect(res.status).toBe(200);
+		const body = await res.json() as { cron: { last_run_at: number | null } };
+		expect(body.cron.last_run_at).toBe(stamped);
+	});
+
+	it("ignores rows for other cron names", async () => {
+		// Defensive: future crons may also stamp this table; /admin/stats
+		// must return only the inbound_sync watermark.
+		db.raw.prepare(`INSERT INTO cron_runs (name, last_run_at) VALUES (?, ?)`).run("some_other_cron", 1_800_000_000_000);
+		const res = await appReq("/stats", { headers: adminAuth });
+		expect(res.status).toBe(200);
+		const body = await res.json() as { cron: { last_run_at: number | null } };
+		expect(body.cron.last_run_at).toBeNull();
+	});
+
+	it("does NOT fall back to inbound_peers.last_pulled_ts when cron_runs is empty", async () => {
+		// Regression guard for the bug this issue fixes: if every peer is
+		// failing, the proxy advanced cron.last_run_at via a healthy peer's
+		// watermark. With cron_runs as the source of truth, an empty table
+		// returns null even if peers have pulled — the cron heartbeat is
+		// independent of peer health.
+		db.raw.prepare(`INSERT INTO peers (uuid, name) VALUES (?, ?)`).run("p", "P");
+		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`).run("o", "O", 1.0);
+		db.raw.prepare(`INSERT INTO sharing_groups (uuid, name) VALUES (?, ?)`).run("sg", "sg");
+		db.raw.prepare(
+			`INSERT INTO inbound_peers (uuid, peer_uuid, base_url, api_key_secret_name,
+			   synthetic_org_uuid, default_sharing_group_uuid, last_pulled_ts)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("ib", "p", "https://x", "K", "o", "sg", new Date().toISOString());
+
+		const res = await appReq("/stats", { headers: adminAuth });
+		expect(res.status).toBe(200);
+		const body = await res.json() as { cron: { last_run_at: number | null } };
+		expect(body.cron.last_run_at).toBeNull();
 	});
 });

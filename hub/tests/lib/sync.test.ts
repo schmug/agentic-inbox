@@ -212,4 +212,41 @@ describe("runInboundSync", () => {
 		await runInboundSync(env);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
+
+	it("stamps cron_runs.inbound_sync at the start of every fire (even when no peer is eligible)", async () => {
+		// Disable the only peer so the loop is a no-op — the heartbeat
+		// must still be written. This is the contract that lets
+		// /admin/stats observe a hung iteration: the row is written
+		// before any work that could hang.
+		db.raw.prepare(`UPDATE inbound_peers SET enabled = 0 WHERE uuid = 'ib-1'`).run();
+		const before = Date.now();
+		await runInboundSync(env);
+		const after = Date.now();
+
+		const row = db.raw
+			.prepare(`SELECT last_run_at FROM cron_runs WHERE name = ?`)
+			.get("inbound_sync") as { last_run_at: number } | undefined;
+		expect(row).toBeDefined();
+		expect(row!.last_run_at).toBeGreaterThanOrEqual(before);
+		expect(row!.last_run_at).toBeLessThanOrEqual(after);
+	});
+
+	it("INSERT OR REPLACE: subsequent fires overwrite the prior row", async () => {
+		db.raw.prepare(`UPDATE inbound_peers SET enabled = 0 WHERE uuid = 'ib-1'`).run();
+		await runInboundSync(env);
+		const first = (db.raw
+			.prepare(`SELECT last_run_at FROM cron_runs WHERE name = ?`)
+			.get("inbound_sync") as { last_run_at: number }).last_run_at;
+		// Force a measurable delta so the assertion is robust on fast machines.
+		await new Promise((r) => setTimeout(r, 5));
+		await runInboundSync(env);
+		const rows = db.raw
+			.prepare(`SELECT COUNT(*) AS n FROM cron_runs WHERE name = ?`)
+			.get("inbound_sync") as { n: number };
+		expect(rows.n).toBe(1);
+		const second = (db.raw
+			.prepare(`SELECT last_run_at FROM cron_runs WHERE name = ?`)
+			.get("inbound_sync") as { last_run_at: number }).last_run_at;
+		expect(second).toBeGreaterThanOrEqual(first);
+	});
 });
