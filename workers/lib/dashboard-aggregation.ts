@@ -442,6 +442,19 @@ export interface BimiPostureView {
 	hasVmc: boolean | null;
 }
 
+/** SPF posture (#167) — apex `<domain>` TXT plus the bounded include-chain
+ * resolution count. `exceedsLimit: true` means the record fails permerror
+ * per RFC 7208 §4.6.4. All fields nullable; null fields mean "lookup
+ * unavailable / no record / parse failure". */
+export interface SpfPostureView {
+	record: string | null;
+	allQualifier: "-" | "~" | "?" | "+" | null;
+	mechanismCount: number | null;
+	includes: number | null;
+	totalLookups: number | null;
+	exceedsLimit: boolean | null;
+}
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -471,6 +484,9 @@ export interface DomainStats {
 	/** BIMI posture (#166). All-null when the upstream lookup failed; a
 	 * `configured: false` posture means "no `v=BIMI1` record published". */
 	bimiPosture: BimiPostureView;
+	/** SPF posture (#167). All-null when the upstream lookup failed; the
+	 * bounded include-chain resolver caps DoH calls at MAX_LOOKUPS. */
+	spfPosture: SpfPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -519,6 +535,18 @@ export function emptyMtaStsPostureView(): MtaStsPostureView {
  * unavailable" from a `configured=false` "no record published" result. */
 export function emptyBimiPostureView(): BimiPostureView {
 	return { configured: null, hasLogo: null, hasVmc: null };
+}
+
+/** Empty SPF posture sentinel — every field null, rendered as "unavailable". */
+export function emptySpfPostureView(): SpfPostureView {
+	return {
+		record: null,
+		allQualifier: null,
+		mechanismCount: null,
+		includes: null,
+		totalLookups: null,
+		exceedsLimit: null,
+	};
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -650,6 +678,11 @@ interface AggregateDomainStatsInput {
 	 * Omitted defaults to the all-null sentinel.
 	 */
 	bimiPosture?: BimiPostureView;
+	/**
+	 * SPF posture (#167) from the apex `<domain>` TXT lookup + bounded
+	 * include-chain resolver. Omitted defaults to the all-null sentinel.
+	 */
+	spfPosture?: SpfPostureView;
 }
 
 /**
@@ -709,6 +742,7 @@ export function aggregateDomainStats(
 		dmarcPosture: input.dmarcPosture ?? emptyDmarcPosture(),
 		mtaStsPosture: input.mtaStsPosture ?? emptyMtaStsPostureView(),
 		bimiPosture: input.bimiPosture ?? emptyBimiPostureView(),
+		spfPosture: input.spfPosture ?? emptySpfPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }

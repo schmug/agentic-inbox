@@ -185,6 +185,7 @@ The per-domain page (`/domains/:domain`) surfaces published email-auth posture a
 - DMARC apex policy + alignment rate.
 - **MTA-STS** mode/mx/max_age (`_mta-sts.<domain>` TXT + `https://mta-sts.<domain>/.well-known/mta-sts.txt`, cached in KV by policy `id` so a roll auto-invalidates).
 - **BIMI** record presence (`default._bimi.<domain>` TXT — surfaces "configured / configured-with-VMC / not configured / unavailable"; does NOT fetch the SVG logo or VMC certificate).
+- **SPF** posture (`<domain>` TXT for `v=spf1 …` — surfaces mechanism count, `all` qualifier, include count, and a bounded include-chain resolver that flags records exceeding RFC 7208 §4.6.4's 10-DNS-lookup ceiling).
 
 ## Architecture
 

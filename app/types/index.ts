@@ -267,6 +267,17 @@ export interface BimiPosture {
 	hasVmc: boolean | null;
 }
 
+/** SPF posture (#167). All-null fields render the "unavailable" affordance.
+ * `exceedsLimit: true` means the record fails permerror per RFC 7208 §4.6.4. */
+export interface SpfPosture {
+	record: string | null;
+	allQualifier: "-" | "~" | "?" | "+" | null;
+	mechanismCount: number | null;
+	includes: number | null;
+	totalLookups: number | null;
+	exceedsLimit: boolean | null;
+}
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -295,6 +306,7 @@ export interface DomainStats {
 	dmarcPosture: DmarcPosture;
 	mtaStsPosture: MtaStsPosture;
 	bimiPosture: BimiPosture;
+	spfPosture: SpfPosture;
 	recentCases: DashboardCase[];
 }
 

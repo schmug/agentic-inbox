@@ -56,6 +56,7 @@ import {
 import { emptyDmarcTxtPosture, fetchDmarcTxtPosture } from "./dmarc/txt";
 import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
 import { emptyBimiPosture, fetchBimiPosture } from "./bimi/posture";
+import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -313,6 +314,9 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const bimiPromise = fetchBimiPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
+	const spfPromise = fetchSpfPosture(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
 
 	const [
 		settledSummaries,
@@ -320,12 +324,14 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		settledTxt,
 		settledMtaSts,
 		settledBimi,
+		settledSpf,
 	] = await Promise.all([
 		Promise.allSettled(summaryPromises),
 		Promise.allSettled(alignmentPromises),
 		Promise.allSettled([txtPromise]),
 		Promise.allSettled([mtaStsPromise]),
 		Promise.allSettled([bimiPromise]),
+		Promise.allSettled([spfPromise]),
 	]);
 
 	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
@@ -370,6 +376,11 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			? settledBimi[0].value
 			: emptyBimiPosture();
 
+	const spfPosture =
+		settledSpf[0].status === "fulfilled"
+			? settledSpf[0].value
+			: emptySpfPosture();
+
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,
 		email: m.email,
@@ -383,6 +394,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		dmarcPosture,
 		mtaStsPosture,
 		bimiPosture,
+		spfPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type
