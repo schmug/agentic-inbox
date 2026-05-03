@@ -46,8 +46,7 @@ async function withHubClient<T>(
 ): Promise<ConfiguredResponse<T> | UnconfiguredResponse> {
 	if (!mailboxId) return { configured: false };
 	const creds = await loadHubCredentials(
-		c.env as unknown as Record<string, unknown>,
-		c.env.BUCKET,
+		c.env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
 		mailboxId,
 	);
 	if (!creds) return { configured: false };
@@ -105,8 +104,7 @@ hubUiRoutes.post("/invites", async (c) => {
 	const mailboxId = c.req.param("mailboxId");
 	if (!mailboxId) return c.json({ error: "missing mailboxId" }, 400);
 	const creds = await loadHubCredentials(
-		c.env as unknown as Record<string, unknown>,
-		c.env.BUCKET,
+		c.env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
 		mailboxId,
 	);
 	if (!creds) return c.json({ error: "hub not configured" }, 412);

@@ -1,12 +1,15 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
 /**
- * Per-mailbox MISP-compatible hub configuration. Stored under `intel.hub` in
- * `mailboxes/<mailboxId>.json` (R2). The API key itself is NOT stored in R2 —
- * the JSON only carries the secret *name* via `api_key_secret_name`, and the
- * worker resolves it from `c.env` at call time. That way an org can rotate
- * its key without rewriting mailbox JSON.
+ * MISP-compatible threat-intel hub configuration. Resolved through the
+ * inheritance hierarchy from #106 (mailbox > org > system default), so an
+ * org-level hub config takes effect for every mailbox that doesn't carry
+ * its own. The API key itself is NOT stored in R2 — the JSON only carries
+ * the secret *name* via `api_key_secret_name`, and the worker resolves it
+ * from `c.env` at call time so an org can rotate without rewriting blobs.
  */
+
+import { resolveMailboxSettings } from "./mailbox-settings";
 
 export interface HubConfig {
 	url: string;
@@ -16,17 +19,18 @@ export interface HubConfig {
 	auto_report?: boolean;
 }
 
-/** Returns the hub config for a mailbox, or null when none is set. */
+interface BucketEnv {
+	BUCKET: R2Bucket;
+}
+
+/** Returns the resolved hub config for a mailbox, or null when neither
+ *  tier supplies a complete one. */
 export async function loadHubConfig(
-	bucket: R2Bucket,
+	env: BucketEnv,
 	mailboxId: string,
 ): Promise<HubConfig | null> {
-	const obj = await bucket.get(`mailboxes/${mailboxId}.json`);
-	if (!obj) return null;
-	const json = (await obj.json().catch(() => null)) as
-		| { intel?: { hub?: unknown } }
-		| null;
-	const raw = json?.intel?.hub;
+	const resolved = await resolveMailboxSettings(env, mailboxId);
+	const raw = resolved.intel.hub;
 	if (!raw || typeof raw !== "object") return null;
 	const cfg = raw as Partial<HubConfig>;
 	if (!cfg.url || !cfg.org_uuid || !cfg.api_key_secret_name) return null;
@@ -47,11 +51,10 @@ export async function loadHubConfig(
  * empty state has one shape.
  */
 export async function loadHubCredentials(
-	env: Record<string, unknown>,
-	bucket: R2Bucket,
+	env: Record<string, unknown> & BucketEnv,
 	mailboxId: string,
 ): Promise<{ cfg: HubConfig; apiKey: string } | null> {
-	const cfg = await loadHubConfig(bucket, mailboxId);
+	const cfg = await loadHubConfig(env, mailboxId);
 	if (!cfg) return null;
 	const apiKey = env[cfg.api_key_secret_name];
 	if (typeof apiKey !== "string" || !apiKey) return null;

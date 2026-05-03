@@ -113,7 +113,7 @@ caseRoutes.post("/report-phish", async (c) => {
 	try {
 		const mailboxId = c.req.param("mailboxId");
 		if (mailboxId) {
-			const hub = await loadHubConfig(c.env.BUCKET, mailboxId);
+			const hub = await loadHubConfig(c.env, mailboxId);
 			if (hub?.auto_report) {
 				const apiKey = (c.env as unknown as Record<string, string | undefined>)[hub.api_key_secret_name];
 				if (apiKey) {

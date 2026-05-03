@@ -406,8 +406,7 @@ app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
 	if (mailboxId) {
 		try {
 			const creds = await loadHubCredentials(
-				c.env as unknown as Record<string, unknown>,
-				c.env.BUCKET,
+				c.env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
 				mailboxId,
 			);
 			if (creds) {
