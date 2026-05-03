@@ -57,3 +57,33 @@ Instead:
 Origin: PR #132 (Closes #28) changed Rule 5's timeout-vs-parse-fail behavior,
 deferred the spec edit to avoid racing PR #119 (which introduced the spec),
 and PR #134 narrowed the rule once both had landed.
+
+### `stripDefaultEqual` runs on every settings-tier write
+
+Every endpoint that writes a settings tier — mailbox POST, mailbox PUT,
+domain PUT, org PUT — must route the parsed payload through
+`stripDefaultEqual(...)` from `workers/lib/mailbox-settings.ts` before
+`BUCKET.put`. If you add a new tier or a new write endpoint targeting
+`mailboxes/<id>.json`, `domains/<domain>.json`, or `org/settings.json`,
+the strip pass is part of the contract — not optional.
+
+```ts
+// GOOD — every settings-tier write
+const parsed = SomeSettings.safeParse(body?.settings ?? {});
+if (!parsed.success) return c.json({ error: "..." }, 400);
+const stripped = stripDefaultEqual(parsed.data);
+await env.BUCKET.put(key, JSON.stringify(stripped));
+```
+
+Without it, a fresh form save with rendered defaults
+(`agentModel: DEFAULT_AGENT_MODEL`, `autoDraft: { enabled: true }`)
+persists those values as explicit overrides at the written tier,
+silently shadowing every upstream tier forever — which defeats
+absent-key-inherits semantics for the most common write path.
+
+Origin: #106 acceptance criterion 6 originally read "PUT" only. PR #148
+shipped with the strip on mailbox PUT but not on mailbox POST — caught
+by advisor before merge and fixed in the same PR. PR #154 shipped with
+the strip on mailbox POST/PUT but not on the new domain PUT — same
+advisor catch, fixed before merge. The pattern is symmetric across
+tiers; the rule is "every write," not "every PUT."
