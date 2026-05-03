@@ -14,6 +14,7 @@ import type { DomainSettings } from "../../shared/domain-settings";
 import { domainFromMailboxId, getDomainSettings } from "./domain-settings";
 import {
 	DEFAULT_SECURITY_SETTINGS,
+	type BusinessHours,
 	type MailboxSecuritySettings,
 } from "../security/defaults";
 
@@ -169,12 +170,21 @@ export async function resolveMailboxSettings(
 	// silently shadow upstream entries — which is the regression #149
 	// exists to prevent.
 	//
-	// Domain tier is NOT in the union (out of scope per #149's issue —
-	// tracked as #150). When `domain.security` wins because mailbox is
-	// absent, it whole-replaces org including allowlists, same as today.
-	const security = mailbox.security
+	// Domain tier is NOT in the union (out of scope per #149's issue).
+	// When `domain.security` wins because mailbox is absent, it
+	// whole-replaces org including allowlists, same as today.
+	const securityWithAllowlists = mailbox.security
 		? extendAllowlistsWithOrg(securityBase, org.security as RawSecurityAllowlists | undefined)
 		: securityBase;
+
+	// Post-resolve carve-out (#150): business_hours is the ONE security
+	// sub-field that merges per-field across tiers instead of whole-object
+	// replace. Mailbox value wins per field, then org fills in the rest;
+	// if neither tier set it, the resolved value stays undefined (we don't
+	// materialise an inert default block). Domain tier is intentionally
+	// not consulted here — tracked as #164 follow-up. Every other
+	// security sub-field continues to follow the whole-tier replace rule.
+	const security = mergeBusinessHoursAcrossTiers(securityWithAllowlists, mailbox, org);
 
 	const intelRaw = (mailbox.intel ?? domain.intel ?? org.intel ?? {}) as NonNullable<MailboxSettings["intel"]>;
 
@@ -256,9 +266,8 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
  * surface the org's allowlist entries; that's the regression this fix
  * exists to prevent.
  *
- * Domain tier is intentionally NOT in the union — see resolveMailboxSettings
- * docstring for the #150 follow-up rationale. Strictly per-array, not a
- * generic deep-merge.
+ * Domain tier is intentionally NOT in the union. Strictly per-array, not
+ * a generic deep-merge.
  */
 /** Allowlist arrays as carried by the raw passthrough Zod blobs — the Zod
  *  schemas only nominally know `attachment_policy` / `folder_policies` /
@@ -299,6 +308,56 @@ function unionLowerStable(...lists: Array<readonly string[] | undefined>): strin
 		}
 	}
 	return out;
+}
+
+/**
+ * Per-field merge for `security.business_hours` across tiers (#150).
+ *
+ * Unlike the rest of `security`, `business_hours` resolves field-by-field:
+ * mailbox value wins per field, org fills the rest. The motivating case is
+ * a mailbox that wants its own `timezone` without having to re-state all
+ * five fields from the org tier.
+ *
+ * Important asymmetries vs the whole-object replace path:
+ *
+ *  - Domain tier is intentionally NOT consulted here. The
+ *    `securityResolved.business_hours` value at the time of overlay
+ *    *might* have been picked up from the domain tier via the whole-object
+ *    replace; this function discards it deliberately so the contract is
+ *    "mailbox > org > undefined" exactly as the acceptance specifies.
+ *    Domain-tier participation tracked as #164.
+ *  - Both tiers absent → `business_hours` stays `undefined`. We do NOT
+ *    materialise a default block; `boost_on_off_hours: false` would make
+ *    it inert anyway, but the absence shape is the contract so consumers
+ *    can detect "never configured" vs "configured but disabled".
+ *
+ * The `securityResolved` argument is the post-`mergeSecurityWithDefault`
+ * block (with the #149 allowlist overlay already applied); we replace only
+ * its `business_hours` slot. Every other sub-field (`thresholds`,
+ * `attachment_policy`, `folder_policies`, `classification`,
+ * `trusted_authserv_ids`, allowlists) is untouched by this overlay.
+ */
+function mergeBusinessHoursAcrossTiers(
+	securityResolved: MailboxSecuritySettings,
+	mailbox: MailboxSettings,
+	org: OrgSettings,
+): MailboxSecuritySettings {
+	const mailboxBH = (mailbox.security as { business_hours?: Partial<BusinessHours> } | undefined)
+		?.business_hours;
+	const orgBH = (org.security as { business_hours?: Partial<BusinessHours> } | undefined)
+		?.business_hours;
+
+	if (!mailboxBH && !orgBH) {
+		// Both tiers absent — drop whatever the whole-object replace might
+		// have surfaced (e.g. from the domain tier) and leave undefined.
+		return { ...securityResolved, business_hours: undefined };
+	}
+
+	const merged: Partial<BusinessHours> = { ...(orgBH ?? {}), ...(mailboxBH ?? {}) };
+	// Without a timezone the block is inert (normalizeSecurity drops it
+	// anyway). Pass through whatever fields the tiers set; normalize fills
+	// the rest from sensible defaults if a timezone exists.
+	return { ...securityResolved, business_hours: merged as BusinessHours };
 }
 
 /**
