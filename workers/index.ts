@@ -55,6 +55,7 @@ import {
 } from "./lib/dashboard-aggregation";
 import { emptyDmarcTxtPosture, fetchDmarcTxtPosture } from "./dmarc/txt";
 import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
+import { emptyBimiPosture, fetchBimiPosture } from "./bimi/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -309,14 +310,23 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const mtaStsPromise = fetchMtaStsPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
+	const bimiPromise = fetchBimiPosture(domain, {
+		kv: c.env.BLOOM_KV ?? null,
+	});
 
-	const [settledSummaries, settledAlignments, settledTxt, settledMtaSts] =
-		await Promise.all([
-			Promise.allSettled(summaryPromises),
-			Promise.allSettled(alignmentPromises),
-			Promise.allSettled([txtPromise]),
-			Promise.allSettled([mtaStsPromise]),
-		]);
+	const [
+		settledSummaries,
+		settledAlignments,
+		settledTxt,
+		settledMtaSts,
+		settledBimi,
+	] = await Promise.all([
+		Promise.allSettled(summaryPromises),
+		Promise.allSettled(alignmentPromises),
+		Promise.allSettled([txtPromise]),
+		Promise.allSettled([mtaStsPromise]),
+		Promise.allSettled([bimiPromise]),
+	]);
 
 	const summaries: Array<DomainMailboxSummary | null> = settledSummaries.map((r) => {
 		if (r.status !== "fulfilled") {
@@ -355,6 +365,11 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			? settledMtaSts[0].value
 			: emptyMtaStsPosture();
 
+	const bimiPosture =
+		settledBimi[0].status === "fulfilled"
+			? settledBimi[0].value
+			: emptyBimiPosture();
+
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,
 		email: m.email,
@@ -367,6 +382,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		summaries,
 		dmarcPosture,
 		mtaStsPosture,
+		bimiPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type

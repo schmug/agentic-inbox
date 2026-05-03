@@ -99,6 +99,7 @@ function DomainBody({ data }: { data: DomainStats }) {
 			</div>
 			<div className="grid gap-4 lg:grid-cols-3">
 				<MtaStsPostureCard posture={data.mtaStsPosture} />
+				<BimiPostureCard posture={data.bimiPosture} />
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
@@ -279,6 +280,43 @@ function MtaStsPostureCard({
 						value={posture.maxAge === null ? "—" : `${posture.maxAge}s`}
 					/>
 					<PostureRow label="id" value={posture.id ?? "—"} />
+				</dl>
+			)}
+		</div>
+	);
+}
+
+function BimiPostureCard({
+	posture,
+}: { posture: DomainStats["bimiPosture"] }) {
+	const unavailable = posture.configured === null;
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				BIMI posture
+			</div>
+			{unavailable ? (
+				<p className="text-[12.5px] text-ink-3">
+					BIMI lookup unavailable. The dashboard re-tries on the next domain
+					stats refresh.
+				</p>
+			) : posture.configured === false ? (
+				<p className="text-[12.5px] text-ink-3">
+					Not configured — no `default._bimi` TXT record published for this
+					domain.
+				</p>
+			) : (
+				<dl className="space-y-1.5 text-[12.5px]">
+					<PostureRow label="record" value="v=BIMI1 published" />
+					<PostureRow
+						label="logo"
+						value={posture.hasLogo ? "configured (l=)" : "—"}
+					/>
+					<PostureRow
+						label="VMC"
+						value={posture.hasVmc ? "configured (a=)" : "—"}
+					/>
 				</dl>
 			)}
 		</div>

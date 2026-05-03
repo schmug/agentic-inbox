@@ -68,6 +68,11 @@ const populated: DomainStats = {
 		maxAge: null,
 		id: null,
 	},
+	bimiPosture: {
+		configured: null,
+		hasLogo: null,
+		hasVmc: null,
+	},
 	recentCases: [],
 };
 
