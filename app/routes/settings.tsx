@@ -247,7 +247,14 @@ export default function SettingsRoute() {
 		setHubErrors(undefined);
 	};
 
-	if (!mailbox) {
+	// Gate on BOTH queries — the init useEffect uses orgData to initialise
+	// the per-field override flags. If we render the form before orgData
+	// resolves, the user can start editing during render 1 (mailbox-only)
+	// and have those edits silently clobbered when orgData arrives during
+	// render 2 (effect re-runs and resets state). Caught by advisor before
+	// PR2 merge — tests passed because the mock returns orgData
+	// synchronously, so the race only triggered against real network.
+	if (!mailbox || !orgData) {
 		return (
 			<div className="flex justify-center py-20">
 				<Loader size="lg" />

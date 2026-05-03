@@ -184,6 +184,35 @@ describe("Settings · per-mailbox inheritance affordance (#106)", () => {
 		expect(payload.settings.security).toBeUndefined();
 	});
 
+	it("PUT payload omits inherited keys on the wire (JSON.stringify drops undefined values)", async () => {
+		// Regression guard: the save handler builds the settings object with
+		// `key: override ? value : undefined` for every inheritable field.
+		// JSON.stringify drops undefined values, so the on-the-wire payload
+		// has no key at all for inherited fields — which is what the worker's
+		// stripDefaultEqual + the resolver's absent-key-inherits semantics
+		// rely on. A future "improvement" that replaces undefined with null
+		// would silently break the inheritance chain (null IS sent and
+		// deserialises as an explicit null mailbox value).
+		mailboxFixture = {
+			id: "m1",
+			email: "ops@example.com",
+			name: "Ops",
+			settings: { fromName: "Ops" },
+		} as unknown as Mailbox;
+		orgSettingsFixture = { settings: { agentModel: "@cf/org/value" } };
+
+		const user = userEvent.setup();
+		renderSettings();
+		await user.click(await screen.findByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+		const settings = (mutateAsync.mock.calls[0][0] as { settings: Record<string, unknown> }).settings;
+		const wire = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>;
+		expect(Object.keys(wire)).not.toContain("agentSystemPrompt");
+		expect(Object.keys(wire)).not.toContain("agentModel");
+		expect(Object.keys(wire)).not.toContain("autoDraft");
+		expect(Object.keys(wire)).not.toContain("security");
+	});
+
 	it("'Reset to inherited' on the prompt clears the override and re-renders the inherited badge", async () => {
 		mailboxFixture = {
 			id: "m1",
