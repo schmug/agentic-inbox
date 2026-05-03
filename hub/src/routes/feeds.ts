@@ -58,7 +58,11 @@ feedRoutes.get("/destroylist.txt", async (c) => {
 		"",
 	];
 	for (const g of groups) {
-		const promoted = await getPromotedForSharingGroup(c.env.DB, g);
+		// Pass the caller's org so their own contributions echo back immediately,
+		// bypassing the cross-org `contributor_count ≥ 2` threshold for the
+		// caller only. Sybil resistance is preserved for entries contributed
+		// solely by other orgs — see `getPromotedForSharingGroup` for details.
+		const promoted = await getPromotedForSharingGroup(c.env.DB, g, c.var.org.uuid);
 		for (const p of promoted) {
 			if (!kinds.includes(p.attribute_type)) continue;
 			if (seen.has(p.value)) continue;
