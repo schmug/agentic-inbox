@@ -26,6 +26,8 @@ import {
 } from "./lib/mailbox-settings";
 import { getOrgSettings, putOrgSettings } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
+import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
+import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
 import { runDeepScan } from "./intel/deep-scan";
@@ -391,6 +393,30 @@ app.put("/api/v1/org/settings", async (c) => {
 	}
 	const written = await putOrgSettings(c.env, parsed.data);
 	return c.json({ settings: written });
+});
+
+// Domain-level settings (#142). Same pattern as the org endpoints —
+// GET reads R2 directly through the resolver's per-domain cache, PUT
+// invalidates the cache as part of the write. The resolved view for a
+// specific mailbox under this domain is exposed at the existing
+// /api/v1/mailboxes/:mailboxId/settings/effective endpoint, which now
+// runs the full mailbox > domain > org > default chain via the same
+// resolveMailboxSettings.
+app.get("/api/v1/domains/:domain/settings", async (c) => {
+	const domain = c.req.param("domain")!.toLowerCase();
+	const settings = await getDomainSettings(c.env, domain);
+	return c.json({ domain, settings });
+});
+
+app.put("/api/v1/domains/:domain/settings", async (c) => {
+	const domain = c.req.param("domain")!.toLowerCase();
+	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+	const parsed = DomainSettings.safeParse(body?.settings ?? {});
+	if (!parsed.success) {
+		return c.json({ error: "Invalid domain settings", issues: parsed.error.issues }, 400);
+	}
+	const written = await putDomainSettings(c.env, domain, parsed.data);
+	return c.json({ domain, settings: written });
 });
 
 app.post("/api/v1/mailboxes", async (c) => {
