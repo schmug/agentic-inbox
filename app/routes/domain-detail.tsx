@@ -102,6 +102,9 @@ function DomainBody({ data }: { data: DomainStats }) {
 				<BimiPostureCard posture={data.bimiPosture} />
 				<SpfPostureCard posture={data.spfPosture} />
 			</div>
+			<div className="grid gap-4 lg:grid-cols-3">
+				<TlsRptPostureCard posture={data.tlsRptPosture} />
+			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
 		</>
@@ -368,6 +371,59 @@ function SpfPostureCard({
 						}
 					/>
 				</dl>
+			)}
+		</div>
+	);
+}
+
+function TlsRptPostureCard({
+	posture,
+}: { posture: DomainStats["tlsRptPosture"] }) {
+	// Per #168 constraint: "Unavailable" (configured=null) and "genuinely
+	// missing" (configured=false) render the SAME empty-state affordance.
+	// Operators don't need to distinguish "lookup blip" from "no record" at
+	// the tile level — both cases mean the same actionable thing: "publish
+	// a TLS-RPT record". The KV layer still distinguishes the two so a
+	// transient blip doesn't poison the cache for an hour.
+	const notConfigured = posture.configured !== true;
+	const endpoints = posture.endpoints ?? [];
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				TLS-RPT posture
+			</div>
+			{notConfigured ? (
+				<p className="text-[12.5px] text-ink-3">
+					TLS reporting not configured for this domain (or the lookup was
+					unavailable). Operators publish a `_smtp._tls.&lt;domain&gt;` TXT
+					record like `v=TLSRPTv1; rua=mailto:tlsrpt@&lt;domain&gt;` to enable
+					it.
+				</p>
+			) : (
+				<>
+					<dl className="space-y-1.5 text-[12.5px]">
+						<PostureRow label="reporting" value="configured (v=TLSRPTv1)" />
+						<PostureRow
+							label="endpoints"
+							value={endpoints.length === 0 ? "—" : String(endpoints.length)}
+						/>
+					</dl>
+					{endpoints.length > 0 ? (
+						// Keep the URI list outside the `<dl>` — `<dl>` can only contain
+						// `<dt>`/`<dd>` pairs, and we want the URLs as a flat list.
+						<ul className="space-y-1 mt-2">
+							{endpoints.map((ep) => (
+								<li
+									key={ep}
+									className="pp-mono text-[11px] text-ink-2 break-all"
+								>
+									{ep}
+								</li>
+							))}
+						</ul>
+					) : null}
+				</>
 			)}
 		</div>
 	);
