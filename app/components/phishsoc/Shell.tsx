@@ -1,8 +1,6 @@
 import {
-	BellIcon,
 	BriefcaseIcon,
 	BuildingsIcon,
-	CaretRightIcon,
 	EnvelopeIcon,
 	GaugeIcon,
 	GearSixIcon,
@@ -22,10 +20,12 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useDomainStats } from "~/queries/domains";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
-import type { DomainMailboxRef } from "~/types";
+import type { DomainMailboxRef, Mailbox } from "~/types";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
+import MailboxSwitcher from "./MailboxSwitcher";
+import NotificationsBell from "./NotificationsBell";
 
 type PipelineTone = "safe" | "suspect" | "danger" | "muted";
 
@@ -114,11 +114,12 @@ function SectionLabel({ children }: { children: ReactNode }) {
 interface NavContentsProps {
 	mailboxId: string | undefined;
 	mailbox: { name?: string | null; email?: string | null } | undefined;
+	mailboxes: Mailbox[] | undefined;
 	mailboxCount: number;
 	pipelineState: PipelineState;
 	theme: "light" | "dark";
 	onToggleTheme: () => void;
-	onSwitchOrg: () => void;
+	onCloseSidebar: () => void;
 	onPipelineClick: () => void;
 	/**
 	 * When the current route is `/domains/:domain`, the active domain plus
@@ -138,17 +139,16 @@ interface NavContentsProps {
 function NavContents({
 	mailboxId,
 	mailbox,
+	mailboxes,
 	mailboxCount,
 	pipelineState,
 	theme,
 	onToggleTheme,
-	onSwitchOrg,
+	onCloseSidebar,
 	onPipelineClick,
 	domain,
 	domainMailboxes,
 }: NavContentsProps) {
-	const orgDomain = mailbox?.email?.split("@")[1] ?? "—";
-	const orgInitial = (mailbox?.name || mailbox?.email || "?")[0]?.toUpperCase();
 	const base = mailboxId ? `/mailbox/${encodeURIComponent(mailboxId)}` : "";
 
 	return (
@@ -157,26 +157,18 @@ function NavContents({
 				<Logo />
 			</div>
 
-			{/* Org switcher card — clicking it would open a tenant switcher;
-			    in POC it just routes to the home picker. */}
-			<button
-				type="button"
-				onClick={onSwitchOrg}
-				className="mx-3 flex items-center gap-2.5 rounded-md border border-line bg-paper px-2.5 py-2 text-left hover:border-line-strong transition-colors"
-			>
-				<span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent-tint text-accent-ink pp-serif text-[15px]">
-					{orgInitial}
-				</span>
-				<span className="flex-1 min-w-0">
-					<span className="block truncate text-[12.5px] font-medium text-ink">
-						{mailbox?.name || "Select mailbox"}
-					</span>
-					<span className="block truncate text-[10.5px] text-ink-3">
-						{orgDomain} · {mailboxCount} mailbox{mailboxCount === 1 ? "" : "es"}
-					</span>
-				</span>
-				<CaretRightIcon size={12} className="text-ink-3 shrink-0" />
-			</button>
+			{/* Mailbox switcher (#188). Replaces the old "Select mailbox" card,
+			    which was wired to `navigate("/")` and therefore a no-op at the
+			    org root. The new card opens a base-ui Menu listing every
+			    mailbox the user has access to; selecting one navigates to the
+			    per-mailbox dashboard. */}
+			<MailboxSwitcher
+				activeMailboxId={mailboxId}
+				mailbox={mailbox}
+				mailboxes={mailboxes}
+				mailboxCount={mailboxCount}
+				onClose={onCloseSidebar}
+			/>
 
 			<nav className="mt-3 px-3 flex-1 overflow-y-auto">
 				{/* Org-scoped entries are always visible. They route to / and
@@ -390,14 +382,12 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 		<NavContents
 			mailboxId={mailboxId}
 			mailbox={mailbox}
+			mailboxes={mailboxes}
 			mailboxCount={mailboxCount}
 			pipelineState={pipelineState}
 			theme={theme}
 			onToggleTheme={toggleTheme}
-			onSwitchOrg={() => {
-				closeSidebar();
-				navigate("/");
-			}}
+			onCloseSidebar={closeSidebar}
 			onPipelineClick={() => {
 				if (!mailboxId) return;
 				closeSidebar();
@@ -462,32 +452,66 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						onSubmit={handleSearchSubmit}
 						className="flex items-center gap-2 flex-1 max-w-xl"
 					>
-						<MagnifyingGlassIcon size={14} className="text-ink-3 shrink-0" />
+						<MagnifyingGlassIcon
+							size={14}
+							className={`shrink-0 ${mailboxId ? "text-ink-3" : "text-ink-4"}`}
+						/>
+						{/*
+						 * Search today is mailbox-scoped: the only registered route is
+						 * `/mailbox/:mailboxId/search`, and the submit handler bails when
+						 * `mailboxId` is missing. On org-level routes (`/`, `/settings`,
+						 * `/mailboxes`, `/domains`, `/domains/:domain`) we surface a
+						 * disabled input with explanatory placeholder so cmd+K + Enter
+						 * doesn't appear to silently swallow the query (#187). Org-scope
+						 * search across every mailbox the user can see is tracked
+						 * separately.
+						 */}
 						<input
 							ref={searchInputRef}
 							type="search"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4"
-							placeholder="Search emails…  ⌘K"
+							disabled={!mailboxId}
+							aria-disabled={!mailboxId}
+							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4 disabled:cursor-not-allowed"
+							placeholder={
+								mailboxId
+									? "Search emails…  ⌘K"
+									: "Pick a mailbox to search emails"
+							}
 							aria-label="Search"
 						/>
 					</form>
 					<div className="ml-auto flex items-center gap-1.5 shrink-0">
-						<button
-							type="button"
-							className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 hover:bg-paper-2 hover:text-ink transition-colors"
-							aria-label="Notifications"
-						>
-							<BellIcon size={16} />
-						</button>
+						<NotificationsBell mailboxId={mailboxId} />
+						{/* The agent panel only mounts inside `/mailbox/:mailboxId/*`
+						    routes (mailbox.tsx is the only caller passing
+						    `rightPanel={<AgentSidebar />}`). On org-level routes
+						    (`/`, `/settings`, `/mailboxes`, `/domains`,
+						    `/domains/:domain`) clicking the button toggled
+						    internal state but nothing visible happened — silent
+						    no-op (#186). Until an org-scope co-pilot ships
+						    (follow-up #198), gate the trigger on `mailboxId` so
+						    the button only fires where it can do work. We render
+						    `disabled` with a `title` tooltip rather than hiding
+						    so the affordance stays discoverable and the topbar
+						    layout doesn't shift when entering a mailbox. */}
 						<button
 							type="button"
 							onClick={() => toggleAgentPanel()}
-							aria-expanded={isAgentPanelOpen}
+							disabled={!mailboxId}
+							aria-disabled={!mailboxId}
+							title={
+								mailboxId
+									? undefined
+									: "Pick a mailbox to chat with the agent"
+							}
+							aria-expanded={mailboxId ? isAgentPanelOpen : undefined}
 							aria-controls="agent-panel"
 							className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
-								isAgentPanelOpen
+								!mailboxId
+									? "bg-paper-2 text-ink-3 border-line cursor-not-allowed opacity-60"
+									: isAgentPanelOpen
 									? "bg-accent text-paper border-accent hover:bg-[color-mix(in_oklch,var(--accent)_85%,black)]"
 									: "bg-accent-tint text-accent border-[color-mix(in_oklch,var(--accent)_25%,transparent)] hover:bg-[color-mix(in_oklch,var(--accent-tint)_70%,var(--paper))]"
 							}`}
@@ -495,7 +519,13 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 							<SparkleIcon
 								size={13}
 								weight="fill"
-								className={isAgentPanelOpen ? "text-paper" : "text-accent"}
+								className={
+									!mailboxId
+										? "text-ink-3"
+										: isAgentPanelOpen
+										? "text-paper"
+										: "text-accent"
+								}
 							/>
 							Ask co-pilot
 						</button>

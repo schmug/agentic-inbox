@@ -18,8 +18,10 @@ function renderBreadcrumb(initialEntry: string) {
 		<Routes>
 			<Route path="/" element={<Breadcrumb />} />
 			<Route path="/mailboxes" element={<Breadcrumb />} />
+			<Route path="/settings" element={<Breadcrumb />} />
 			<Route path="/domains" element={<Breadcrumb />} />
 			<Route path="/domains/:domain" element={<Breadcrumb />} />
+			<Route path="/domains/:domain/settings" element={<Breadcrumb />} />
 			<Route path="/mailbox/:mailboxId/*" element={<Breadcrumb />} />
 		</Routes>,
 		{ initialEntries: [initialEntry] },
@@ -100,8 +102,31 @@ describe("Breadcrumb", () => {
 		);
 	});
 
-	it("renders Org › acme.com on /domains/acme.com (#85)", () => {
+	it("renders Org › Domains › acme.com on /domains/acme.com (#85, #184)", () => {
 		renderBreadcrumb("/domains/acme.com");
+		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+		const items = within(nav).getAllByRole("listitem");
+		expect(items).toHaveLength(3);
+		expect(within(nav).getByRole("link", { name: "Org" })).toHaveAttribute(
+			"href",
+			"/",
+		);
+		// `Domains` is a link back to the list so users can step up one
+		// level from the per-domain detail page (#184).
+		expect(within(nav).getByRole("link", { name: "Domains" })).toHaveAttribute(
+			"href",
+			"/domains",
+		);
+		// Domain itself is the current (last) segment.
+		expect(within(nav).queryByRole("link", { name: "acme.com" })).toBeNull();
+		expect(within(nav).getByText("acme.com")).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+	});
+
+	it("renders Org › Org settings on /settings (#184)", () => {
+		renderBreadcrumb("/settings");
 		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
 		const items = within(nav).getAllByRole("listitem");
 		expect(items).toHaveLength(2);
@@ -109,8 +134,36 @@ describe("Breadcrumb", () => {
 			"href",
 			"/",
 		);
-		expect(within(nav).queryByRole("link", { name: "acme.com" })).toBeNull();
-		expect(within(nav).getByText("acme.com")).toHaveAttribute(
+		expect(within(nav).queryByRole("link", { name: /Org settings/i })).toBeNull();
+		expect(within(nav).getByText("Org settings")).toHaveAttribute(
+			"aria-current",
+			"page",
+		);
+	});
+
+	it("renders Org › Domains › acme.com › Settings on /domains/acme.com/settings (#184)", () => {
+		renderBreadcrumb("/domains/acme.com/settings");
+		const nav = screen.getByRole("navigation", { name: /breadcrumb/i });
+		const items = within(nav).getAllByRole("listitem");
+		expect(items).toHaveLength(4);
+		// Org → /
+		expect(within(nav).getByRole("link", { name: "Org" })).toHaveAttribute(
+			"href",
+			"/",
+		);
+		// Domains → /domains
+		expect(within(nav).getByRole("link", { name: "Domains" })).toHaveAttribute(
+			"href",
+			"/domains",
+		);
+		// Domain → /domains/acme.com so users can step back one level.
+		expect(within(nav).getByRole("link", { name: "acme.com" })).toHaveAttribute(
+			"href",
+			"/domains/acme.com",
+		);
+		// Settings is the current (last) segment.
+		expect(within(nav).queryByRole("link", { name: "Settings" })).toBeNull();
+		expect(within(nav).getByText("Settings")).toHaveAttribute(
 			"aria-current",
 			"page",
 		);

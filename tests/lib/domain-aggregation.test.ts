@@ -405,6 +405,46 @@ describe("aggregateDomainStats", () => {
 		expect(result!.spfPosture.exceedsLimit).toBe(false);
 	});
 
+	it("falls back to the all-null TLS-RPT posture when the handler doesn't supply one (#168)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.tlsRptPosture).toEqual({
+			configured: null,
+			endpoints: null,
+		});
+	});
+
+	it("threads a real TLS-RPT posture through unchanged when supplied (#168)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			tlsRptPosture: {
+				configured: true,
+				endpoints: [
+					"mailto:tlsrpt@acme.com",
+					"https://reports.acme.com/tlsrpt",
+				],
+			},
+		});
+		expect(result!.tlsRptPosture).toEqual({
+			configured: true,
+			endpoints: [
+				"mailto:tlsrpt@acme.com",
+				"https://reports.acme.com/tlsrpt",
+			],
+		});
+	});
+
 	it("tolerates null (failed) summaries as zero contributions", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",

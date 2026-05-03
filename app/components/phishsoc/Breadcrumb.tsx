@@ -31,19 +31,45 @@ function segmentsFor(
 		return [orgRoot, { label: "Mailboxes" }];
 	}
 
-	// `/domains` and `/domains/:domain` (#85). Read the domain from the path
-	// rather than a hook — the breadcrumb has no router param for these
-	// top-level routes. Decode in case a future caller percent-encodes.
+	// `/settings` (org settings, #184). Org-level settings have no
+	// per-resource params — render a simple two-segment chain so the
+	// page is reachable-back from inside.
+	if (pathname === "/settings" || pathname === "/settings/") {
+		return [orgRoot, { label: "Org settings" }];
+	}
+
+	// `/domains`, `/domains/:domain`, and `/domains/:domain/settings`
+	// (#85, #184). Read the domain from the path rather than a hook —
+	// the breadcrumb has no router param for these top-level routes.
+	// Decode in case a future caller percent-encodes.
+	const domainsRoot: Segment = { label: "Domains", to: "/domains" };
 	if (pathname === "/domains" || pathname === "/domains/") {
 		return [orgRoot, { label: "Domains" }];
 	}
 	if (pathname.startsWith("/domains/")) {
 		const tail = pathname.slice("/domains/".length).replace(/\/$/, "");
-		const domain = decodeURIComponent(tail);
-		if (domain) {
-			return [orgRoot, { label: domain }];
+		// Split at most once: domain segment + optional sub-route. The
+		// domain itself is a single path segment (no slashes), so this
+		// is unambiguous.
+		const slashIdx = tail.indexOf("/");
+		const rawDomain = slashIdx === -1 ? tail : tail.slice(0, slashIdx);
+		const sub = slashIdx === -1 ? "" : tail.slice(slashIdx + 1);
+		const domain = decodeURIComponent(rawDomain);
+		if (!domain) {
+			return [orgRoot, { label: "Domains" }];
 		}
-		return [orgRoot, { label: "Domains" }];
+		const domainHref = `/domains/${encodeURIComponent(domain)}`;
+		if (sub === "settings") {
+			return [
+				orgRoot,
+				domainsRoot,
+				{ label: domain, to: domainHref },
+				{ label: "Settings" },
+			];
+		}
+		// `/domains/:domain` and any unknown sub-routes: link Domains
+		// back to the list so users can step up one level (#184).
+		return [orgRoot, domainsRoot, { label: domain }];
 	}
 
 	if (!mailboxId) return null;
