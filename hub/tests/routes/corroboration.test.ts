@@ -51,13 +51,21 @@ function appReq(path: string, init?: RequestInit) {
 /**
  * Inserts a corroboration row + N contributors. `lastSeen` is an ISO-8601
  * timestamp (matches what `applyCorroboration` writes in production).
+ *
+ * Contributors may be specified as bare org UUIDs (in which case the
+ * contributor's `first_seen` defaults to the row's `lastSeen`, mirroring
+ * the migration's backfill heuristic) or as `{ org, firstSeenMs }` to
+ * pin a specific per-contributor join timestamp — needed to exercise
+ * the cases where row-touch time and contributor-join time diverge.
  */
+type ContributorSpec = string | { org: string; firstSeenMs: number };
+
 function seedCorroboration(opts: {
 	id: number;
 	type: string;
 	value: string;
 	lastSeen: string;
-	contributors: string[];
+	contributors: ContributorSpec[];
 }) {
 	db.raw
 		.prepare(
@@ -74,12 +82,16 @@ function seedCorroboration(opts: {
 			opts.contributors.length,
 			opts.contributors.length * 1.0,
 		);
-	for (const orgc of opts.contributors) {
+	const fallbackFirstSeenMs = Date.parse(opts.lastSeen);
+	for (const c of opts.contributors) {
+		const orgc = typeof c === "string" ? c : c.org;
+		const firstSeenMs = typeof c === "string" ? fallbackFirstSeenMs : c.firstSeenMs;
 		db.raw
 			.prepare(
-				`INSERT INTO corroboration_contributors (corroboration_id, orgc_uuid) VALUES (?, ?)`,
+				`INSERT INTO corroboration_contributors (corroboration_id, orgc_uuid, first_seen)
+				 VALUES (?, ?, ?)`,
 			)
-			.run(opts.id, orgc);
+			.run(opts.id, orgc, firstSeenMs);
 	}
 }
 
@@ -160,17 +172,28 @@ describe("GET /api/v1/corroboration", () => {
 		expect(body.corroboratedCount).toBe(0);
 	});
 
-	it("does not count attributes whose `last_seen` falls outside the window", async () => {
-		const outOfWindow = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+	it("does not count when the second contributor joined before the window even though `last_seen` advanced in-window (issue #131 counter-example)", async () => {
+		// Counter-example A from #131: row touched today (so `last_seen` is
+		// in-window) but the second contributor actually joined a week ago.
+		// The previous approximation counted this; the precise query must not.
+		const inWindow = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 		const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+		const sinceMs = Date.parse(since);
+		const aWeekAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
 		seedCorroboration({
 			id: 1,
 			type: "domain",
-			value: "stale.example",
-			lastSeen: outOfWindow,
-			contributors: [SELF_ORG, OTHER_ORG],
+			value: "stale-second-contrib.example",
+			lastSeen: inWindow,
+			contributors: [
+				{ org: SELF_ORG, firstSeenMs: aWeekAgoMs - 60_000 },
+				{ org: OTHER_ORG, firstSeenMs: aWeekAgoMs },
+			],
 		});
+
+		// Sanity: the second contributor's first_seen really is before the cutoff.
+		expect(aWeekAgoMs).toBeLessThan(sinceMs);
 
 		const res = await appReq(
 			`/api/v1/corroboration?orgUuid=${SELF_ORG}&since=${encodeURIComponent(since)}`,
@@ -179,6 +202,36 @@ describe("GET /api/v1/corroboration", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { corroboratedCount: number };
 		expect(body.corroboratedCount).toBe(0);
+	});
+
+	it("counts when the second contributor joined in-window even if `last_seen` predates the cutoff (issue #131 counter-example)", async () => {
+		// Counter-example B from #131: contributor join landed in-window but
+		// the row's `last_seen` happens to be older than the cutoff (e.g. a
+		// race between the contributor insert and the row's last_seen update,
+		// or simply a path that didn't bump last_seen). The previous
+		// approximation missed this; the precise query must catch it.
+		const outOfWindow = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+		const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+		const recentJoinMs = Date.now() - 60 * 60 * 1000;
+
+		seedCorroboration({
+			id: 1,
+			type: "domain",
+			value: "fresh-contrib-stale-row.example",
+			lastSeen: outOfWindow,
+			contributors: [
+				{ org: SELF_ORG, firstSeenMs: Date.parse(outOfWindow) },
+				{ org: OTHER_ORG, firstSeenMs: recentJoinMs },
+			],
+		});
+
+		const res = await appReq(
+			`/api/v1/corroboration?orgUuid=${SELF_ORG}&since=${encodeURIComponent(since)}`,
+			{ headers: { Authorization: SELF_KEY } },
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { corroboratedCount: number };
+		expect(body.corroboratedCount).toBe(1);
 	});
 
 	it("counts each corroborated attribute once even with three contributors", async () => {
