@@ -24,8 +24,10 @@ import {
  *
  * Whole-object replace across tiers — same rule as `OrgSettings`. A
  * domain-level `security` block carries the entire object; the org's
- * `security` is NOT deep-merged in. Per-array extend-merge (allowlists,
- * business_hours per-field) is tracked separately as #149 / #150.
+ * `security` is NOT deep-merged in. The per-field carve-outs are
+ * narrow and explicit: allowlist-array extend-merge (#149) and
+ * `business_hours` per-field merge across `mailbox > domain > org`
+ * (#150 / #164). Every other security sub-field stays whole-replace.
  *
  * R2 key derivation lives in `workers/lib/domain-settings.ts`
  * (`domainSettingsKey(domain)`) so a future re-keying — e.g. multi-tenant
