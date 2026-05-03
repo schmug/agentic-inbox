@@ -142,7 +142,12 @@ describe("Shell domain-scoped sidebar (#139)", () => {
 
 		// Org-level nav still shows.
 		expect(screen.getByRole("link", { name: /org overview/i })).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: /domains/i })).toBeInTheDocument();
+		// Sidebar `Domains` entry. After #184 the breadcrumb also adds a
+		// `Domains` link on `/domains/:domain`, so `getAllByRole` returns
+		// both — at least one must be present.
+		expect(
+			screen.getAllByRole("link", { name: /^Domains$/ }).length,
+		).toBeGreaterThanOrEqual(1);
 	});
 
 	it("does not render the domain section on /, /mailboxes, /domains, or /mailbox/:id/...", () => {
