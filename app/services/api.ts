@@ -122,6 +122,20 @@ const api = {
 		put<Mailbox>(`/api/v1/mailboxes/${mailboxId}`, { settings }),
 	deleteMailbox: (mailboxId: string) =>
 		del<void>(`/api/v1/mailboxes/${mailboxId}`),
+	// Org-level settings (#106). Backed by R2 key org/settings.json behind a
+	// module-scope ETag cache; the GET returns the raw blob (or {} if missing),
+	// PUT validates through the OrgSettings Zod schema worker-side.
+	getOrgSettings: () =>
+		get<{ settings: Record<string, unknown> }>("/api/v1/org/settings"),
+	updateOrgSettings: (settings: unknown) =>
+		put<{ settings: Record<string, unknown> }>("/api/v1/org/settings", { settings }),
+	// Resolved (inheritance-applied) settings for a mailbox: mailbox > org > default.
+	// Used by the settings UI's "Inherited from org" indicator to render the
+	// org value as a preview when the mailbox tier is absent.
+	getEffectiveMailboxSettings: (mailboxId: string) =>
+		get<{ id: string; settings: Record<string, unknown> }>(
+			`/api/v1/mailboxes/${mailboxId}/settings/effective`,
+		),
 
 	// Emails
 	listEmails: (mailboxId: string, params: Record<string, string>, opts?: { signal?: AbortSignal }) =>
