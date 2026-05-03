@@ -2,6 +2,10 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+// Dual-runtime safe: pure JS, no DOM / window / jsdom dependency. Runs
+// identically in browsers and Cloudflare workerd. XSS lockdown covered by
+// `tests/lib/html-text.test.ts` (#116).
+
 /**
  * Runtime-agnostic HTML → plain text conversion.
  *
