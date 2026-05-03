@@ -20,6 +20,13 @@ import {
 	orgSettingsKey,
 	putOrgSettings,
 } from "../../workers/lib/org-settings";
+import {
+	clearDomainSettingsCache,
+	domainFromMailboxId,
+	domainSettingsKey,
+	getDomainSettings,
+	putDomainSettings,
+} from "../../workers/lib/domain-settings";
 import { DEFAULT_SECURITY_SETTINGS } from "../../workers/security/defaults";
 import { loadHubConfig } from "../../workers/lib/hub-config";
 
@@ -100,9 +107,11 @@ function makeEnv(bucket: FakeBucket) {
 
 const MAILBOX_ID = "user@example.com";
 const MAILBOX_KEY = `mailboxes/${MAILBOX_ID}.json`;
+const DOMAIN_KEY = "domains/example.com.json";
 
 beforeEach(() => {
 	clearOrgSettingsCache();
+	clearDomainSettingsCache();
 	etagCounter = 0;
 });
 
@@ -375,3 +384,179 @@ describe("getMailboxSettings — raw read still works post-#106", () => {
 	// tests that mock the resolver from agent code paths.
 	void vi;
 });
+
+describe("resolveMailboxSettings — domain tier (#142)", () => {
+	it("domain wins over org but loses to mailbox (mailbox > domain > org chain)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { agentModel: "@cf/org/value" },
+			[DOMAIN_KEY]: { agentModel: "@cf/domain/value" },
+			[MAILBOX_KEY]: { agentModel: "@cf/mailbox/value" },
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.agentModel).toBe("@cf/mailbox/value");
+		expect(resolved.domainName).toBe("example.com");
+	});
+
+	it("domain set + mailbox absent → domain value (skips org)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { agentModel: "@cf/org/value" },
+			[DOMAIN_KEY]: { agentModel: "@cf/domain/value" },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.agentModel).toBe("@cf/domain/value");
+	});
+
+	it("domain absent + org set → org value (no domains/<domain>.json file)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { agentModel: "@cf/org/value" },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.agentModel).toBe("@cf/org/value");
+	});
+
+	it("malformed mailboxId (no @) skips the domain read entirely", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { agentModel: "@cf/org/value" },
+			"mailboxes/no-at-sign.json": {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), "no-at-sign");
+		expect(resolved.agentModel).toBe("@cf/org/value");
+		expect(resolved.domainName).toBeNull();
+		// The bucket should never have been asked for a domains/* key.
+		const domainCalls = bucket.__getCalls.filter((c) => c.key.startsWith("domains/"));
+		expect(domainCalls).toHaveLength(0);
+	});
+
+	it("domain security replaces org security WHOLE — no cross-tier deep-merge", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, allowlist_senders: ["org@example.com"] },
+			},
+			[DOMAIN_KEY]: {
+				security: { enabled: true, allowlist_senders: ["domain@example.com"] },
+			},
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		// Only the domain entry, NOT a merged ["org@...","domain@..."]. Same
+		// extend-merge follow-up as #149.
+		expect(resolved.security.allowlist_senders).toEqual(["domain@example.com"]);
+	});
+
+	it("domain intel.hub takes effect for an unconfigured mailbox", async () => {
+		const domainHub = {
+			url: "https://domain-hub.example.com",
+			org_uuid: "domain-uuid",
+			api_key_secret_name: "DOMAIN_HUB_KEY",
+		};
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: { intel: { hub: domainHub } },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.intel.hub).toMatchObject(domainHub);
+	});
+
+	it("security-critical models stay org-only — domain values are ignored", async () => {
+		// Audit Q7: per-mailbox / per-domain override of the prompt-injection
+		// scanner is too sharp without UI guardrails. The resolver must NOT
+		// consult the domain tier for these three fields.
+		const bucket = makeFakeBucket({
+			"org/settings.json": { injectionScannerModel: "@cf/org/scanner" },
+			[DOMAIN_KEY]: { injectionScannerModel: "@cf/domain/should-be-ignored" },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.injectionScannerModel).toBe("@cf/org/scanner");
+	});
+});
+
+describe("getDomainSettings — module-scope ETag cache", () => {
+	it("first call fetches, second sends If-None-Match and short-circuits on 304", async () => {
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: { agentModel: "@cf/domain/v1" },
+		});
+		const env = makeEnv(bucket);
+
+		const first = await getDomainSettings(env, "example.com");
+		expect(first.agentModel).toBe("@cf/domain/v1");
+		const domainCalls = bucket.__getCalls.filter((c) => c.key === DOMAIN_KEY);
+		expect(domainCalls).toHaveLength(1);
+		expect(domainCalls[0].ifNoneMatch).toBeNull();
+
+		const second = await getDomainSettings(env, "example.com");
+		expect(second.agentModel).toBe("@cf/domain/v1");
+		const after = bucket.__getCalls.filter((c) => c.key === DOMAIN_KEY);
+		expect(after).toHaveLength(2);
+		expect(after[1].ifNoneMatch).toBe("etag-1");
+	});
+
+	it("putDomainSettings invalidates the per-domain cache slot only", async () => {
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: { agentModel: "@cf/v1" },
+			"domains/other.com.json": { agentModel: "@cf/other-v1" },
+		});
+		const env = makeEnv(bucket);
+
+		// Prime both caches.
+		await getDomainSettings(env, "example.com");
+		await getDomainSettings(env, "other.com");
+		const before = bucket.__getCalls.length;
+
+		// Update example.com → its cache slot is invalidated.
+		await putDomainSettings(env, "example.com", { agentModel: "@cf/v2" });
+		const exampleAfter = await getDomainSettings(env, "example.com");
+		expect(exampleAfter.agentModel).toBe("@cf/v2");
+
+		// other.com cache should still hit (no R2 GET beyond the If-None-Match
+		// path that returns the cached value).
+		await getDomainSettings(env, "other.com");
+		const otherCalls = bucket.__getCalls
+			.slice(before)
+			.filter((c) => c.key === "domains/other.com.json");
+		// Only the If-None-Match GET should fire — and it should hit 304 → no
+		// reparse. The fact that we got here without a fresh body parse is the
+		// behaviour we care about; assert via the etag header on the call.
+		expect(otherCalls.length).toBeLessThanOrEqual(1);
+		if (otherCalls.length === 1) {
+			expect(otherCalls[0].ifNoneMatch).not.toBeNull();
+		}
+	});
+
+	it("404 caches an absent sentinel for the requested domain", async () => {
+		const bucket = makeFakeBucket({});
+		const env = makeEnv(bucket);
+
+		const first = await getDomainSettings(env, "absent.com");
+		const second = await getDomainSettings(env, "absent.com");
+		expect(first).toEqual({});
+		expect(second).toEqual({});
+		// Two reads but both for the same key; the second uses no If-None-Match
+		// because the cached etag is the absent sentinel.
+		const absentCalls = bucket.__getCalls.filter(
+			(c) => c.key === "domains/absent.com.json",
+		);
+		expect(absentCalls).toHaveLength(2);
+		expect(absentCalls[1].ifNoneMatch).toBeNull();
+	});
+});
+
+describe("domainFromMailboxId / domainSettingsKey", () => {
+	it("extracts the domain part of an email-style mailboxId", () => {
+		expect(domainFromMailboxId("user@example.com")).toBe("example.com");
+		expect(domainFromMailboxId("user@SUBDOMAIN.Example.COM")).toBe("subdomain.example.com");
+	});
+
+	it("returns null for malformed input", () => {
+		expect(domainFromMailboxId("no-at-sign")).toBeNull();
+		expect(domainFromMailboxId("user@")).toBeNull();
+		expect(domainFromMailboxId("")).toBeNull();
+	});
+
+	it("centralises the R2 key format for a future multi-tenant refactor", () => {
+		expect(domainSettingsKey("Example.COM")).toBe("domains/example.com.json");
+	});
+});
+

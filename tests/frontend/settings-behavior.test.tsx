@@ -17,6 +17,10 @@ const updateMailboxMock = {
 
 let mailboxFixture: Mailbox;
 let orgSettingsFixture: { settings: Record<string, unknown> } = { settings: {} };
+let domainSettingsFixture: { domain: string; settings: Record<string, unknown> } = {
+	domain: "example.com",
+	settings: {},
+};
 
 vi.mock("~/queries/mailboxes", () => ({
 	useMailbox: () => ({ data: mailboxFixture }),
@@ -25,6 +29,10 @@ vi.mock("~/queries/mailboxes", () => ({
 
 vi.mock("~/queries/org-settings", () => ({
 	useOrgSettings: () => ({ data: orgSettingsFixture, isLoading: false }),
+}));
+
+vi.mock("~/queries/domain-settings", () => ({
+	useDomainSettings: () => ({ data: domainSettingsFixture, isLoading: false }),
 }));
 
 import SettingsRoute from "~/routes/settings";
@@ -120,6 +128,8 @@ describe("Settings · per-mailbox inheritance affordance (#106)", () => {
 	beforeEach(() => {
 		mutateAsync.mockReset();
 		mutateAsync.mockResolvedValue(undefined);
+		// Default to no domain overrides; individual tests set as needed.
+		domainSettingsFixture = { domain: "example.com", settings: {} };
 	});
 
 	it("renders 'Inherited from org' for fields the mailbox does not set", async () => {
@@ -252,5 +262,64 @@ describe("Settings · per-mailbox inheritance affordance (#106)", () => {
 			settings: Record<string, unknown>;
 		};
 		expect(payload.settings.agentSystemPrompt).toBeUndefined();
+	});
+});
+
+describe("Settings · per-mailbox inheritance composition with domain tier (#142)", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("renders 'Inherited from domain' when the domain tier supplies the value", async () => {
+		// Mailbox sets nothing; domain sets the prompt; org has its own.
+		// Domain wins over org per the resolver chain — the badge must say
+		// "Inherited from domain", not "Inherited from org".
+		mailboxFixture = {
+			id: "user@example.com",
+			email: "user@example.com",
+			name: "User",
+			settings: {},
+		} as unknown as Mailbox;
+		orgSettingsFixture = { settings: { agentSystemPrompt: "org voice" } };
+		domainSettingsFixture = {
+			domain: "example.com",
+			settings: { agentSystemPrompt: "domain voice" },
+		};
+
+		renderWithProviders(
+			<Routes>
+				<Route path="/mailbox/:mailboxId/settings" element={<SettingsRoute />} />
+			</Routes>,
+			{ initialEntries: ["/mailbox/user@example.com/settings"] },
+		);
+
+		// At least one "Inherited from domain" badge should render — the
+		// prompt picks up the domain value (not the org value).
+		const domainBadges = await screen.findAllByTestId("inherited-domain-badge");
+		expect(domainBadges.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("falls back to 'Inherited from org' when neither mailbox nor domain set a field", async () => {
+		mailboxFixture = {
+			id: "user@example.com",
+			email: "user@example.com",
+			name: "User",
+			settings: {},
+		} as unknown as Mailbox;
+		orgSettingsFixture = { settings: { agentSystemPrompt: "org voice" } };
+		domainSettingsFixture = { domain: "example.com", settings: {} };
+
+		renderWithProviders(
+			<Routes>
+				<Route path="/mailbox/:mailboxId/settings" element={<SettingsRoute />} />
+			</Routes>,
+			{ initialEntries: ["/mailbox/user@example.com/settings"] },
+		);
+
+		// No "Inherited from domain" badges at all (domain has nothing) →
+		// every inheritable surface shows "Inherited from org".
+		await screen.findAllByTestId("inherited-badge");
+		expect(screen.queryAllByTestId("inherited-domain-badge")).toHaveLength(0);
 	});
 });
