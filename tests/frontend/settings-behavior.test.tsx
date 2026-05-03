@@ -1,6 +1,7 @@
 // Behavior card from `app/routes/settings.tsx` — verifies the auto-draft
 // toggle and agent-model picker render the saved settings, persist user
 // edits via the update mutation, and surface validation errors via toasts.
+// Also covers the per-mailbox inheritance affordance landed in PR #152.
 
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -15,10 +16,15 @@ const updateMailboxMock = {
 } as unknown as ReturnType<typeof import("~/queries/mailboxes").useUpdateMailbox>;
 
 let mailboxFixture: Mailbox;
+let orgSettingsFixture: { settings: Record<string, unknown> } = { settings: {} };
 
 vi.mock("~/queries/mailboxes", () => ({
 	useMailbox: () => ({ data: mailboxFixture }),
 	useUpdateMailbox: () => updateMailboxMock,
+}));
+
+vi.mock("~/queries/org-settings", () => ({
+	useOrgSettings: () => ({ data: orgSettingsFixture, isLoading: false }),
 }));
 
 import SettingsRoute from "~/routes/settings";
@@ -37,6 +43,7 @@ describe("Settings · Behavior card", () => {
 	beforeEach(() => {
 		mutateAsync.mockReset();
 		mutateAsync.mockResolvedValue(undefined);
+		orgSettingsFixture = { settings: {} };
 		mailboxFixture = {
 			id: "m1",
 			email: "ops@example.com",
@@ -106,5 +113,104 @@ describe("Settings · Behavior card", () => {
 
 		expect(await screen.findByText(/must start with @cf\//i)).toBeInTheDocument();
 		expect(mutateAsync).not.toHaveBeenCalled();
+	});
+});
+
+describe("Settings · per-mailbox inheritance affordance (#106)", () => {
+	beforeEach(() => {
+		mutateAsync.mockReset();
+		mutateAsync.mockResolvedValue(undefined);
+	});
+
+	it("renders 'Inherited from org' for fields the mailbox does not set", async () => {
+		// Mailbox has NO autoDraft, NO agentModel, NO security, NO intel.hub —
+		// only the per-mailbox identity field. The org tier supplies values.
+		mailboxFixture = {
+			id: "m1",
+			email: "ops@example.com",
+			name: "Ops",
+			settings: { fromName: "Ops" },
+		} as unknown as Mailbox;
+		orgSettingsFixture = {
+			settings: {
+				agentSystemPrompt: "Be terse.",
+				agentModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				autoDraft: { enabled: false },
+			},
+		};
+
+		renderSettings();
+		const inheritedBadges = await screen.findAllByTestId("inherited-badge");
+		// Five inheritable surfaces: prompt, autoDraft, agentModel, security,
+		// intel.hub. All inherited because mailbox tier is empty.
+		expect(inheritedBadges.length).toBe(5);
+		// Reset buttons should NOT render when nothing is overridden.
+		expect(screen.queryByTestId("reset-prompt")).toBeNull();
+		expect(screen.queryByTestId("reset-model")).toBeNull();
+	});
+
+	it("promotes a field to override when the user edits it, and a save omits other fields", async () => {
+		mailboxFixture = {
+			id: "m1",
+			email: "ops@example.com",
+			name: "Ops",
+			settings: { fromName: "Ops" },
+		} as unknown as Mailbox;
+		orgSettingsFixture = {
+			settings: {
+				agentModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				autoDraft: { enabled: true },
+			},
+		};
+
+		const user = userEvent.setup();
+		renderSettings();
+		// Edit only the auto-draft toggle. Everything else must continue to
+		// inherit, so the PUT payload sends `undefined` for them — which the
+		// worker's stripDefaultEqual then drops, preserving the inheritance
+		// chain for the next read.
+		const toggle = await screen.findByRole("checkbox", { name: /auto-draft replies/i });
+		await user.click(toggle);
+
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+		const payload = mutateAsync.mock.calls[0][0] as {
+			settings: Record<string, unknown>;
+		};
+		expect(payload.settings.autoDraft).toEqual({ enabled: false });
+		expect(payload.settings.agentSystemPrompt).toBeUndefined();
+		expect(payload.settings.agentModel).toBeUndefined();
+		expect(payload.settings.security).toBeUndefined();
+	});
+
+	it("'Reset to inherited' on the prompt clears the override and re-renders the inherited badge", async () => {
+		mailboxFixture = {
+			id: "m1",
+			email: "ops@example.com",
+			name: "Ops",
+			settings: {
+				agentSystemPrompt: "mailbox-specific voice",
+			},
+		} as unknown as Mailbox;
+		orgSettingsFixture = {
+			settings: { agentSystemPrompt: "org default voice" },
+		};
+
+		const user = userEvent.setup();
+		renderSettings();
+		// Override badge present initially, reset button visible.
+		expect(await screen.findByTestId("override-badge")).toBeInTheDocument();
+		await user.click(screen.getByTestId("reset-prompt"));
+		// After reset → inherited badge appears, override gone.
+		expect(await screen.findByTestId("inherited-badge")).toBeInTheDocument();
+
+		// Save and confirm the prompt field is omitted from the PUT payload.
+		await user.click(screen.getByRole("button", { name: /save changes/i }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+		const payload = mutateAsync.mock.calls[0][0] as {
+			settings: Record<string, unknown>;
+		};
+		expect(payload.settings.agentSystemPrompt).toBeUndefined();
 	});
 });
