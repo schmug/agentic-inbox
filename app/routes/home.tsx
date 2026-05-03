@@ -3,6 +3,7 @@
 import { Loader } from "@cloudflare/kumo";
 import {
 	BriefcaseIcon,
+	BuildingsIcon,
 	EnvelopeIcon,
 	ShieldCheckIcon,
 	WarningIcon,
@@ -11,6 +12,7 @@ import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
 import { useAutoProvisionMailboxes } from "~/hooks/useAutoProvisionMailboxes";
+import { useDomains } from "~/queries/domains";
 import { useMailboxes } from "~/queries/mailboxes";
 import { useOrgOverview } from "~/queries/org";
 import type { OrgOverview, OrgVerdictMix } from "~/types";
@@ -109,6 +111,7 @@ function OrgBody({
 				/>
 				<TopThreatsCard threats={data.topThreats} />
 			</div>
+			<TopDomainsCard domainsCount={data.domainsCount} />
 		</>
 	);
 }
@@ -140,6 +143,12 @@ function EmptyOrg() {
 interface Kpi {
 	label: string;
 	value: string;
+	/**
+	 * Optional drill-down target. When set, the KPI card renders as a link so
+	 * an operator scanning the org overview can click straight through to the
+	 * matching detail surface (e.g. `Domains` → `/domains`). Issue #141.
+	 */
+	to?: string;
 }
 
 function KpiGrid({ data }: { data: OrgOverview }) {
@@ -162,7 +171,11 @@ function KpiGrid({ data }: { data: OrgOverview }) {
 					: formatLatency(data.pipelineHealth.p95Ms),
 		},
 		{ label: "Mailboxes", value: String(data.mailboxesCount) },
-		{ label: "Domains", value: String(data.domainsCount) },
+		// Drill-down: home → /domains list (#141). Even with the dedicated
+		// "Top domains · 24h" widget below, the count itself is a low-cost
+		// secondary affordance for operators who land here looking for a
+		// domain they don't see in the top-N.
+		{ label: "Domains", value: String(data.domainsCount), to: "/domains" },
 		{
 			label: "Hub contributions · 24h",
 			value: String(data.hubContributions24h),
@@ -175,17 +188,34 @@ function KpiGrid({ data }: { data: OrgOverview }) {
 	return (
 		<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
 			{kpis.map((k) => (
-				<div key={k.label} className="pp-card p-4">
-					<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
-						{k.label}
-					</div>
-					<div className="pp-serif text-[36px] leading-none text-ink">
-						{k.value}
-					</div>
-				</div>
+				<KpiCard key={k.label} kpi={k} />
 			))}
 		</div>
 	);
+}
+
+function KpiCard({ kpi }: { kpi: Kpi }) {
+	const body = (
+		<>
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+				{kpi.label}
+			</div>
+			<div className="pp-serif text-[36px] leading-none text-ink">
+				{kpi.value}
+			</div>
+		</>
+	);
+	if (kpi.to) {
+		return (
+			<RouterLink
+				to={kpi.to}
+				className="pp-card p-4 block hover:bg-paper-2 transition-colors"
+			>
+				{body}
+			</RouterLink>
+		);
+	}
+	return <div className="pp-card p-4">{body}</div>;
 }
 
 const VERDICT_LABEL: Record<keyof OrgVerdictMix, string> = {
@@ -298,6 +328,70 @@ function TopThreatsCard({
 					))}
 				</ul>
 			)}
+		</div>
+	);
+}
+
+/**
+ * "Top domains · 24h" — a per-domain rollup widget that lets MSP-shape
+ * operators answer "which of my N domains is having the worst day?" without
+ * leaving home (#141). Sorts the same `/api/v1/domains` list the `/domains`
+ * route uses by `threatsBlocked24h` desc and renders the top three.
+ *
+ * Hidden when only one domain is configured: the widget exists to compare
+ * domains, and a single-row table doesn't earn its space. Also hidden while
+ * the underlying query is loading or errors out — those failure modes are
+ * already surfaced by the `/domains` route itself, so duplicating them here
+ * just adds noise to the home overview.
+ */
+const TOP_DOMAINS_LIMIT = 3;
+
+function TopDomainsCard({ domainsCount }: { domainsCount: number }) {
+	const { data, isLoading, isError } = useDomains();
+
+	// Hide entirely when there's only one (or zero) domains — the widget
+	// exists to compare domains, and a single-row table doesn't earn its
+	// space on the org overview. Issue #141 acceptance criteria.
+	if (domainsCount <= 1) return null;
+	if (isLoading || isError || !data) return null;
+
+	const sorted = [...data].sort(
+		(a, b) => b.threatsBlocked24h - a.threatsBlocked24h,
+	);
+	const top = sorted.slice(0, TOP_DOMAINS_LIMIT);
+
+	return (
+		<div className="pp-card p-5">
+			<div className="flex items-baseline justify-between gap-3 mb-3">
+				<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 flex items-center gap-1.5">
+					<BuildingsIcon size={12} />
+					Top domains · 24h
+				</div>
+				<RouterLink
+					to="/domains"
+					className="text-[12px] text-accent hover:opacity-80"
+				>
+					View all domains →
+				</RouterLink>
+			</div>
+			<ul className="space-y-1.5">
+				{top.map((d) => (
+					<li
+						key={d.domain}
+						className="flex items-baseline justify-between gap-3 py-1"
+					>
+						<RouterLink
+							to={`/domains/${encodeURIComponent(d.domain)}`}
+							className="text-[13px] text-ink hover:text-accent transition-colors truncate"
+						>
+							{d.domain}
+						</RouterLink>
+						<span className="pp-mono text-[12px] text-ink-3 tabular-nums">
+							{d.threatsBlocked24h}
+						</span>
+					</li>
+				))}
+			</ul>
 		</div>
 	);
 }
