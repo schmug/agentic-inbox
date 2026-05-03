@@ -5,6 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
 import type { DomainStats } from "~/types";
+import {
+	shellDashboardMock,
+	shellDomainsMock,
+	shellMailboxesMock,
+} from "./shell-mocks";
 
 const refetch = vi.fn();
 let queryState: {
@@ -13,21 +18,21 @@ let queryState: {
 	isError: boolean;
 };
 
-vi.mock("~/queries/domains", () => ({
-	useDomainStats: () => ({ ...queryState, refetch }),
-}));
+// `useDomainStats` is the route's primary query and Shell's domain-scoped
+// sidebar source — both wire through the same hook, so the per-test
+// override here drives both.
+vi.mock("~/queries/domains", () =>
+	shellDomainsMock({
+		useDomainStats: () => ({ ...queryState, refetch }),
+	}),
+);
 
-// Shell pulls in mailbox/dashboard data — keep these stubs identical to
-// `home.test.tsx` so we render the route in isolation rather than fanning
-// out to real fetchers.
-vi.mock("~/queries/mailboxes", () => ({
-	useMailboxes: () => ({ data: [], refetch: vi.fn(), isFetched: true }),
-	useMailbox: () => ({ data: undefined }),
-}));
+// Shell pulls in mailbox/dashboard data — the shared factories return the
+// same empty-list / undefined defaults so we render the route in isolation
+// rather than fanning out to real fetchers.
+vi.mock("~/queries/mailboxes", () => shellMailboxesMock());
 
-vi.mock("~/queries/dashboard", () => ({
-	useDashboardSummary: () => ({ data: undefined }),
-}));
+vi.mock("~/queries/dashboard", () => shellDashboardMock());
 
 import DomainDetailRoute from "~/routes/domain-detail";
 import { renderWithProviders } from "./test-utils";

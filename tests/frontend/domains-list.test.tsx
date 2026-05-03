@@ -5,6 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DomainListEntry } from "~/types";
+import {
+	shellDashboardMock,
+	shellDomainsMock,
+	shellMailboxesMock,
+} from "./shell-mocks";
 
 const refetch = vi.fn();
 let queryState: {
@@ -13,25 +18,18 @@ let queryState: {
 	isError: boolean;
 };
 
-vi.mock("~/queries/domains", () => ({
-	useDomains: () => ({ ...queryState, refetch }),
-	// Shell calls `useDomainStats` to drive the domain-scoped sidebar (#143);
-	// at `/domains` (the list route) it doesn't match so the hook is gated to
-	// `enabled: false`, but the import still has to resolve.
-	useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
-}));
+vi.mock("~/queries/domains", () =>
+	shellDomainsMock({
+		useDomains: () => ({ ...queryState, refetch }),
+	}),
+);
 
-// Shell pulls in mailbox/dashboard data — keep these stubs identical to
-// `home.test.tsx` so we render the route in isolation rather than fanning
-// out to real fetchers.
-vi.mock("~/queries/mailboxes", () => ({
-	useMailboxes: () => ({ data: [], refetch: vi.fn(), isFetched: true }),
-	useMailbox: () => ({ data: undefined }),
-}));
+// Shell pulls in mailbox/dashboard data — the shared factories return the
+// same empty-list / undefined defaults so we render the route in isolation
+// rather than fanning out to real fetchers.
+vi.mock("~/queries/mailboxes", () => shellMailboxesMock());
 
-vi.mock("~/queries/dashboard", () => ({
-	useDashboardSummary: () => ({ data: undefined }),
-}));
+vi.mock("~/queries/dashboard", () => shellDashboardMock());
 
 import DomainsListRoute from "~/routes/domains-list";
 import { renderWithProviders } from "./test-utils";

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
 import type { DashboardSummary } from "~/types";
+import { shellDashboardMock } from "./shell-mocks";
 
 const refetch = vi.fn();
 let queryState: {
@@ -13,9 +14,16 @@ let queryState: {
 	isError: boolean;
 };
 
-vi.mock("~/queries/dashboard", () => ({
-	useDashboardSummary: () => ({ ...queryState, refetch }),
-}));
+// `DashboardRoute` consumes `useDashboardSummary` directly. The route is
+// rendered in isolation here (the parent `mailbox.tsx` layout that mounts
+// Shell isn't in the tree), so only the dashboard factory is needed — the
+// other Shell factories aren't load-bearing for this file. Using the shared
+// factory keeps the override pattern aligned with the Shell-rendering tests.
+vi.mock("~/queries/dashboard", () =>
+	shellDashboardMock({
+		useDashboardSummary: () => ({ ...queryState, refetch }),
+	}),
+);
 
 import DashboardRoute from "~/routes/dashboard";
 import { renderWithProviders } from "./test-utils";
