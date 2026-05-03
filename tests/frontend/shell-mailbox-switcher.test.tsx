@@ -193,6 +193,107 @@ describe("Shell mailbox switcher (#188)", () => {
 		expect(screen.getByTestId("location")).toHaveTextContent("/mailboxes");
 	});
 
+	// #203: search filter when mailbox count exceeds the threshold (>8).
+	describe("search filter (#203)", () => {
+		function makeMailboxes(n: number): MailboxFixture[] {
+			return Array.from({ length: n }, (_, i) => ({
+				id: `m${i + 1}`,
+				email: `user${i + 1}@acme.com`,
+				name: `Person ${i + 1}`,
+			}));
+		}
+
+		it("does not render the search input when count <= 8", async () => {
+			mailboxesFixture = makeMailboxes(8);
+			renderShellAt(["/"]);
+
+			const trigger = screen.getByRole("button", { name: /select mailbox/i });
+			await openMenu(trigger);
+
+			const menu = await screen.findByRole("menu");
+			expect(
+				within(menu).queryByRole("textbox", { name: /search mailboxes/i }),
+			).toBeNull();
+			// All 8 rows should be present.
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(8);
+		});
+
+		it("renders the search input when count > 8 and filters by name substring", async () => {
+			mailboxesFixture = makeMailboxes(12);
+			// Give one mailbox a distinctive name so the substring search has
+			// something unambiguous to match.
+			mailboxesFixture[6] = {
+				id: "m7",
+				email: "needle@acme.com",
+				name: "Needle Person",
+			};
+			renderShellAt(["/"]);
+
+			const trigger = screen.getByRole("button", { name: /select mailbox/i });
+			await openMenu(trigger);
+
+			const menu = await screen.findByRole("menu");
+			const input = within(menu).getByRole("textbox", {
+				name: /search mailboxes/i,
+			});
+			expect(input).toBeInTheDocument();
+			// All 12 rows visible before filtering.
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(12);
+
+			fireEvent.change(input, { target: { value: "needle" } });
+
+			// Only the matching row remains.
+			const items = within(menu).getAllByRole("menuitem");
+			expect(items).toHaveLength(1);
+			expect(items[0]).toHaveTextContent(/needle/i);
+		});
+
+		it("filter is case-insensitive and matches email substring", async () => {
+			mailboxesFixture = makeMailboxes(12);
+			mailboxesFixture[3] = {
+				id: "m4",
+				email: "unique-handle@acme.com",
+				name: "Plain Name",
+			};
+			renderShellAt(["/"]);
+
+			const trigger = screen.getByRole("button", { name: /select mailbox/i });
+			await openMenu(trigger);
+
+			const menu = await screen.findByRole("menu");
+			const input = within(menu).getByRole("textbox", {
+				name: /search mailboxes/i,
+			});
+
+			fireEvent.change(input, { target: { value: "UNIQUE-HANDLE" } });
+
+			const items = within(menu).getAllByRole("menuitem");
+			expect(items).toHaveLength(1);
+			expect(items[0]).toHaveTextContent(/Plain Name/);
+		});
+
+		it('shows "No matches" when the filter empties the list, and clearing restores it', async () => {
+			mailboxesFixture = makeMailboxes(12);
+			renderShellAt(["/"]);
+
+			const trigger = screen.getByRole("button", { name: /select mailbox/i });
+			await openMenu(trigger);
+
+			const menu = await screen.findByRole("menu");
+			const input = within(menu).getByRole("textbox", {
+				name: /search mailboxes/i,
+			});
+
+			fireEvent.change(input, { target: { value: "zzznomatchzzz" } });
+			expect(within(menu).queryAllByRole("menuitem")).toHaveLength(0);
+			expect(within(menu).getByText(/no matches/i)).toBeInTheDocument();
+
+			fireEvent.change(input, { target: { value: "" } });
+			// Full list restored.
+			expect(within(menu).getAllByRole("menuitem")).toHaveLength(12);
+		});
+	});
+
 	it("Escape closes the menu", async () => {
 		mailboxesFixture = [{ id: "m1", email: "alice@acme.com", name: "Alice" }];
 		const user = userEvent.setup();

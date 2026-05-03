@@ -4,6 +4,7 @@
 
 import { Menu } from "@base-ui/react/menu";
 import { CaretUpDownIcon, CheckIcon } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import type { Mailbox } from "~/types";
 
@@ -40,6 +41,11 @@ interface MailboxSwitcherProps {
 	onClose: () => void;
 }
 
+// Threshold above which a search filter is rendered inside the popover.
+// Below this, the flat scroll is fine; above it, finding a mailbox by
+// scanning the list becomes the bottleneck (#203).
+const MAILBOX_SEARCH_THRESHOLD = 8;
+
 export default function MailboxSwitcher({
 	activeMailboxId,
 	mailbox,
@@ -51,11 +57,66 @@ export default function MailboxSwitcher({
 	const orgDomain = mailbox?.email?.split("@")[1] ?? "—";
 	const orgInitial = (mailbox?.name || mailbox?.email || "?")[0]?.toUpperCase();
 	const list = mailboxes ?? [];
+	const showSearch = list.length > MAILBOX_SEARCH_THRESHOLD;
+
+	const [query, setQuery] = useState("");
+	const inputRef = useRef<HTMLInputElement | null>(null);
+	const popupRef = useRef<HTMLDivElement | null>(null);
+
+	// Reset the filter every time the menu closes so the next open starts
+	// clean — without this, reopening the popover would surface the previous
+	// query and confuse the affordance.
+	const handleOpenChange = (open: boolean) => {
+		if (!open) setQuery("");
+	};
+
+	// Focus the search input on open. base-ui's FloatingFocusManager runs
+	// `initialFocus: true` for a top-level menu, which targets the first
+	// tabbable element — that's the input now, but our items also become
+	// tabbable via roving focus. An explicit focus() inside a microtask is
+	// the most reliable way to land focus on the input regardless of the
+	// composite's roving-focus race.
+	useEffect(() => {
+		if (!showSearch) return;
+		// Wait one tick for the popup to mount before focusing.
+		const id = window.setTimeout(() => {
+			inputRef.current?.focus();
+		}, 0);
+		return () => window.clearTimeout(id);
+		// Re-run when the popup mounts (popupRef changes via callback ref) —
+		// but useEffect on render is enough here because the popup mounts as
+		// part of the same render cycle that sets `showSearch`.
+	}, [showSearch]);
+
+	const filtered = useMemo(() => {
+		const q = query.trim().toLowerCase();
+		if (!q) return list;
+		return list.filter((mb) => {
+			const name = (mb.name ?? "").toLowerCase();
+			const email = (mb.email ?? "").toLowerCase();
+			return name.includes(q) || email.includes(q);
+		});
+	}, [list, query]);
 
 	const handlePick = (id: string) => {
 		onClose();
 		if (id === activeMailboxId) return;
 		navigate(`/mailbox/${encodeURIComponent(id)}/dashboard`);
+	};
+
+	// ↓ from the input should land on the first matching menuitem. The input
+	// is intentionally NOT a Menu.Item (so it never shows up in roving focus
+	// and never gets selected by Enter from another row), so we wire the
+	// arrow manually. Querying the popup for `role="menuitem"` keeps us
+	// agnostic to base-ui's internal composite store.
+	const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (event.key !== "ArrowDown") return;
+		const popup = popupRef.current;
+		if (!popup) return;
+		const firstItem = popup.querySelector<HTMLElement>('[role="menuitem"]');
+		if (!firstItem) return;
+		event.preventDefault();
+		firstItem.focus();
 	};
 
 	return (
@@ -65,6 +126,7 @@ export default function MailboxSwitcher({
 			// than a popover should be. base-ui still wires Escape and
 			// outside-click dismissal in non-modal mode.
 			modal={false}
+			onOpenChange={handleOpenChange}
 		>
 			<Menu.Trigger
 				className="mx-3 flex items-center gap-2.5 rounded-md border border-line bg-paper px-2.5 py-2 text-left hover:border-line-strong transition-colors"
@@ -85,9 +147,28 @@ export default function MailboxSwitcher({
 			<Menu.Portal>
 				<Menu.Positioner sideOffset={4} align="start" className="z-50">
 					<Menu.Popup
+						ref={popupRef}
 						aria-label="Switch mailbox"
 						className="min-w-[220px] max-w-[320px] rounded-md border border-line bg-paper py-1 shadow-lg outline-none"
 					>
+						{showSearch && (
+							// Static input, not a Menu.Item — keeps it out of the
+							// composite's roving focus so arrow keys on the items
+							// don't cycle through it. Tabbing still reaches it
+							// because it's a focusable element in DOM order.
+							<div className="px-2 pb-1 pt-0.5">
+								<input
+									ref={inputRef}
+									type="text"
+									value={query}
+									onChange={(e) => setQuery(e.target.value)}
+									onKeyDown={handleInputKeyDown}
+									placeholder="Search mailboxes"
+									aria-label="Search mailboxes"
+									className="w-full rounded-sm border border-line bg-paper-2 px-2 py-1 text-[12px] text-ink placeholder:text-ink-3 outline-none focus:border-line-strong"
+								/>
+							</div>
+						)}
 						{list.length === 0 ? (
 							// Empty state. Not a `MenuItem` — that would make it
 							// selectable; this is a static blurb plus a nav link the
@@ -108,8 +189,14 @@ export default function MailboxSwitcher({
 									</a>
 								</div>
 							</div>
+						) : filtered.length === 0 ? (
+							// Search has filtered out every row. Not a Menu.Item so
+							// arrow keys don't try to highlight it.
+							<div className="px-3 py-2 text-[12px] text-ink-3">
+								No matches
+							</div>
 						) : (
-							list.map((mb) => {
+							filtered.map((mb) => {
 								const isActive = mb.id === activeMailboxId;
 								return (
 									<Menu.Item
