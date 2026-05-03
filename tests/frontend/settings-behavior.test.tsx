@@ -228,11 +228,22 @@ describe("Settings · per-mailbox inheritance affordance (#106)", () => {
 
 		const user = userEvent.setup();
 		renderSettings();
-		// Override badge present initially, reset button visible.
-		expect(await screen.findByTestId("override-badge")).toBeInTheDocument();
+		// Initial state: prompt is the only override; the other four
+		// inheritable surfaces (autoDraft, agentModel, security, intel.hub)
+		// are inherited because the mailbox fixture only sets the prompt.
+		await screen.findByTestId("reset-prompt");
+		expect(screen.getAllByTestId("override-badge")).toHaveLength(1);
+		expect(screen.getAllByTestId("inherited-badge")).toHaveLength(4);
+
 		await user.click(screen.getByTestId("reset-prompt"));
-		// After reset → inherited badge appears, override gone.
-		expect(await screen.findByTestId("inherited-badge")).toBeInTheDocument();
+
+		// After reset: every inheritable surface inherits → 5 inherited
+		// badges, 0 overrides, reset-prompt button is hidden.
+		await waitFor(() => {
+			expect(screen.queryAllByTestId("override-badge")).toHaveLength(0);
+		});
+		expect(screen.getAllByTestId("inherited-badge")).toHaveLength(5);
+		expect(screen.queryByTestId("reset-prompt")).toBeNull();
 
 		// Save and confirm the prompt field is omitted from the PUT payload.
 		await user.click(screen.getByRole("button", { name: /save changes/i }));
