@@ -328,6 +328,43 @@ describe("aggregateDomainStats", () => {
 		});
 	});
 
+	it("falls back to the all-null BIMI posture when the handler doesn't supply one (#166)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.bimiPosture).toEqual({
+			configured: null,
+			hasLogo: null,
+			hasVmc: null,
+		});
+	});
+
+	it("threads a real BIMI posture through unchanged when supplied (#166)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			bimiPosture: {
+				configured: true,
+				hasLogo: true,
+				hasVmc: true,
+			},
+		});
+		expect(result!.bimiPosture).toEqual({
+			configured: true,
+			hasLogo: true,
+			hasVmc: true,
+		});
+	});
+
 	it("tolerates null (failed) summaries as zero contributions", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",

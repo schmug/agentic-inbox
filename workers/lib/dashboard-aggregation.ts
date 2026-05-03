@@ -433,6 +433,15 @@ export interface MtaStsPostureView {
 	id: string | null;
 }
 
+/** BIMI posture (#166). `configured=null` is "lookup unavailable",
+ * `configured=false` is "no `v=BIMI1` record exists". `hasLogo`/`hasVmc`
+ * track whether the `l=` / `a=` tags carry non-empty URLs. */
+export interface BimiPostureView {
+	configured: boolean | null;
+	hasLogo: boolean | null;
+	hasVmc: boolean | null;
+}
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -459,6 +468,9 @@ export interface DomainStats {
 	/** MTA-STS posture (#165). All-null when the upstream lookup failed or
 	 * the domain doesn't publish a policy. */
 	mtaStsPosture: MtaStsPostureView;
+	/** BIMI posture (#166). All-null when the upstream lookup failed; a
+	 * `configured: false` posture means "no `v=BIMI1` record published". */
+	bimiPosture: BimiPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -501,6 +513,12 @@ export function emptyDmarcPosture(): DmarcPosture {
  * "not configured / unavailable" (same affordance as DMARC). */
 export function emptyMtaStsPostureView(): MtaStsPostureView {
 	return { mode: null, mx: null, maxAge: null, id: null };
+}
+
+/** Empty BIMI posture sentinel — `configured=null` distinguishes "lookup
+ * unavailable" from a `configured=false` "no record published" result. */
+export function emptyBimiPostureView(): BimiPostureView {
+	return { configured: null, hasLogo: null, hasVmc: null };
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -627,6 +645,11 @@ interface AggregateDomainStatsInput {
 	 * the published policy file. Omitted defaults to the all-null sentinel.
 	 */
 	mtaStsPosture?: MtaStsPostureView;
+	/**
+	 * BIMI posture (#166) from the `default._bimi.<domain>` DoH lookup.
+	 * Omitted defaults to the all-null sentinel.
+	 */
+	bimiPosture?: BimiPostureView;
 }
 
 /**
@@ -685,6 +708,7 @@ export function aggregateDomainStats(
 		verdictMix,
 		dmarcPosture: input.dmarcPosture ?? emptyDmarcPosture(),
 		mtaStsPosture: input.mtaStsPosture ?? emptyMtaStsPostureView(),
+		bimiPosture: input.bimiPosture ?? emptyBimiPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }

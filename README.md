@@ -180,7 +180,11 @@ The [`hub/`](hub/) subdirectory is a MISP-compatible community threat-intel hub 
 
 ### Domain posture surfaces
 
-The per-domain page (`/domains/:domain`) surfaces published email-auth posture alongside threat verdicts. Today it shows DMARC apex policy + alignment rate and **MTA-STS** mode/mx/max_age (`_mta-sts.<domain>` TXT + `https://mta-sts.<domain>/.well-known/mta-sts.txt`, cached in KV by policy `id` so a roll auto-invalidates).
+The per-domain page (`/domains/:domain`) surfaces published email-auth posture alongside threat verdicts. Today it shows:
+
+- DMARC apex policy + alignment rate.
+- **MTA-STS** mode/mx/max_age (`_mta-sts.<domain>` TXT + `https://mta-sts.<domain>/.well-known/mta-sts.txt`, cached in KV by policy `id` so a roll auto-invalidates).
+- **BIMI** record presence (`default._bimi.<domain>` TXT — surfaces "configured / configured-with-VMC / not configured / unavailable"; does NOT fetch the SVG logo or VMC certificate).
 
 ## Architecture
 

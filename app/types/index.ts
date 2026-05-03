@@ -258,6 +258,15 @@ export interface MtaStsPosture {
 	id: string | null;
 }
 
+/** BIMI posture (#166). All fields nullable; `configured: true` + null
+ * `hasLogo`/`hasVmc` is impossible (the resolver always sets all three when
+ * a record exists). `configured: false` is "no `v=BIMI1` record published". */
+export interface BimiPosture {
+	configured: boolean | null;
+	hasLogo: boolean | null;
+	hasVmc: boolean | null;
+}
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -285,6 +294,7 @@ export interface DomainStats {
 	verdictMix: OrgVerdictMix;
 	dmarcPosture: DmarcPosture;
 	mtaStsPosture: MtaStsPosture;
+	bimiPosture: BimiPosture;
 	recentCases: DashboardCase[];
 }
 
