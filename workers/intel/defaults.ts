@@ -71,4 +71,26 @@ export const DEFAULT_FEEDS: FeedDefinition[] = [
 		description:
 			"Spamhaus EDROP — extended DROP list of additional spammer netblocks (no auth).",
 	},
+	{
+		// CrowdSec community blocklist — IPs reported by the CrowdSec Security
+		// Engine network. Strongest signal on attacker infra used for web
+		// scans / drive-by / exploit-kit hosting, exactly the kind of IPs
+		// phishing redirect chains tend to terminate at.
+		//
+		// URL is intentionally a placeholder: there is no documented free,
+		// no-auth public download URL for the community blocklist. Operators
+		// must override via mailbox settings (`intel.feeds`) with their own
+		// CrowdSec Console API endpoint and `auth_secret` pointing at a
+		// Worker secret containing the API key. With the URL empty,
+		// `resolveFeeds`'s `.filter((f) => f.url)` skips refresh — the entry
+		// just makes the default discoverable so the override is `id`-keyed.
+		// See README "Security" → "CrowdSec community blocklist" for the
+		// override recipe.
+		id: "crowdsec-community",
+		url: "",
+		kind: "ip-cidr",
+		refreshHours: 6,
+		description:
+			"CrowdSec Community Blocklist — IPs reported by the CrowdSec network (operator-configured URL).",
+	},
 ];

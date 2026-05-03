@@ -1,0 +1,14 @@
+# CrowdSec community blocklist — synthetic test fixture
+# Mirrors the expected plain-IP-per-line format of the operator-configured
+# CrowdSec Console blocklist download. Comment lines start with `#` and
+# must be ignored.
+#
+# Real-world entries are bare IPs (one per line). The shared CIDR parser
+# (`parseCidrFeedBody`) treats a bare IP as `/32` via `parseCidr`, so this
+# fixture mixes a few CIDRs to exercise both paths.
+198.51.100.7
+198.51.100.8
+203.0.113.0/24
+# malformed line below — must warn-and-skip, not throw
+not-an-ip
+192.0.2.99
