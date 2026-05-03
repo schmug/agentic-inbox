@@ -14,17 +14,21 @@
  *     events still untagged 15m after ingest (queue-backup smoke signal)
  *   - cron last-run proxy
  *
- * Index discipline. All counts come off existing D1 indexes from
- * 0001_schema.sql / 0002_inbound_sync.sql. The only schema this endpoint
- * relies on directly beyond those is `cron_runs` (added in
- * 0003_cron_runs.sql) — a single-row PK lookup, no index needed:
+ * Index discipline. All counts come off D1 indexes from 0001_schema.sql
+ * / 0002_inbound_sync.sql / 0004_idx_events_created_at.sql, plus a
+ * single-row PK lookup against `cron_runs` (added in 0003_cron_runs.sql,
+ * no index needed):
  *
- *   - `idx_events_date`           drives the 24h / 7d windows on `events`.
- *     Note: `events.date` is the upstream MISP event date (YYYY-MM-DD),
- *     not local ingest time. We accept the coarseness — for an at-a-glance
- *     dashboard it's a close-enough proxy and it's the only indexed time
- *     column on `events`. Adding a `created_at` index would be a separate
- *     migration; that's a follow-up, not part of this endpoint.
+ *   - `idx_events_created_at`     drives `events.last_24h` and the 7d
+ *     org-activity window. Uses local ingest time so that backfilled
+ *     events with stale upstream `date` still land in the day they
+ *     were actually ingested — the right semantic for an at-a-glance
+ *     operational dashboard.
+ *   - `idx_events_date`           drives per-peer events_pulled_24h
+ *     (upstream-date semantics) and the triage 24h slice (used as a
+ *     bounded pre-filter for the non-indexed `created_at < -15m` and
+ *     `EXISTS event_tags` predicates). Other `date`-based queries in
+ *     the hub stay on this index.
  *   - `idx_events_source_peer`    drives per-peer events_pulled_24h.
  *   - `idx_corroboration_sharing_group` drives the destroylist groupby.
  *
@@ -58,21 +62,26 @@ adminStatsRoutes.get("/stats", async (c) => {
 	// --- orgs -----------------------------------------------------------
 	const orgsTotal = (await db.prepare(`SELECT COUNT(*) AS n FROM orgs`).first<CountRow>())?.n ?? 0;
 
-	// "active" = has authored at least one event in the last 7d. Uses
-	// idx_events_date; date is upstream YYYY-MM-DD, see file-level note.
+	// "active" = has ingested at least one event in the last 7d. Uses
+	// idx_events_created_at so a peer backfilling stale-dated events
+	// counts the contributing org as active.
 	const activeOrgs = (await db
 		.prepare(
 			`SELECT COUNT(DISTINCT orgc_uuid) AS n
 			 FROM events
-			 WHERE date >= date('now', '-7 days')`,
+			 WHERE created_at >= datetime('now', '-7 days')`,
 		)
 		.first<CountRow>())?.n ?? 0;
 
 	// --- events ---------------------------------------------------------
 	const eventsTotal = (await db.prepare(`SELECT COUNT(*) AS n FROM events`).first<CountRow>())?.n ?? 0;
+	// 24h window keyed off local ingest time (idx_events_created_at) so
+	// that an event imported today with a stale upstream `date` still
+	// lands in today's bucket. Other event-time queries below stay on
+	// `events.date` — see file-level note.
 	const eventsLast24h = (await db
 		.prepare(
-			`SELECT COUNT(*) AS n FROM events WHERE date >= date('now', '-1 day')`,
+			`SELECT COUNT(*) AS n FROM events WHERE created_at >= datetime('now', '-1 day')`,
 		)
 		.first<CountRow>())?.n ?? 0;
 

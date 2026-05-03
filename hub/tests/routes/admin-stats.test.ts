@@ -72,31 +72,49 @@ describe("GET /admin/stats — happy path with seeded fixtures", () => {
 		const today = new Date().toISOString().slice(0, 10);
 		const eightDaysAgo = new Date(Date.now() - 8 * 86_400_000).toISOString().slice(0, 10);
 
-		// Two orgs — one active, one stale.
+		// Two orgs — one active, one stale, plus a "backfill" org that
+		// only contributed events with stale upstream dates but a fresh
+		// local ingest time (regression coverage for #123).
 		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`).run("org-active", "Active", 1.0);
 		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`).run("org-stale", "Stale", 1.0);
+		db.raw.prepare(`INSERT INTO orgs (uuid, name, trust) VALUES (?, ?, ?)`).run("org-backfill", "Backfill", 1.0);
 
 		// Sharing groups.
 		db.raw.prepare(`INSERT INTO sharing_groups (uuid, name) VALUES (?, ?)`).run("sg-pub", "public");
 		db.raw.prepare(`INSERT INTO sharing_groups (uuid, name) VALUES (?, ?)`).run("sg-empty", "empty");
 
-		// Events: 2 by active org today (one tagged, one not), 1 by stale org 8d ago.
+		// Events: 3 by active org today (one tagged, two not), 1 by stale
+		// org 8d ago, 1 by backfill org with stale upstream date but a
+		// recent ingest time.
 		const insertEvent = db.raw.prepare(
 			`INSERT INTO events (uuid, orgc_uuid, sharing_group_uuid, info, date, timestamp, event_json, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
-		// "Old" enough that the 15-minute predicate fires for the untagged one.
 		// Production rows use the SQLite default `datetime('now')` format
 		// (`YYYY-MM-DD HH:MM:SS`, space separator, no `Z`), so seed in the
 		// same format — ISO-8601 with `T` would lex-compare greater than
-		// SQLite's `datetime('now','-15 minutes')` and break the predicate.
+		// SQLite's `datetime('now', ...)` and break the predicate.
 		const toSqlite = (d: Date) => d.toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 		const sixteenMinAgo = toSqlite(new Date(Date.now() - 16 * 60_000));
 		const oneMinAgo = toSqlite(new Date(Date.now() - 60_000));
+		const eightDaysAgoSqlite = toSqlite(new Date(Date.now() - 8 * 86_400_000));
 		insertEvent.run("ev-tagged", "org-active", "sg-pub", "tagged", today, today + "T00:00:00", "{}", sixteenMinAgo);
 		insertEvent.run("ev-untagged-old", "org-active", "sg-pub", "stuck", today, today + "T00:00:00", "{}", sixteenMinAgo);
 		insertEvent.run("ev-untagged-fresh", "org-active", "sg-pub", "fresh", today, today + "T00:00:00", "{}", oneMinAgo);
-		insertEvent.run("ev-stale", "org-stale", "sg-pub", "stale", eightDaysAgo, eightDaysAgo + "T00:00:00", "{}", eightDaysAgo + "T00:00:00");
+		insertEvent.run("ev-stale", "org-stale", "sg-pub", "stale", eightDaysAgo, eightDaysAgo + "T00:00:00", "{}", eightDaysAgoSqlite);
+		// Regression for #123: stale upstream `date` (8d ago), recent
+		// local `created_at`. Should land in events.last_24h AND
+		// promote org-backfill into orgs.active_last_7d.
+		insertEvent.run(
+			"ev-backfilled",
+			"org-backfill",
+			"sg-pub",
+			"backfilled",
+			eightDaysAgo,
+			eightDaysAgo + "T00:00:00",
+			"{}",
+			oneMinAgo,
+		);
 
 		// Tag exactly one event so the pct lands at 1/3.
 		db.raw.prepare(`INSERT INTO tags (name) VALUES (?)`).run("phishing");
@@ -143,12 +161,19 @@ describe("GET /admin/stats — happy path with seeded fixtures", () => {
 			cron: { last_run_at: number | null };
 		};
 
-		expect(body.orgs.total).toBe(2);
-		// Active = orgs with an event in last 7d. Only org-active qualifies.
-		expect(body.orgs.active_last_7d).toBe(1);
+		expect(body.orgs.total).toBe(3);
+		// Active = orgs with an event ingested in last 7d (created_at).
+		// org-active: yes (today). org-stale: no (created_at 8d ago).
+		// org-backfill: yes — stale `date` but `created_at` = 1m ago,
+		// proving the switch from `date` to `created_at` is wired up.
+		expect(body.orgs.active_last_7d).toBe(2);
 
-		expect(body.events.total).toBe(5);
-		expect(body.events.last_24h).toBe(4); // four events with `date` = today
+		expect(body.events.total).toBe(6);
+		// 24h window keys off `created_at`: 4 events ingested today
+		// plus ev-backfilled (stale `date`, created_at 1m ago) plus
+		// ev-from-peer (today's date and today's created_at) = 5.
+		// Excludes ev-stale (created_at 8d ago).
+		expect(body.events.last_24h).toBe(5);
 
 		expect(body.corroboration.rows).toBe(4);
 		// score>=2 AND contributors>=2 -> only the two sg-pub rows.
