@@ -15,8 +15,9 @@
  *   - cron last-run proxy
  *
  * Index discipline. All counts come off existing D1 indexes from
- * 0001_schema.sql / 0002_inbound_sync.sql; no new migrations are
- * introduced by this endpoint:
+ * 0001_schema.sql / 0002_inbound_sync.sql. The only schema this endpoint
+ * relies on directly beyond those is `cron_runs` (added in
+ * 0003_cron_runs.sql) — a single-row PK lookup, no index needed:
  *
  *   - `idx_events_date`           drives the 24h / 7d windows on `events`.
  *     Note: `events.date` is the upstream MISP event date (YYYY-MM-DD),
@@ -32,16 +33,16 @@
  * indexed pre-filter (`date >= today-1`) so the scan is bounded to a
  * single day's slice rather than the full table.
  *
- * `cron.last_run_at` is a proxy: there is no cron-history table in the
- * schema today. We surface `MAX(last_pulled_ts)` across inbound peers as
- * the closest signal — if the cron is alive AND any peer is healthy, this
- * advances every 5 minutes. A peer-pull failure can mask a healthy cron;
- * a real cron-run-log is filed as a follow-up.
+ * `cron.last_run_at` is read directly from `cron_runs` (epoch-ms INTEGER),
+ * which the cron handler stamps at the START of every iteration — so a
+ * hung run that never reaches a peer is still observable. Returns null
+ * when the table is empty (cron has not yet fired since deploy).
  */
 
 import { Hono } from "hono";
 import { requireAdmin, type AdminContext } from "../../lib/admin-auth";
 import { PROMOTION_SCORE, PROMOTION_CONTRIBUTORS } from "../../lib/aggregate";
+import { INBOUND_SYNC_CRON_NAME } from "../../lib/sync";
 
 export const adminStatsRoutes = new Hono<AdminContext>();
 
@@ -177,10 +178,13 @@ adminStatsRoutes.get("/stats", async (c) => {
 		.first<CountRow>())?.n ?? 0;
 
 	// --- cron -----------------------------------------------------------
-	// Proxy: latest watermark advance across inbound peers. See file note.
+	// Direct read from cron_runs (stamped at the START of each iteration by
+	// the scheduled handler). Null when the table is empty — i.e. the cron
+	// has not yet fired since deploy.
 	const cronLast = await db
-		.prepare(`SELECT MAX(last_pulled_ts) AS last FROM inbound_peers`)
-		.first<{ last: string | null }>();
+		.prepare(`SELECT last_run_at AS last FROM cron_runs WHERE name = ?1`)
+		.bind(INBOUND_SYNC_CRON_NAME)
+		.first<{ last: number | null }>();
 
 	return c.json({
 		orgs: { total: orgsTotal, active_last_7d: activeOrgs },
