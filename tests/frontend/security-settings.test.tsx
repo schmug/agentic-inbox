@@ -22,6 +22,14 @@ vi.mock("~/queries/mailboxes", () => ({
 	useUpdateMailbox: () => updateMailboxMock,
 }));
 
+// Per-mailbox settings page now also reads org settings to drive the
+// inheritance affordance landed in PR #152. Returning an empty resolved
+// blob keeps the form in "no org overrides" mode, so existing assertions
+// about per-mailbox state survive unchanged.
+vi.mock("~/queries/org-settings", () => ({
+	useOrgSettings: () => ({ data: { settings: {} }, isLoading: false }),
+}));
+
 import SettingsRoute from "~/routes/settings";
 import { renderWithProviders } from "./test-utils";
 

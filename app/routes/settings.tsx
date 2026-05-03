@@ -4,10 +4,11 @@
 
 import { Badge, Button, Input, Loader } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useParams } from "react-router";
 import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
+import { useOrgSettings } from "~/queries/org-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import {
@@ -17,141 +18,208 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
-import {
-	DEFAULT_CLASSIFIER_MODEL,
-	DEFAULT_DRAFT_VERIFIER_MODEL,
-	DEFAULT_INJECTION_SCANNER_MODEL,
-	TEXT_MODELS,
-} from "shared/mailbox-settings";
+import { TEXT_MODELS } from "shared/mailbox-settings";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
 const PROMPT_PLACEHOLDER = `You are an email assistant that helps manage this inbox. You read emails, draft replies, and help organize conversations.\n\nWrite like a real person. Short, direct, flowing prose. Plain text only.\n\n(Leave empty to use the full built-in default prompt)`;
 
+interface OrgSettingsShape {
+	agentSystemPrompt?: string;
+	agentModel?: string;
+	autoDraft?: { enabled?: boolean };
+	security?: SecuritySettings;
+	intel?: { hub?: HubConfigSettings };
+}
+
+/** Pill rendered next to a per-mailbox field. Wrapped in a span carrying
+ *  the data-testid because Kumo's Badge doesn't forward arbitrary props
+ *  to its rendered element. */
+function InheritanceBadge({ inherited }: { inherited: boolean }) {
+	return (
+		<span data-testid={inherited ? "inherited-badge" : "override-badge"}>
+			{inherited ? (
+				<Badge variant="secondary">Inherited from org</Badge>
+			) : (
+				<Badge variant="primary">Override</Badge>
+			)}
+		</span>
+	);
+}
+
 export default function SettingsRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
 	const feedback = useFeedback();
 	const { data: mailbox } = useMailbox(mailboxId);
+	const { data: orgData } = useOrgSettings();
 	const updateMailboxMutation = useUpdateMailbox();
 	const { models: availableModels } = useTextModels();
 
+	const orgSettings = (orgData?.settings ?? {}) as OrgSettingsShape;
+
 	const [displayName, setDisplayName] = useState("");
+
+	// Per-field override flags + values. `override` is true when the
+	// mailbox tier supplies its own value (and the save will write it);
+	// false when the field inherits the org tier (save omits it so the
+	// PUT-side stripDefaultEqual + the resolver's absent-key-inherits
+	// semantics keep the inheritance chain alive).
+	const [promptOverride, setPromptOverride] = useState(false);
 	const [agentPrompt, setAgentPrompt] = useState("");
-	const [security, setSecurity] = useState<SecuritySettings | undefined>(undefined);
-	const [hub, setHub] = useState<HubConfigSettings | undefined>(undefined);
-	const [hubErrors, setHubErrors] = useState<HubFieldErrors | undefined>(undefined);
+
+	const [autoDraftOverride, setAutoDraftOverride] = useState(false);
 	const [autoDraftEnabled, setAutoDraftEnabled] = useState(true);
+
+	const [modelOverride, setModelOverride] = useState(false);
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
-	const [injectionScannerModel, setInjectionScannerModel] = useState("");
-	const [draftVerifierModel, setDraftVerifierModel] = useState("");
-	const [classifierModel, setClassifierModel] = useState("");
+
+	const [securityOverride, setSecurityOverride] = useState(false);
+	const [security, setSecurity] = useState<SecuritySettings | undefined>(undefined);
+
+	const [hubOverride, setHubOverride] = useState(false);
+	const [hub, setHub] = useState<HubConfigSettings | undefined>(undefined);
+	const [hubErrors, setHubErrors] = useState<HubFieldErrors | undefined>(undefined);
+
 	const [isSaving, setIsSaving] = useState(false);
 
+	// Initialise form state from the resolved settings ONCE per mailbox.
+	// Re-running on every (mailbox, orgData) change clobbers user edits if
+	// either query returns a fresh object reference each render — react-query
+	// memoises in production, but tests with `vi.mock` typically don't, so a
+	// purely dep-based guard is fragile. The ref tracks the mailboxId we
+	// initialised against; navigating to a different mailbox forces re-init.
+	const initialisedFor = useRef<string | null>(null);
+
 	useEffect(() => {
-		if (mailbox) {
-			setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
-			setAgentPrompt(mailbox.settings?.agentSystemPrompt || "");
-			setSecurity(mailbox.settings?.security);
-			setHub(mailbox.settings?.intel?.hub);
-			setHubErrors(undefined);
+		if (!mailbox || !mailboxId) return;
+		if (initialisedFor.current === mailboxId) return;
+		initialisedFor.current = mailboxId;
+		const s = mailbox.settings as
+			| ({
+					autoDraft?: { enabled?: boolean };
+					agentModel?: string;
+			  } & Record<string, unknown>)
+			| undefined;
 
-			const behavior = mailbox.settings as
-				| {
-						autoDraft?: { enabled?: boolean };
-						agentModel?: string;
-						injectionScannerModel?: string;
-						draftVerifierModel?: string;
-						classifierModel?: string;
-				  }
-				| undefined;
-			const enabled = behavior?.autoDraft?.enabled;
-			setAutoDraftEnabled(enabled === undefined ? true : enabled);
+		setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 
-			const m = behavior?.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
-			if (availableModels.includes(m)) {
-				setModelChoice(m);
+		// Prompt: override when mailbox supplies a non-empty value.
+		const mailboxPrompt = mailbox.settings?.agentSystemPrompt;
+		if (mailboxPrompt && mailboxPrompt.trim()) {
+			setPromptOverride(true);
+			setAgentPrompt(mailboxPrompt);
+		} else {
+			setPromptOverride(false);
+			setAgentPrompt(orgSettings.agentSystemPrompt ?? "");
+		}
+
+		// autoDraft: override when mailbox sets the block at all.
+		if (s?.autoDraft) {
+			setAutoDraftOverride(true);
+			setAutoDraftEnabled(s.autoDraft.enabled ?? true);
+		} else {
+			setAutoDraftOverride(false);
+			setAutoDraftEnabled(orgSettings.autoDraft?.enabled ?? true);
+		}
+
+		// agentModel
+		const initialModel = s?.agentModel;
+		if (initialModel) {
+			setModelOverride(true);
+			if (availableModels.includes(initialModel)) {
+				setModelChoice(initialModel);
 				setCustomModel("");
 			} else {
 				setModelChoice("__custom__");
-				setCustomModel(m);
+				setCustomModel(initialModel);
 			}
-
-			setInjectionScannerModel(behavior?.injectionScannerModel ?? "");
-			setDraftVerifierModel(behavior?.draftVerifierModel ?? "");
-			setClassifierModel(behavior?.classifierModel ?? "");
+		} else {
+			setModelOverride(false);
+			const orgModel = orgSettings.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
+			if (availableModels.includes(orgModel)) {
+				setModelChoice(orgModel);
+				setCustomModel("");
+			} else {
+				setModelChoice("__custom__");
+				setCustomModel(orgModel);
+			}
 		}
-		// `availableModels` is intentionally not in the dep list — re-running
-		// this effect when the dynamic list resolves would reset every other
-		// piece of edited state (auto-draft toggle, custom prompt, …) back to
-		// the saved values, silently undoing the user's edits. The initial
-		// fallback list (`[...TEXT_MODELS]`) is stable enough to map saved
-		// models on first render.
+
+		// security: override when the block is present at all.
+		if (mailbox.settings?.security) {
+			setSecurityOverride(true);
+			setSecurity(mailbox.settings.security);
+		} else {
+			setSecurityOverride(false);
+			setSecurity(orgSettings.security);
+		}
+
+		// intel.hub: override when the mailbox sets one.
+		if (mailbox.settings?.intel?.hub) {
+			setHubOverride(true);
+			setHub(mailbox.settings.intel.hub);
+		} else {
+			setHubOverride(false);
+			setHub(orgSettings.intel?.hub);
+		}
+		setHubErrors(undefined);
+
+		// availableModels intentionally omitted from deps — see commit
+		// message for the rationale (re-running this effect would clobber
+		// edits when the dynamic models list resolves).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [mailbox]);
+	}, [mailbox, orgData, mailboxId]);
 
 	const handleSave = async () => {
 		if (!mailbox || !mailboxId) return;
 
-		const resolvedModel =
-			modelChoice === "__custom__" ? customModel.trim() : modelChoice;
-		if (modelChoice === "__custom__" && !resolvedModel) {
+		const resolvedModel = modelChoice === "__custom__" ? customModel.trim() : modelChoice;
+		if (modelOverride && modelChoice === "__custom__" && !resolvedModel) {
 			feedback.error("Custom model cannot be empty");
 			return;
 		}
-		if (resolvedModel && !resolvedModel.startsWith("@cf/")) {
+		if (modelOverride && resolvedModel && !resolvedModel.startsWith("@cf/")) {
 			feedback.error("Model must start with @cf/");
 			return;
 		}
 
-		// Validate optional security-model overrides — same `@cf/` rule as
-		// the agent model. Empty value means "use default" (#67).
-		const advancedModelInputs: Array<{ label: string; value: string }> = [
-			{ label: "Injection scanner", value: injectionScannerModel.trim() },
-			{ label: "Draft verifier", value: draftVerifierModel.trim() },
-			{ label: "Classifier", value: classifierModel.trim() },
-		];
-		for (const m of advancedModelInputs) {
-			if (m.value && !m.value.startsWith("@cf/")) {
-				feedback.error(`${m.label} model must start with @cf/`);
+		// Hub validation runs only when override is on; if the mailbox
+		// is inheriting, we don't write any intel.hub key and the worker
+		// resolver picks up the org-level config instead.
+		let nextIntel: { hub?: HubConfigSettings } | undefined;
+		if (hubOverride) {
+			const hubValidation = validateHubConfig(hub);
+			setHubErrors(hubValidation ?? undefined);
+			if (hubValidation) {
+				feedback.error("Fix the threat-intel hub fields before saving.");
 				return;
 			}
+			const normalizedHub = normalizeHubConfig(hub);
+			if (normalizedHub) {
+				const existingIntel = mailbox.settings?.intel ?? {};
+				nextIntel = { ...existingIntel, hub: normalizedHub };
+			}
+		} else {
+			// Preserve any other intel.* keys (#29 peer subscriptions, etc.)
+			// while explicitly removing the hub override.
+			const existingIntel = { ...(mailbox.settings?.intel ?? {}) };
+			delete existingIntel.hub;
+			nextIntel = Object.keys(existingIntel).length > 0 ? existingIntel : undefined;
 		}
-
-		// Validate the hub panel before kicking off a save. `validateHubConfig`
-		// returns `null` when the form is fully empty (treat as "unset"); any
-		// errors here surface inline next to the offending field instead of
-		// silently writing a half-config that the backend would treat as
-		// unconfigured.
-		const hubValidation = validateHubConfig(hub);
-		setHubErrors(hubValidation ?? undefined);
-		if (hubValidation) {
-			feedback.error("Fix the threat-intel hub fields before saving.");
-			return;
-		}
-
-		// Preserve unrelated `intel.*` keys (e.g. #29 peer subscriptions land
-		// here in future) by merging on top of whatever's in mailbox.settings.
-		const normalizedHub = normalizeHubConfig(hub);
-		const existingIntel = mailbox.settings?.intel ?? {};
-		const nextIntel: typeof existingIntel = { ...existingIntel };
-		if (normalizedHub) nextIntel.hub = normalizedHub;
-		else delete nextIntel.hub;
-		const intelToPersist =
-			Object.keys(nextIntel).length === 0 ? undefined : nextIntel;
 
 		setIsSaving(true);
+		// Build the PUT payload. Per audit Q5/Q6/Q8: undefined fields get
+		// stripped server-side via stripDefaultEqual (PR1) so the resolver
+		// can fall through to the org tier on the next read.
 		const settings = {
 			...mailbox.settings,
 			fromName: displayName,
-			agentSystemPrompt: agentPrompt.trim() || undefined,
-			security,
-			intel: intelToPersist,
-			autoDraft: { enabled: autoDraftEnabled },
-			agentModel: resolvedModel || availableModels[0] || TEXT_MODELS[0],
-			injectionScannerModel: injectionScannerModel.trim() || undefined,
-			draftVerifierModel: draftVerifierModel.trim() || undefined,
-			classifierModel: classifierModel.trim() || undefined,
+			agentSystemPrompt: promptOverride ? agentPrompt.trim() || undefined : undefined,
+			autoDraft: autoDraftOverride ? { enabled: autoDraftEnabled } : undefined,
+			agentModel: modelOverride ? resolvedModel || undefined : undefined,
+			security: securityOverride ? security : undefined,
+			intel: nextIntel,
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
@@ -163,11 +231,43 @@ export default function SettingsRoute() {
 		}
 	};
 
-	const handleResetPrompt = () => {
-		setAgentPrompt("");
+	const resetPrompt = () => {
+		setPromptOverride(false);
+		setAgentPrompt(orgSettings.agentSystemPrompt ?? "");
+	};
+	const resetAutoDraft = () => {
+		setAutoDraftOverride(false);
+		setAutoDraftEnabled(orgSettings.autoDraft?.enabled ?? true);
+	};
+	const resetModel = () => {
+		setModelOverride(false);
+		const orgModel = orgSettings.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
+		if (availableModels.includes(orgModel)) {
+			setModelChoice(orgModel);
+			setCustomModel("");
+		} else {
+			setModelChoice("__custom__");
+			setCustomModel(orgModel);
+		}
+	};
+	const resetSecurity = () => {
+		setSecurityOverride(false);
+		setSecurity(orgSettings.security);
+	};
+	const resetHub = () => {
+		setHubOverride(false);
+		setHub(orgSettings.intel?.hub);
+		setHubErrors(undefined);
 	};
 
-	if (!mailbox) {
+	// Gate on BOTH queries — the init useEffect uses orgData to initialise
+	// the per-field override flags. If we render the form before orgData
+	// resolves, the user can start editing during render 1 (mailbox-only)
+	// and have those edits silently clobbered when orgData arrives during
+	// render 2 (effect re-runs and resets state). Caught by advisor before
+	// PR2 merge — tests passed because the mock returns orgData
+	// synchronously, so the race only triggered against real network.
+	if (!mailbox || !orgData) {
 		return (
 			<div className="flex justify-center py-20">
 				<Loader size="lg" />
@@ -175,18 +275,22 @@ export default function SettingsRoute() {
 		);
 	}
 
-	const isCustomPrompt = agentPrompt.trim().length > 0;
-
 	return (
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
-			<h1 className="pp-serif text-ink mb-6">Settings</h1>
+			<h1 className="pp-serif text-ink mb-2">Settings</h1>
+			<p className="text-xs text-ink-3 mb-6">
+				Per-mailbox overrides. Fields marked{" "}
+				<Badge variant="secondary">Inherited from org</Badge> use the org-wide
+				default — manage those at <Link to="/settings" className="underline">/settings</Link>.
+				Editing a field here promotes it to an override that wins for this
+				mailbox; security and intel.hub overrides replace the entire org
+				block whole (no deep-merge across tiers).
+			</p>
 
 			<div className="space-y-6">
-				{/* Account */}
+				{/* Account — strictly per-mailbox, no inheritance. */}
 				<div className="pp-card p-5">
-					<div className="text-sm font-medium text-ink mb-4">
-						Account
-					</div>
+					<div className="text-sm font-medium text-ink mb-4">Account</div>
 					<div className="space-y-3">
 						<Input
 							label="Display Name"
@@ -202,50 +306,62 @@ export default function SettingsRoute() {
 					<div className="flex items-center justify-between mb-4">
 						<div className="flex items-center gap-2">
 							<RobotIcon size={16} weight="duotone" className="text-ink-3" />
-							<span className="text-sm font-medium text-ink">
-								AI Agent Prompt
-							</span>
-							{isCustomPrompt ? (
-								<Badge variant="primary">Custom</Badge>
-							) : (
-								<Badge variant="secondary">Default</Badge>
-							)}
+							<span className="text-sm font-medium text-ink">AI Agent Prompt</span>
+							<InheritanceBadge inherited={!promptOverride} />
 						</div>
-						{isCustomPrompt && (
+						{promptOverride && (
 							<Button
 								variant="ghost"
 								size="xs"
 								icon={<ArrowCounterClockwiseIcon size={14} />}
-								onClick={handleResetPrompt}
+								onClick={resetPrompt}
+								data-testid="reset-prompt"
 							>
-								Reset to default
+								Reset to inherited
 							</Button>
 						)}
 					</div>
 					<p className="text-xs text-ink-3 mb-3">
-						Customize how the AI agent behaves for this mailbox.
-						Leave empty to use the built-in default prompt.
+						{promptOverride
+							? "This mailbox uses a custom prompt — overrides the org default."
+							: "Inheriting the org-wide prompt. Type below to create an override."}
 					</p>
 					<textarea
 						value={agentPrompt}
-						onChange={(e) => setAgentPrompt(e.target.value)}
+						onChange={(e) => {
+							setAgentPrompt(e.target.value);
+							setPromptOverride(true);
+						}}
 						placeholder={PROMPT_PLACEHOLDER}
 						rows={12}
 						className="w-full resize-y rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent font-mono leading-relaxed"
 					/>
-					<p className="text-xs text-ink-3 mt-2">
-						The prompt is sent as the system message to the AI model.
-						It controls the agent's personality, writing style, and behavior rules.
-					</p>
 				</div>
 
-				{/* Behavior — auto-draft toggle + agent model picker */}
+				{/* Behavior */}
 				<div className="pp-card p-5">
-					<div className="text-sm font-medium text-ink mb-4">Behavior</div>
+					<div className="flex items-center justify-between mb-4">
+						<div className="flex items-center gap-2">
+							<span className="text-sm font-medium text-ink">Behavior</span>
+						</div>
+					</div>
 
 					<label className="flex items-start justify-between gap-3 mb-5">
 						<span className="flex flex-col">
-							<span className="text-sm text-ink">Auto-draft replies</span>
+							<span className="flex items-center gap-2 text-sm text-ink">
+								Auto-draft replies
+								<InheritanceBadge inherited={!autoDraftOverride} />
+								{autoDraftOverride && (
+									<button
+										type="button"
+										onClick={resetAutoDraft}
+										className="text-xs text-ink-3 underline hover:text-ink"
+										data-testid="reset-autodraft"
+									>
+										Reset
+									</button>
+								)}
+							</span>
 							<span className="text-xs text-ink-3 mt-1 max-w-md">
 								Generate a draft reply automatically when new mail arrives.
 								Drafts are never sent without explicit confirmation.
@@ -254,20 +370,41 @@ export default function SettingsRoute() {
 						<input
 							type="checkbox"
 							checked={autoDraftEnabled}
-							onChange={(e) => setAutoDraftEnabled(e.target.checked)}
+							onChange={(e) => {
+								setAutoDraftEnabled(e.target.checked);
+								setAutoDraftOverride(true);
+							}}
 							className="mt-1 h-4 w-4 accent-accent shrink-0"
 							aria-label="Auto-draft replies"
 						/>
 					</label>
 
 					<div>
-						<label htmlFor="agent-model-select" className="block text-sm text-ink mb-1.5">
-							Agent model
-						</label>
+						<div className="flex items-center justify-between mb-1.5">
+							<label htmlFor="agent-model-select" className="block text-sm text-ink">
+								<span className="inline-flex items-center gap-2">
+									Agent model
+									<InheritanceBadge inherited={!modelOverride} />
+								</span>
+							</label>
+							{modelOverride && (
+								<button
+									type="button"
+									onClick={resetModel}
+									className="text-xs text-ink-3 underline hover:text-ink"
+									data-testid="reset-model"
+								>
+									Reset to inherited
+								</button>
+							)}
+						</div>
 						<select
 							id="agent-model-select"
 							value={modelChoice}
-							onChange={(e) => setModelChoice(e.target.value)}
+							onChange={(e) => {
+								setModelChoice(e.target.value);
+								setModelOverride(true);
+							}}
 							className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
 						>
 							{availableModels.map((m) => (
@@ -280,7 +417,10 @@ export default function SettingsRoute() {
 								type="text"
 								placeholder="@cf/your/model"
 								value={customModel}
-								onChange={(e) => setCustomModel(e.target.value)}
+								onChange={(e) => {
+									setCustomModel(e.target.value);
+									setModelOverride(true);
+								}}
 								className="mt-2 w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent"
 							/>
 						)}
@@ -289,88 +429,80 @@ export default function SettingsRoute() {
 							<code className="pp-mono">@cf/</code>.
 						</p>
 					</div>
-
-					{/* Advanced — security-critical model overrides (#67). Hidden
-					    behind a disclosure so the regular Settings page stays
-					    minimal. Wrong value can let real prompt injection
-					    through, so leave empty to keep the tested defaults. */}
-					<details className="mt-5 group">
-						<summary className="cursor-pointer text-xs font-medium text-ink-2 hover:text-ink select-none">
-							Advanced — security model overrides
-						</summary>
-						<div className="mt-3 space-y-4 border-l-2 border-line pl-4">
-							<p className="text-xs text-ink-3">
-								These models drive security-critical paths. Leave empty to
-								use the tested defaults shown as placeholders. Wrong choices
-								can degrade detection — only override if you know what you
-								are doing.
-							</p>
-							<div>
-								<label
-									htmlFor="advanced-injection-model"
-									className="block text-xs text-ink mb-1"
-								>
-									Prompt-injection scanner
-								</label>
-								<input
-									id="advanced-injection-model"
-									type="text"
-									placeholder={DEFAULT_INJECTION_SCANNER_MODEL}
-									value={injectionScannerModel}
-									onChange={(e) => setInjectionScannerModel(e.target.value)}
-									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
-								/>
-							</div>
-							<div>
-								<label
-									htmlFor="advanced-verifier-model"
-									className="block text-xs text-ink mb-1"
-								>
-									Draft verifier
-								</label>
-								<input
-									id="advanced-verifier-model"
-									type="text"
-									placeholder={DEFAULT_DRAFT_VERIFIER_MODEL}
-									value={draftVerifierModel}
-									onChange={(e) => setDraftVerifierModel(e.target.value)}
-									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
-								/>
-							</div>
-							<div>
-								<label
-									htmlFor="advanced-classifier-model"
-									className="block text-xs text-ink mb-1"
-								>
-									LLM classifier
-								</label>
-								<input
-									id="advanced-classifier-model"
-									type="text"
-									placeholder={DEFAULT_CLASSIFIER_MODEL}
-									value={classifierModel}
-									onChange={(e) => setClassifierModel(e.target.value)}
-									className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent pp-mono"
-								/>
-							</div>
-						</div>
-					</details>
 				</div>
 
-				{/* Security */}
-				<SecuritySettingsPanel value={security} onChange={setSecurity} />
+				{/* Security — block-level inheritance. Override carries the WHOLE
+				    security object (incl. allowlists). v1 has no extend-merge for
+				    arrays; tracked as #149. */}
+				<div className="pp-card p-5">
+					<div className="flex items-center justify-between mb-3">
+						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
+							Security
+							<InheritanceBadge inherited={!securityOverride} />
+						</span>
+						{securityOverride && (
+							<button
+								type="button"
+								onClick={resetSecurity}
+								className="text-xs text-ink-3 underline hover:text-ink"
+								data-testid="reset-security"
+							>
+								Reset to inherited
+							</button>
+						)}
+					</div>
+					{!securityOverride && (
+						<div className="rounded-md border border-line bg-paper-2 px-3 py-2 mb-3 text-xs text-ink-3">
+							Inheriting the org-wide security block. Editing below promotes
+							this mailbox to an override that <strong>replaces the entire
+							org security block</strong> — including allowlists, thresholds,
+							and trusted authserv-ids. Cross-tier extend-merge for allowlist
+							arrays is tracked as a follow-up.
+						</div>
+					)}
+					<SecuritySettingsPanel
+						value={security}
+						onChange={(next) => {
+							setSecurity(next);
+							setSecurityOverride(true);
+						}}
+					/>
+				</div>
 
-				{/* Threat-intel hub (#97) */}
-				<HubSettingsPanel
-					value={hub}
-					onChange={(next) => {
-						setHub(next);
-						// Re-validate eagerly once the user starts editing so
-						// stale errors disappear as the form is fixed.
-						if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
-					}}
-					errors={hubErrors}
-				/>
+				{/* Threat-intel hub (#97) — block-level inheritance. */}
+				<div className="pp-card p-5">
+					<div className="flex items-center justify-between mb-3">
+						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
+							Threat-intel hub
+							<InheritanceBadge inherited={!hubOverride} />
+						</span>
+						{hubOverride && (
+							<button
+								type="button"
+								onClick={resetHub}
+								className="text-xs text-ink-3 underline hover:text-ink"
+								data-testid="reset-hub"
+							>
+								Reset to inherited
+							</button>
+						)}
+					</div>
+					{!hubOverride && (
+						<div className="rounded-md border border-line bg-paper-2 px-3 py-2 mb-3 text-xs text-ink-3">
+							Inheriting the org-wide hub config. Editing below creates a
+							per-mailbox hub that replaces the org config whole.
+						</div>
+					)}
+					<HubSettingsPanel
+						value={hub}
+						onChange={(next) => {
+							setHub(next);
+							setHubOverride(true);
+							if (hubErrors) setHubErrors(validateHubConfig(next) ?? undefined);
+						}}
+						errors={hubErrors}
+					/>
+				</div>
 
 				{/* Save */}
 				<div className="flex justify-end">

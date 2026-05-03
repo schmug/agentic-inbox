@@ -26,7 +26,10 @@ export const queryKeys = {
 	dashboard: (mailboxId: string) => ["dashboard", mailboxId] as const,
 	org: {
 		overview: ["org", "overview"] as const,
+		settings: ["org", "settings"] as const,
 	},
+	effectiveMailboxSettings: (mailboxId: string) =>
+		["mailboxes", mailboxId, "settings", "effective"] as const,
 	domains: {
 		list: ["domains"] as const,
 		detail: (domain: string) => ["domains", domain] as const,
