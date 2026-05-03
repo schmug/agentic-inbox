@@ -5,6 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router";
 import type { DomainListEntry, OrgOverview } from "~/types";
+import {
+	shellDashboardMock,
+	shellDomainsMock,
+	shellMailboxesMock,
+} from "./shell-mocks";
 
 const refetch = vi.fn();
 let queryState: {
@@ -20,35 +25,31 @@ vi.mock("~/queries/org", () => ({
 // `TopDomainsCard` (#141) consumes `useDomains()`. Default to an empty list
 // so existing assertions (which were written before the widget existed) keep
 // passing; tests that exercise the widget override `domainsState` per case.
+// `useDomainStats` is provided by `shellDomainsMock()` for Shell — at `/` it
+// gates on `enabled: false` but the import still has to resolve.
 let domainsState: {
 	data: DomainListEntry[] | undefined;
 	isLoading: boolean;
 	isError: boolean;
 } = { data: [], isLoading: false, isError: false };
 
-vi.mock("~/queries/domains", () => ({
-	useDomains: () => ({ ...domainsState, refetch: vi.fn() }),
-	// Shell calls `useDomainStats` to drive the domain-scoped sidebar (#143);
-	// at `/` the route doesn't match so the hook is gated to `enabled: false`,
-	// but the import still has to resolve.
-	useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
-}));
+vi.mock("~/queries/domains", () =>
+	shellDomainsMock({
+		useDomains: () => ({ ...domainsState, refetch: vi.fn() }),
+	}),
+);
 
 // The org-overview home page renders an "N mailboxes" hint sourced from
-// `useMailboxes`. Provide a stable empty list so renders don't fan out to
-// the real fetcher. `useMailbox` is also stubbed because Shell consumes it.
-vi.mock("~/queries/mailboxes", () => ({
-	useMailboxes: () => ({ data: [], refetch: vi.fn(), isFetched: true }),
-	useMailbox: () => ({ data: undefined }),
-}));
+// `useMailboxes`; Shell also consumes `useMailbox`. The shared factory
+// returns the empty-list / undefined defaults that keep render fan-out out
+// of the real fetchers.
+vi.mock("~/queries/mailboxes", () => shellMailboxesMock());
 
 // Shell renders the per-mailbox dashboard summary into the pipeline pill;
 // at "/" mailboxId is undefined and the query is disabled, but the hook is
-// still imported, so stub it to keep the test independent of TanStack
-// internals.
-vi.mock("~/queries/dashboard", () => ({
-	useDashboardSummary: () => ({ data: undefined }),
-}));
+// still imported, so the shared default keeps the test independent of
+// TanStack internals.
+vi.mock("~/queries/dashboard", () => shellDashboardMock());
 
 // `useAutoProvisionMailboxes` reads config + mailboxes and may fire a POST
 // when EMAIL_ADDRESSES is set. The org-overview test doesn't exercise that
