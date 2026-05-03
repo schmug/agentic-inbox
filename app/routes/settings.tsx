@@ -4,7 +4,7 @@
 
 import { Badge, Button, Input, Loader } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
@@ -83,8 +83,18 @@ export default function SettingsRoute() {
 
 	const [isSaving, setIsSaving] = useState(false);
 
+	// Initialise form state from the resolved settings ONCE per mailbox.
+	// Re-running on every (mailbox, orgData) change clobbers user edits if
+	// either query returns a fresh object reference each render — react-query
+	// memoises in production, but tests with `vi.mock` typically don't, so a
+	// purely dep-based guard is fragile. The ref tracks the mailboxId we
+	// initialised against; navigating to a different mailbox forces re-init.
+	const initialisedFor = useRef<string | null>(null);
+
 	useEffect(() => {
-		if (!mailbox) return;
+		if (!mailbox || !mailboxId) return;
+		if (initialisedFor.current === mailboxId) return;
+		initialisedFor.current = mailboxId;
 		const s = mailbox.settings as
 			| ({
 					autoDraft?: { enabled?: boolean };
@@ -159,7 +169,7 @@ export default function SettingsRoute() {
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [mailbox, orgData]);
+	}, [mailbox, orgData, mailboxId]);
 
 	const handleSave = async () => {
 		if (!mailbox || !mailboxId) return;
