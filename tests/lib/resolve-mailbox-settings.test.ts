@@ -405,6 +405,133 @@ describe("resolveMailboxSettings — security allowlist extend-merge (#149)", ()
 	});
 });
 
+describe("resolveMailboxSettings — security.business_hours per-field merge (#150)", () => {
+	const orgFullBH = {
+		timezone: "America/New_York",
+		start_hour: 9,
+		end_hour: 17,
+		weekdays_only: true,
+		boost_on_off_hours: true,
+	};
+
+	it("org full block + mailbox sets only timezone → merged per-field, mailbox wins per field", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, business_hours: orgFullBH },
+			},
+			[MAILBOX_KEY]: {
+				security: { business_hours: { timezone: "Europe/London" } },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual({
+			timezone: "Europe/London",
+			start_hour: 9,
+			end_hour: 17,
+			weekdays_only: true,
+			boost_on_off_hours: true,
+		});
+	});
+
+	it("mailbox full block, org absent → resolved business_hours = mailbox", async () => {
+		const mailboxFullBH = {
+			timezone: "Asia/Tokyo",
+			start_hour: 8,
+			end_hour: 18,
+			weekdays_only: false,
+			boost_on_off_hours: true,
+		};
+		const bucket = makeFakeBucket({
+			[MAILBOX_KEY]: { security: { business_hours: mailboxFullBH } },
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual(mailboxFullBH);
+	});
+
+	it("org full block, mailbox absent → resolved business_hours = org", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, business_hours: orgFullBH },
+			},
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toEqual(orgFullBH);
+	});
+
+	it("both tiers absent → resolved.security.business_hours is undefined", async () => {
+		const bucket = makeFakeBucket({ [MAILBOX_KEY]: {} });
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toBeUndefined();
+	});
+
+	it("domain-only business_hours (mailbox+org absent) → resolved is undefined (domain tier deferred to follow-up)", async () => {
+		// Pins the spec interpretation: per-field merge applies to mailbox+org
+		// only. The domain tier is intentionally NOT consulted for
+		// business_hours here, even though it participates in the whole-tier
+		// replace for other security sub-fields. Tracked as a follow-up.
+		const bucket = makeFakeBucket({
+			[DOMAIN_KEY]: { security: { enabled: true, business_hours: orgFullBH } },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours).toBeUndefined();
+	});
+
+	it("mailbox sets boost_on_off_hours=true while org has it false → mailbox flag wins", async () => {
+		// boost_on_off_hours is a field in BusinessHours and per-field merge
+		// applies to it like any other field (issue out-of-scope note: no UX
+		// flagging of the inversion, but the merge itself works).
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					business_hours: { ...orgFullBH, boost_on_off_hours: false },
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: { business_hours: { boost_on_off_hours: true } },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours?.boost_on_off_hours).toBe(true);
+		// Other fields still inherited from org.
+		expect(resolved.security.business_hours?.timezone).toBe("America/New_York");
+	});
+
+	it("regression: other security sub-fields stay whole-replace (mailbox thresholds.tag does NOT inherit org thresholds.quarantine)", async () => {
+		// Per-field merge is business_hours-only. thresholds, attachment_policy,
+		// folder_policies, classification, trusted_authserv_ids, and the
+		// allowlists all continue to follow whole-tier replace + system-default
+		// completion (single-tier).
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					thresholds: { quarantine: 99 },
+					trusted_authserv_ids: ["org.example.com"],
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: {
+					thresholds: { tag: 42 },
+					trusted_authserv_ids: ["mailbox.example.com"],
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		// Mailbox tier wins whole-object replace; org's quarantine is NOT
+		// inherited per-field. The default's quarantine fills in for the
+		// missing key (single-tier completion via mergeSecurityWithDefault).
+		expect(resolved.security.thresholds.tag).toBe(42);
+		expect(resolved.security.thresholds.quarantine).toBe(
+			DEFAULT_SECURITY_SETTINGS.thresholds.quarantine,
+		);
+		// trusted_authserv_ids: mailbox wins whole, no merge with org.
+		expect(resolved.security.trusted_authserv_ids).toEqual(["mailbox.example.com"]);
+	});
+});
+
 describe("resolveMailboxSettings — intel.hub inheritance (#121 audit Q1)", () => {
 	const orgHub = {
 		url: "https://hub.example.com",
