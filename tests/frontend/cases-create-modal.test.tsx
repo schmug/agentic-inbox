@@ -259,6 +259,167 @@ describe("CasesRoute manual-case dialog (issue #190)", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("submit with two observables + a score POSTs the right body (issue #194)", async () => {
+		const { state } = installFetchMock();
+		renderCases();
+		await screen.findAllByText(/Initial open case/i);
+		await userEvent.click(
+			screen.getByRole("button", { name: /manual case/i }),
+		);
+		await screen.findByText(/create manual case/i);
+
+		await userEvent.type(
+			screen.getByLabelText(/^title$/i),
+			"Two observables + score",
+		);
+
+		// Add a second observable row, fill both. The first row defaults
+		// to kind=email (matches OBSERVABLE_TONE in case-detail.tsx).
+		await userEvent.type(
+			screen.getByLabelText(/^observable value 1$/i),
+			"finance@evil.example",
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: /^add observable$/i }),
+		);
+		await userEvent.selectOptions(
+			screen.getByLabelText(/^observable kind 2$/i),
+			"url",
+		);
+		await userEvent.type(
+			screen.getByLabelText(/^observable value 2$/i),
+			"https://evil.example/login",
+		);
+
+		// Set a score in range.
+		await userEvent.type(
+			screen.getByLabelText(/score override/i),
+			"77",
+		);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: /^create case$/i }),
+		);
+
+		await waitFor(() => {
+			expect(state.lastPostBody).toEqual({
+				title: "Two observables + score",
+				observables: [
+					{ kind: "email", value: "finance@evil.example" },
+					{ kind: "url", value: "https://evil.example/login" },
+				],
+				score: 77,
+			});
+		});
+	});
+
+	it("clearing the score before submit drops `score` from the body (issue #194)", async () => {
+		const { state } = installFetchMock();
+		renderCases();
+		await screen.findAllByText(/Initial open case/i);
+		await userEvent.click(
+			screen.getByRole("button", { name: /manual case/i }),
+		);
+		await screen.findByText(/create manual case/i);
+
+		await userEvent.type(
+			screen.getByLabelText(/^title$/i),
+			"Cleared-score case",
+		);
+
+		const scoreInput = screen.getByLabelText(/score override/i);
+		await userEvent.type(scoreInput, "42");
+		await userEvent.clear(scoreInput);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: /^create case$/i }),
+		);
+
+		// `score` must NOT appear in the body — empty input means "let
+		// the worker default it", per #194 acceptance.
+		await waitFor(() => {
+			expect(state.lastPostBody).toEqual({
+				title: "Cleared-score case",
+			});
+		});
+		expect(state.lastPostBody as Record<string, unknown>).not.toHaveProperty(
+			"score",
+		);
+	});
+
+	it("empty observable rows are dropped pre-POST (issue #194)", async () => {
+		const { state } = installFetchMock();
+		renderCases();
+		await screen.findAllByText(/Initial open case/i);
+		await userEvent.click(
+			screen.getByRole("button", { name: /manual case/i }),
+		);
+		await screen.findByText(/create manual case/i);
+
+		await userEvent.type(
+			screen.getByLabelText(/^title$/i),
+			"Drops empty observables",
+		);
+
+		// Row 1 stays empty (default state). Add row 2 and leave it empty
+		// too. Add row 3 and populate it.
+		await userEvent.click(
+			screen.getByRole("button", { name: /^add observable$/i }),
+		);
+		await userEvent.click(
+			screen.getByRole("button", { name: /^add observable$/i }),
+		);
+		await userEvent.selectOptions(
+			screen.getByLabelText(/^observable kind 3$/i),
+			"domain",
+		);
+		await userEvent.type(
+			screen.getByLabelText(/^observable value 3$/i),
+			"evil.example",
+		);
+
+		await userEvent.click(
+			screen.getByRole("button", { name: /^create case$/i }),
+		);
+
+		await waitFor(() => {
+			expect(state.lastPostBody).toEqual({
+				title: "Drops empty observables",
+				observables: [{ kind: "domain", value: "evil.example" }],
+			});
+		});
+	});
+
+	it("invalid score input shows inline error and blocks submit (issue #194)", async () => {
+		const { state } = installFetchMock();
+		renderCases();
+		await screen.findAllByText(/Initial open case/i);
+		await userEvent.click(
+			screen.getByRole("button", { name: /manual case/i }),
+		);
+		await screen.findByText(/create manual case/i);
+
+		await userEvent.type(
+			screen.getByLabelText(/^title$/i),
+			"Invalid score",
+		);
+		await userEvent.type(
+			screen.getByLabelText(/score override/i),
+			"150",
+		);
+
+		// Inline message rendered, submit button disabled.
+		expect(
+			await screen.findByText(/whole number between 0 and 100/i),
+		).toBeInTheDocument();
+		const submitBtn = screen.getByRole("button", { name: /^create case$/i });
+		expect(submitBtn).toBeDisabled();
+
+		// Even a forced click does not POST.
+		await userEvent.click(submitBtn);
+		expect(state.lastPostBody).toBeNull();
+	});
+
 	it("400 with field errors renders inline error text and keeps the dialog open", async () => {
 		const { state } = installFetchMock();
 		state.nextPostResponse = {
