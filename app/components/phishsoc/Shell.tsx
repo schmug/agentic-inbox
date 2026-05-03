@@ -1,7 +1,6 @@
 import {
 	BriefcaseIcon,
 	BuildingsIcon,
-	CaretRightIcon,
 	EnvelopeIcon,
 	GaugeIcon,
 	GearSixIcon,
@@ -21,10 +20,11 @@ import { useUIStore } from "~/hooks/useUIStore";
 import { useDashboardSummary } from "~/queries/dashboard";
 import { useDomainStats } from "~/queries/domains";
 import { useMailbox, useMailboxes } from "~/queries/mailboxes";
-import type { DomainMailboxRef } from "~/types";
+import type { DomainMailboxRef, Mailbox } from "~/types";
 import AgentPanelSlot from "./AgentPanelSlot";
 import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
+import MailboxSwitcher from "./MailboxSwitcher";
 import NotificationsBell from "./NotificationsBell";
 
 type PipelineTone = "safe" | "suspect" | "danger" | "muted";
@@ -114,11 +114,12 @@ function SectionLabel({ children }: { children: ReactNode }) {
 interface NavContentsProps {
 	mailboxId: string | undefined;
 	mailbox: { name?: string | null; email?: string | null } | undefined;
+	mailboxes: Mailbox[] | undefined;
 	mailboxCount: number;
 	pipelineState: PipelineState;
 	theme: "light" | "dark";
 	onToggleTheme: () => void;
-	onSwitchOrg: () => void;
+	onCloseSidebar: () => void;
 	onPipelineClick: () => void;
 	/**
 	 * When the current route is `/domains/:domain`, the active domain plus
@@ -138,17 +139,16 @@ interface NavContentsProps {
 function NavContents({
 	mailboxId,
 	mailbox,
+	mailboxes,
 	mailboxCount,
 	pipelineState,
 	theme,
 	onToggleTheme,
-	onSwitchOrg,
+	onCloseSidebar,
 	onPipelineClick,
 	domain,
 	domainMailboxes,
 }: NavContentsProps) {
-	const orgDomain = mailbox?.email?.split("@")[1] ?? "—";
-	const orgInitial = (mailbox?.name || mailbox?.email || "?")[0]?.toUpperCase();
 	const base = mailboxId ? `/mailbox/${encodeURIComponent(mailboxId)}` : "";
 
 	return (
@@ -157,26 +157,18 @@ function NavContents({
 				<Logo />
 			</div>
 
-			{/* Org switcher card — clicking it would open a tenant switcher;
-			    in POC it just routes to the home picker. */}
-			<button
-				type="button"
-				onClick={onSwitchOrg}
-				className="mx-3 flex items-center gap-2.5 rounded-md border border-line bg-paper px-2.5 py-2 text-left hover:border-line-strong transition-colors"
-			>
-				<span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent-tint text-accent-ink pp-serif text-[15px]">
-					{orgInitial}
-				</span>
-				<span className="flex-1 min-w-0">
-					<span className="block truncate text-[12.5px] font-medium text-ink">
-						{mailbox?.name || "Select mailbox"}
-					</span>
-					<span className="block truncate text-[10.5px] text-ink-3">
-						{orgDomain} · {mailboxCount} mailbox{mailboxCount === 1 ? "" : "es"}
-					</span>
-				</span>
-				<CaretRightIcon size={12} className="text-ink-3 shrink-0" />
-			</button>
+			{/* Mailbox switcher (#188). Replaces the old "Select mailbox" card,
+			    which was wired to `navigate("/")` and therefore a no-op at the
+			    org root. The new card opens a base-ui Menu listing every
+			    mailbox the user has access to; selecting one navigates to the
+			    per-mailbox dashboard. */}
+			<MailboxSwitcher
+				activeMailboxId={mailboxId}
+				mailbox={mailbox}
+				mailboxes={mailboxes}
+				mailboxCount={mailboxCount}
+				onClose={onCloseSidebar}
+			/>
 
 			<nav className="mt-3 px-3 flex-1 overflow-y-auto">
 				{/* Org-scoped entries are always visible. They route to / and
@@ -397,14 +389,12 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 		<NavContents
 			mailboxId={mailboxId}
 			mailbox={mailbox}
+			mailboxes={mailboxes}
 			mailboxCount={mailboxCount}
 			pipelineState={pipelineState}
 			theme={theme}
 			onToggleTheme={toggleTheme}
-			onSwitchOrg={() => {
-				closeSidebar();
-				navigate("/");
-			}}
+			onCloseSidebar={closeSidebar}
 			onPipelineClick={() => {
 				if (!mailboxId) return;
 				closeSidebar();
