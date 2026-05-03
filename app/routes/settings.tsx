@@ -9,6 +9,7 @@ import { Link, useParams } from "react-router";
 import { useFeedback } from "~/lib/feedback";
 import { useMailbox, useUpdateMailbox } from "~/queries/mailboxes";
 import { useOrgSettings } from "~/queries/org-settings";
+import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
 import {
@@ -32,17 +33,47 @@ interface OrgSettingsShape {
 	intel?: { hub?: HubConfigSettings };
 }
 
-/** Pill rendered next to a per-mailbox field. Wrapped in a span carrying
- *  the data-testid because Kumo's Badge doesn't forward arbitrary props
- *  to its rendered element. */
-function InheritanceBadge({ inherited }: { inherited: boolean }) {
-	return (
-		<span data-testid={inherited ? "inherited-badge" : "override-badge"}>
-			{inherited ? (
-				<Badge variant="secondary">Inherited from org</Badge>
-			) : (
+type DomainSettingsShape = OrgSettingsShape;
+
+/** Domain part of an email address (lowercased). Returns null for
+ *  malformed input — the caller treats null as "no domain tier" and the
+ *  UI falls back to org/default badges. */
+function domainFromMailboxId(mailboxId: string | undefined): string | null {
+	if (!mailboxId) return null;
+	const at = mailboxId.lastIndexOf("@");
+	if (at < 0 || at === mailboxId.length - 1) return null;
+	return mailboxId.slice(at + 1).toLowerCase();
+}
+
+/** Pill rendered next to a per-mailbox field. The "inherited" variant
+ *  shows the *closest* tier that supplied the value — domain wins over
+ *  org when both have it, matching the resolver's mailbox > domain > org
+ *  > default precedence. Wrapped in a span carrying the data-testid
+ *  because Kumo's Badge doesn't forward arbitrary props. */
+function InheritanceBadge({
+	override,
+	source,
+}: {
+	override: boolean;
+	source: "domain" | "org" | null;
+	}) {
+	if (override) {
+		return (
+			<span data-testid="override-badge">
 				<Badge variant="primary">Override</Badge>
-			)}
+			</span>
+		);
+	}
+	if (source === "domain") {
+		return (
+			<span data-testid="inherited-domain-badge">
+				<Badge variant="secondary">Inherited from domain</Badge>
+			</span>
+		);
+	}
+	return (
+		<span data-testid="inherited-badge">
+			<Badge variant="secondary">Inherited from org</Badge>
 		</span>
 	);
 }
@@ -52,10 +83,24 @@ export default function SettingsRoute() {
 	const feedback = useFeedback();
 	const { data: mailbox } = useMailbox(mailboxId);
 	const { data: orgData } = useOrgSettings();
+	const domainName = domainFromMailboxId(mailboxId);
+	const { data: domainData } = useDomainSettings(domainName ?? undefined);
 	const updateMailboxMutation = useUpdateMailbox();
 	const { models: availableModels } = useTextModels();
 
 	const orgSettings = (orgData?.settings ?? {}) as OrgSettingsShape;
+	const domainSettings = (domainData?.settings ?? {}) as DomainSettingsShape;
+
+	// For each inheritable field, decide which tier wins when the mailbox
+	// is inheriting. Domain takes precedence over org — matches the
+	// resolver's mailbox > domain > org > default chain.
+	const sourceFor = (
+		field: keyof DomainSettingsShape,
+	): "domain" | "org" | null => {
+		if (domainSettings[field] !== undefined) return "domain";
+		if (orgSettings[field] !== undefined) return "org";
+		return null;
+	};
 
 	const [displayName, setDisplayName] = useState("");
 
@@ -104,23 +149,30 @@ export default function SettingsRoute() {
 
 		setDisplayName(mailbox.settings?.fromName || mailbox.name || "");
 
-		// Prompt: override when mailbox supplies a non-empty value.
+		// Inheritance fallback for the "no override" case: domain wins over
+		// org, matching the resolver's mailbox > domain > org > default chain.
+		// The form displays this fallback as the rendered value so the user
+		// sees what's actually in effect for the mailbox right now.
+
+		// Prompt
 		const mailboxPrompt = mailbox.settings?.agentSystemPrompt;
 		if (mailboxPrompt && mailboxPrompt.trim()) {
 			setPromptOverride(true);
 			setAgentPrompt(mailboxPrompt);
 		} else {
 			setPromptOverride(false);
-			setAgentPrompt(orgSettings.agentSystemPrompt ?? "");
+			setAgentPrompt(domainSettings.agentSystemPrompt ?? orgSettings.agentSystemPrompt ?? "");
 		}
 
-		// autoDraft: override when mailbox sets the block at all.
+		// autoDraft
 		if (s?.autoDraft) {
 			setAutoDraftOverride(true);
 			setAutoDraftEnabled(s.autoDraft.enabled ?? true);
 		} else {
 			setAutoDraftOverride(false);
-			setAutoDraftEnabled(orgSettings.autoDraft?.enabled ?? true);
+			setAutoDraftEnabled(
+				domainSettings.autoDraft?.enabled ?? orgSettings.autoDraft?.enabled ?? true,
+			);
 		}
 
 		// agentModel
@@ -136,32 +188,37 @@ export default function SettingsRoute() {
 			}
 		} else {
 			setModelOverride(false);
-			const orgModel = orgSettings.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
-			if (availableModels.includes(orgModel)) {
-				setModelChoice(orgModel);
+			const inheritedModel =
+				domainSettings.agentModel ??
+				orgSettings.agentModel ??
+				availableModels[0] ??
+				TEXT_MODELS[0];
+			if (availableModels.includes(inheritedModel)) {
+				setModelChoice(inheritedModel);
 				setCustomModel("");
 			} else {
 				setModelChoice("__custom__");
-				setCustomModel(orgModel);
+				setCustomModel(inheritedModel);
 			}
 		}
 
-		// security: override when the block is present at all.
+		// security: domain block wins over org block when the mailbox doesn't
+		// override. Whole-object semantics — never deep-merged.
 		if (mailbox.settings?.security) {
 			setSecurityOverride(true);
 			setSecurity(mailbox.settings.security);
 		} else {
 			setSecurityOverride(false);
-			setSecurity(orgSettings.security);
+			setSecurity(domainSettings.security ?? orgSettings.security);
 		}
 
-		// intel.hub: override when the mailbox sets one.
+		// intel.hub
 		if (mailbox.settings?.intel?.hub) {
 			setHubOverride(true);
 			setHub(mailbox.settings.intel.hub);
 		} else {
 			setHubOverride(false);
-			setHub(orgSettings.intel?.hub);
+			setHub(domainSettings.intel?.hub ?? orgSettings.intel?.hub);
 		}
 		setHubErrors(undefined);
 
@@ -169,7 +226,7 @@ export default function SettingsRoute() {
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [mailbox, orgData, mailboxId]);
+	}, [mailbox, orgData, domainData, mailboxId]);
 
 	const handleSave = async () => {
 		if (!mailbox || !mailboxId) return;
@@ -231,43 +288,50 @@ export default function SettingsRoute() {
 		}
 	};
 
+	// Reset handlers fall back to domain → org → default, matching the
+	// resolver chain. Domain wins over org when both have the field.
 	const resetPrompt = () => {
 		setPromptOverride(false);
-		setAgentPrompt(orgSettings.agentSystemPrompt ?? "");
+		setAgentPrompt(domainSettings.agentSystemPrompt ?? orgSettings.agentSystemPrompt ?? "");
 	};
 	const resetAutoDraft = () => {
 		setAutoDraftOverride(false);
-		setAutoDraftEnabled(orgSettings.autoDraft?.enabled ?? true);
+		setAutoDraftEnabled(
+			domainSettings.autoDraft?.enabled ?? orgSettings.autoDraft?.enabled ?? true,
+		);
 	};
 	const resetModel = () => {
 		setModelOverride(false);
-		const orgModel = orgSettings.agentModel ?? availableModels[0] ?? TEXT_MODELS[0];
-		if (availableModels.includes(orgModel)) {
-			setModelChoice(orgModel);
+		const inheritedModel =
+			domainSettings.agentModel ??
+			orgSettings.agentModel ??
+			availableModels[0] ??
+			TEXT_MODELS[0];
+		if (availableModels.includes(inheritedModel)) {
+			setModelChoice(inheritedModel);
 			setCustomModel("");
 		} else {
 			setModelChoice("__custom__");
-			setCustomModel(orgModel);
+			setCustomModel(inheritedModel);
 		}
 	};
 	const resetSecurity = () => {
 		setSecurityOverride(false);
-		setSecurity(orgSettings.security);
+		setSecurity(domainSettings.security ?? orgSettings.security);
 	};
 	const resetHub = () => {
 		setHubOverride(false);
-		setHub(orgSettings.intel?.hub);
+		setHub(domainSettings.intel?.hub ?? orgSettings.intel?.hub);
 		setHubErrors(undefined);
 	};
 
-	// Gate on BOTH queries — the init useEffect uses orgData to initialise
-	// the per-field override flags. If we render the form before orgData
-	// resolves, the user can start editing during render 1 (mailbox-only)
-	// and have those edits silently clobbered when orgData arrives during
-	// render 2 (effect re-runs and resets state). Caught by advisor before
-	// PR2 merge — tests passed because the mock returns orgData
-	// synchronously, so the race only triggered against real network.
-	if (!mailbox || !orgData) {
+	// Gate on every tier query — the init useEffect uses all of mailbox,
+	// org, and (when applicable) domain to initialise the per-field
+	// override flags. Rendering the form before any tier resolves lets the
+	// user start editing too early; the useRef "initialised once per
+	// mailboxId" guard prevents re-runs from clobbering edits, but the
+	// loader gate makes sure the FIRST render already has every tier.
+	if (!mailbox || !orgData || (domainName && !domainData)) {
 		return (
 			<div className="flex justify-center py-20">
 				<Loader size="lg" />
@@ -280,10 +344,20 @@ export default function SettingsRoute() {
 			<h1 className="pp-serif text-ink mb-2">Settings</h1>
 			<p className="text-xs text-ink-3 mb-6">
 				Per-mailbox overrides. Fields marked{" "}
-				<Badge variant="secondary">Inherited from org</Badge> use the org-wide
-				default — manage those at <Link to="/settings" className="underline">/settings</Link>.
+				<Badge variant="secondary">Inherited from domain</Badge> or{" "}
+				<Badge variant="secondary">Inherited from org</Badge> use the closest
+				tier above — manage those at{" "}
+				{domainName ? (
+					<>
+						<Link to={`/domains/${domainName}/settings`} className="underline">
+							/domains/{domainName}/settings
+						</Link>
+						{" "}or{" "}
+					</>
+				) : null}
+				<Link to="/settings" className="underline">/settings</Link>.
 				Editing a field here promotes it to an override that wins for this
-				mailbox; security and intel.hub overrides replace the entire org
+				mailbox; security and intel.hub overrides replace the entire upstream
 				block whole (no deep-merge across tiers).
 			</p>
 
@@ -307,7 +381,7 @@ export default function SettingsRoute() {
 						<div className="flex items-center gap-2">
 							<RobotIcon size={16} weight="duotone" className="text-ink-3" />
 							<span className="text-sm font-medium text-ink">AI Agent Prompt</span>
-							<InheritanceBadge inherited={!promptOverride} />
+							<InheritanceBadge override={promptOverride} source={sourceFor("agentSystemPrompt")} />
 						</div>
 						{promptOverride && (
 							<Button
@@ -323,8 +397,8 @@ export default function SettingsRoute() {
 					</div>
 					<p className="text-xs text-ink-3 mb-3">
 						{promptOverride
-							? "This mailbox uses a custom prompt — overrides the org default."
-							: "Inheriting the org-wide prompt. Type below to create an override."}
+							? "This mailbox uses a custom prompt — overrides the inherited value."
+							: `Inheriting the ${sourceFor("agentSystemPrompt") === "domain" ? "domain" : "org"} prompt. Type below to create an override.`}
 					</p>
 					<textarea
 						value={agentPrompt}
@@ -350,7 +424,7 @@ export default function SettingsRoute() {
 						<span className="flex flex-col">
 							<span className="flex items-center gap-2 text-sm text-ink">
 								Auto-draft replies
-								<InheritanceBadge inherited={!autoDraftOverride} />
+								<InheritanceBadge override={autoDraftOverride} source={sourceFor("autoDraft")} />
 								{autoDraftOverride && (
 									<button
 										type="button"
@@ -384,7 +458,7 @@ export default function SettingsRoute() {
 							<label htmlFor="agent-model-select" className="block text-sm text-ink">
 								<span className="inline-flex items-center gap-2">
 									Agent model
-									<InheritanceBadge inherited={!modelOverride} />
+									<InheritanceBadge override={modelOverride} source={sourceFor("agentModel")} />
 								</span>
 							</label>
 							{modelOverride && (
@@ -438,7 +512,7 @@ export default function SettingsRoute() {
 					<div className="flex items-center justify-between mb-3">
 						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
 							Security
-							<InheritanceBadge inherited={!securityOverride} />
+							<InheritanceBadge override={securityOverride} source={sourceFor("security")} />
 						</span>
 						{securityOverride && (
 							<button
@@ -453,11 +527,12 @@ export default function SettingsRoute() {
 					</div>
 					{!securityOverride && (
 						<div className="rounded-md border border-line bg-paper-2 px-3 py-2 mb-3 text-xs text-ink-3">
-							Inheriting the org-wide security block. Editing below promotes
-							this mailbox to an override that <strong>replaces the entire
-							org security block</strong> — including allowlists, thresholds,
-							and trusted authserv-ids. Cross-tier extend-merge for allowlist
-							arrays is tracked as a follow-up.
+							Inheriting the {sourceFor("security") === "domain" ? "domain" : "org-wide"} security
+							block. Editing below promotes this mailbox to an override that{" "}
+							<strong>replaces the entire upstream security block</strong> —
+							including allowlists, thresholds, and trusted authserv-ids.
+							Cross-tier extend-merge for allowlist arrays is tracked as a
+							follow-up.
 						</div>
 					)}
 					<SecuritySettingsPanel
@@ -474,7 +549,7 @@ export default function SettingsRoute() {
 					<div className="flex items-center justify-between mb-3">
 						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
 							Threat-intel hub
-							<InheritanceBadge inherited={!hubOverride} />
+							<InheritanceBadge override={hubOverride} source={sourceFor("intel")} />
 						</span>
 						{hubOverride && (
 							<button
@@ -489,8 +564,9 @@ export default function SettingsRoute() {
 					</div>
 					{!hubOverride && (
 						<div className="rounded-md border border-line bg-paper-2 px-3 py-2 mb-3 text-xs text-ink-3">
-							Inheriting the org-wide hub config. Editing below creates a
-							per-mailbox hub that replaces the org config whole.
+							Inheriting the {sourceFor("intel") === "domain" ? "domain" : "org-wide"} hub config.
+							Editing below creates a per-mailbox hub that replaces the
+							upstream config whole.
 						</div>
 					)}
 					<HubSettingsPanel
