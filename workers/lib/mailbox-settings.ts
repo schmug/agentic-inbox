@@ -246,27 +246,30 @@ function normalizeSecurity(s: MailboxSecuritySettings): MailboxSecuritySettings 
 }
 
 /**
- * Strip fields from a mailbox settings PUT payload that are equal to the
- * system default — prevents fresh mailboxes from silently overriding every
- * org-level field (acceptance criterion 6 from #106). Whole-object
- * equality for nested fields: if `incoming.security` deep-equals
- * `DEFAULT_SECURITY_SETTINGS`, the whole `security` key is dropped;
- * otherwise the whole object is kept (we never partially strip a nested
- * block, since the override semantics are whole-object replace).
+ * Strip fields from a settings PUT payload that are equal to the system
+ * default — prevents a fresh PUT (mailbox or domain) from silently
+ * overriding every upstream field (acceptance criterion 6 from #106 +
+ * #142). Whole-object equality for nested fields: if `incoming.security`
+ * deep-equals `DEFAULT_SECURITY_SETTINGS`, the whole `security` key is
+ * dropped; otherwise the whole object is kept (we never partially strip
+ * a nested block, since the override semantics are whole-object replace).
  *
  * Does NOT mutate the input. Returns a new object containing only the
- * keys that survived stripping.
+ * keys that survived stripping. The signature is shared between
+ * MailboxSettings, DomainSettings, and OrgSettings — they all carry the
+ * same inheritable keys via passthrough, and the strip rule per key is
+ * keyed on the key name, not the schema type.
  */
-export function stripDefaultEqual(
-	settings: MailboxSettings,
-): MailboxSettings {
+export function stripDefaultEqual<T extends Record<string, unknown>>(
+	settings: T,
+): T {
 	const out: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(settings)) {
 		if (value === undefined) continue;
 		if (isDefaultEqual(key, value)) continue;
 		out[key] = value;
 	}
-	return out as MailboxSettings;
+	return out as T;
 }
 
 function isDefaultEqual(key: string, value: unknown): boolean {

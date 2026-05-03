@@ -543,6 +543,47 @@ describe("getDomainSettings — module-scope ETag cache", () => {
 	});
 });
 
+describe("stripDefaultEqual — symmetric across mailbox / domain / org tiers", () => {
+	it("works on a DomainSettings-shaped payload (drops agentModel == default)", async () => {
+		// Symmetry guard: PR1 wired stripDefaultEqual into the mailbox PUT/POST.
+		// #142 wires it into the domain PUT for the same reason — a fresh
+		// domain save with rendered defaults must not silently shadow org for
+		// every mailbox under that domain. Caught by advisor before merge.
+		const stripped = stripDefaultEqual({
+			agentModel: DEFAULT_MAILBOX_SETTINGS.agentModel,
+			autoDraft: DEFAULT_MAILBOX_SETTINGS.autoDraft,
+			agentSystemPrompt: "domain-specific prompt",
+		});
+		expect((stripped as Record<string, unknown>).agentModel).toBeUndefined();
+		expect((stripped as Record<string, unknown>).autoDraft).toBeUndefined();
+		// Non-default fields still survive.
+		expect((stripped as Record<string, unknown>).agentSystemPrompt).toBe("domain-specific prompt");
+	});
+
+	it("end-to-end: domain PUT of all-defaults round-trips clean (mailbox sees org tier)", async () => {
+		// Compose: putDomainSettings persists a strip-default'd payload →
+		// resolveMailboxSettings reads it back → resolved value comes from
+		// the org tier, not the domain tier (which dropped the default).
+		const bucket = makeFakeBucket({
+			"org/settings.json": { agentModel: "@cf/org/value" },
+			[MAILBOX_KEY]: {},
+		});
+		const env = makeEnv(bucket);
+
+		// Simulate the worker PUT pipeline for the domain endpoint:
+		// parse + strip + write. The stripped payload has no agentModel
+		// because it equalled the system default.
+		const incoming = { agentModel: DEFAULT_MAILBOX_SETTINGS.agentModel };
+		const stripped = stripDefaultEqual(incoming);
+		await putDomainSettings(env, "example.com", stripped);
+
+		const resolved = await resolveMailboxSettings(env, MAILBOX_ID);
+		// Falls through to the org tier, not stuck on the domain tier's
+		// materialised default.
+		expect(resolved.agentModel).toBe("@cf/org/value");
+	});
+});
+
 describe("domainFromMailboxId / domainSettingsKey", () => {
 	it("extracts the domain part of an email-style mailboxId", () => {
 		expect(domainFromMailboxId("user@example.com")).toBe("example.com");

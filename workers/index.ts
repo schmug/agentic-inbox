@@ -415,7 +415,12 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid domain settings", issues: parsed.error.issues }, 400);
 	}
-	const written = await putDomainSettings(c.env, domain, parsed.data);
+	// Symmetry with #106's mailbox PUT/POST: drop fields equal to the
+	// system default before persisting so a fresh form save with rendered
+	// defaults doesn't silently shadow the org tier for every mailbox
+	// under this domain. Caught by advisor before #142 merge.
+	const stripped = stripDefaultEqual(parsed.data);
+	const written = await putDomainSettings(c.env, domain, stripped);
 	return c.json({ domain, settings: written });
 });
 

@@ -549,7 +549,16 @@ export default function SettingsRoute() {
 					<div className="flex items-center justify-between mb-3">
 						<span className="text-sm font-medium text-ink inline-flex items-center gap-2">
 							Threat-intel hub
-							<InheritanceBadge override={hubOverride} source={sourceFor("intel")} />
+							<InheritanceBadge
+								override={hubOverride}
+								source={
+									domainSettings.intel?.hub !== undefined
+										? "domain"
+										: orgSettings.intel?.hub !== undefined
+											? "org"
+											: null
+								}
+							/>
 						</span>
 						{hubOverride && (
 							<button
