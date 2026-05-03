@@ -469,14 +469,33 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						onSubmit={handleSearchSubmit}
 						className="flex items-center gap-2 flex-1 max-w-xl"
 					>
-						<MagnifyingGlassIcon size={14} className="text-ink-3 shrink-0" />
+						<MagnifyingGlassIcon
+							size={14}
+							className={`shrink-0 ${mailboxId ? "text-ink-3" : "text-ink-4"}`}
+						/>
+						{/*
+						 * Search today is mailbox-scoped: the only registered route is
+						 * `/mailbox/:mailboxId/search`, and the submit handler bails when
+						 * `mailboxId` is missing. On org-level routes (`/`, `/settings`,
+						 * `/mailboxes`, `/domains`, `/domains/:domain`) we surface a
+						 * disabled input with explanatory placeholder so cmd+K + Enter
+						 * doesn't appear to silently swallow the query (#187). Org-scope
+						 * search across every mailbox the user can see is tracked
+						 * separately.
+						 */}
 						<input
 							ref={searchInputRef}
 							type="search"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4"
-							placeholder="Search emails…  ⌘K"
+							disabled={!mailboxId}
+							aria-disabled={!mailboxId}
+							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4 disabled:cursor-not-allowed"
+							placeholder={
+								mailboxId
+									? "Search emails…  ⌘K"
+									: "Pick a mailbox to search emails"
+							}
 							aria-label="Search"
 						/>
 					</form>
