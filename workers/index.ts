@@ -372,6 +372,27 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	return c.json(stats);
 });
 
+// Org-wide settings (#106). The blob lives at R2 key `org/settings.json` and
+// is read on the per-email hot path via a module-scope ETag cache, so the
+// endpoints below intentionally bypass that cache: GET reads R2 directly
+// (returning whatever's persisted, not the resolved view), PUT invalidates
+// the cache as part of the write. The resolved view for a specific mailbox
+// is exposed at /api/v1/mailboxes/:mailboxId/settings/effective below.
+app.get("/api/v1/org/settings", async (c) => {
+	const settings = await getOrgSettings(c.env);
+	return c.json({ settings });
+});
+
+app.put("/api/v1/org/settings", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+	const parsed = OrgSettings.safeParse(body?.settings ?? {});
+	if (!parsed.success) {
+		return c.json({ error: "Invalid org settings", issues: parsed.error.issues }, 400);
+	}
+	const written = await putOrgSettings(c.env, parsed.data);
+	return c.json({ settings: written });
+});
+
 app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
 	const email = rawEmail.toLowerCase();
@@ -464,11 +485,30 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid settings", issues: parsed.error.issues }, 400);
 	}
-	const settings = parsed.data;
+	// #106 acceptance criterion 6: drop fields equal to the system default
+	// before persisting. A fresh mailbox PUT that just round-trips the UI's
+	// rendered defaults must NOT silently shadow every org-level value.
+	const settings = stripDefaultEqual(parsed.data);
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
 	await c.env.BUCKET.put(key, JSON.stringify(settings));
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
+});
+
+// Resolved view of a mailbox's effective settings — runs the full
+// inheritance hierarchy (mailbox > org > system default) and returns the
+// post-normalised result. Used by the agent path internally and exposed
+// here for the /settings UI's "Inherited from org" indicator (PR2) and
+// for debugging.
+app.get("/api/v1/mailboxes/:mailboxId/settings/effective", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const key = `mailboxes/${mailboxId}.json`;
+	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
+	const resolved = await resolveMailboxSettings(c.env, mailboxId);
+	return c.json({
+		id: mailboxId,
+		settings: resolved,
+	});
 });
 
 app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
