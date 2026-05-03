@@ -87,3 +87,41 @@ by advisor before merge and fixed in the same PR. PR #154 shipped with
 the strip on mailbox POST/PUT but not on the new domain PUT — same
 advisor catch, fixed before merge. The pattern is symmetric across
 tiers; the rule is "every write," not "every PUT."
+
+### Stacked PRs: `--delete-branch` on the predecessor auto-closes the dependent
+
+This repo merges with `gh pr merge --squash --delete-branch` (the
+convention every recent commit on `main` follows). When PR B is stacked
+on PR A (B's `baseRefName` points at A's branch, not `main`), merging A
+with `--delete-branch` deletes A's branch on the remote — and GitHub
+auto-closes any open PR whose base branch was just deleted. PR B goes
+to `state: CLOSED` even though its content is fine, and `gh pr reopen`
+fails (`Could not open the pull request`).
+
+Two ways to avoid it:
+
+1. **Pre-flip the dependent's base back to `main` BEFORE merging the
+   predecessor.** This keeps B open through the predecessor's merge.
+   B will go `DIRTY` (because its history still contains A's pre-squash
+   commit, and `main` now has the squashed version), so a fresh rebase
+   is still needed before B can merge — but B stays open and you can
+   force-push to the same branch.
+2. **Drop the predecessor's pre-squash commit with `--onto`** when
+   rebasing B against the new `main`:
+   ```
+   git rebase --onto origin/main <predecessor-pre-squash-sha>
+   ```
+   This is the cleanest way to re-base B; a plain `git rebase main`
+   leaves the duplicate commit floating and produces conflicts against
+   the squashed version on `main`.
+
+If you forget step 1 and the dependent gets auto-closed, recovery is to
+force-push the rebased branch and `gh pr create` a fresh PR (the closed
+one cannot be reopened once its base ref is gone).
+
+Origin: 2026-05-03 merge train. PR #162 (stacked on #159) was
+auto-closed when #159's `--delete-branch` removed
+`claude/issue-122-cron-runs`; recovered as PR #172. PR #163 (stacked on
+#161) was pre-flipped to `main` ahead of #161's merge, then rebased
+with `--onto origin/main 2c0e680` to drop the duplicated #149 commit
+cleanly. Both landed without losing CI history.
