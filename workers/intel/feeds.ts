@@ -32,6 +32,7 @@ import {
 } from "./bloom";
 import { findCidrMatch, parseCidr, parseIpv4, type Ipv4Cidr } from "./cidr";
 import { getMailboxStub, listMailboxes } from "../lib/email-helpers";
+import { resolveMailboxSettings } from "../lib/mailbox-settings";
 
 const EXACT_KEY_CAP = 2000; // per-feed cap — we only fast-path confirm up to this many
 
@@ -64,12 +65,17 @@ export interface MailboxIntelSettings {
 	};
 }
 
+/**
+ * Load the resolved per-mailbox intel block (post-#106). The resolver
+ * returns whichever tier supplied an `intel` value — mailbox if set, else
+ * org, else empty — and `intel.feeds` / `intel.hub` are whole-replaced
+ * (never deep-merged across tiers). Defaults from `DEFAULT_FEEDS` are
+ * stitched in by `resolveFeeds` below.
+ */
 async function loadMailboxIntelSettings(env: Env, mailboxId: string): Promise<MailboxIntelSettings> {
-	const obj = await env.BUCKET.get(`mailboxes/${mailboxId}.json`);
-	if (!obj) return {};
 	try {
-		const json = (await obj.json()) as { intel?: MailboxIntelSettings } | null;
-		return json?.intel ?? {};
+		const resolved = await resolveMailboxSettings(env, mailboxId);
+		return resolved.intel as MailboxIntelSettings;
 	} catch {
 		return {};
 	}

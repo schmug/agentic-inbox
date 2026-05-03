@@ -26,8 +26,7 @@ import { parseAuthResults, extractReceivedFromIp } from "./auth";
 import { classifyEmail } from "./classification";
 import { extractUrls } from "./urls";
 import { aggregateVerdict, type FinalVerdict } from "./verdict";
-import { getSecuritySettings } from "./settings";
-import { getMailboxSettings } from "../lib/mailbox-settings";
+import { resolveMailboxSettings } from "../lib/mailbox-settings";
 import { checkUrlAgainstFeeds, type FeedMatch } from "../intel/feeds";
 import { evaluateTriage, type IntelMatchInfo } from "./triage";
 import type { AttachmentLike } from "./attachments";
@@ -86,7 +85,8 @@ export interface PipelineResult {
 
 export async function runSecurityPipeline(input: RunPipelineInput): Promise<PipelineResult> {
 	const { env, mailboxId, messageId, parsedEmail, targetFolder } = input;
-	const settings = await getSecuritySettings(env, mailboxId);
+	const resolved = await resolveMailboxSettings(env, mailboxId);
+	const settings = resolved.security;
 	if (!settings.enabled) return { verdict: null, skipped: true };
 
 	const sender = (parsedEmail.from?.address || "").toLowerCase();
@@ -160,16 +160,17 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	}
 
 	// Full path: LLM classification (possibly skipped by folder-bypass tier) + aggregation.
-	// `classifierModel` may be overridden per-mailbox (#67); load the parent
-	// MailboxSettings since `getSecuritySettings` only returns the security sub-tree.
-	const mailboxSettings = await getMailboxSettings(env, mailboxId);
+	// `classifierModel` is org-level only post-#106 (per-mailbox override is a
+	// follow-up; switching to a weaker classifier per mailbox is too sharp a
+	// security lever to expose without UI guardrails). The resolver returns
+	// the org value or the system default — never undefined.
 	const classification = triaged.skipClassifier
 		? { label: "safe" as const, confidence: 1.0, reasoning: "classifier skipped by folder policy" }
 		: await classifyEmail(
 			env.AI,
 			{ subject, sender, bodyHtml, auth },
 			{
-				model: mailboxSettings.classifierModel,
+				model: resolved.classifierModel,
 				// Issue #28: per-mailbox toggle for the narrowed Rule 5 behavior.
 				// `true` (default) → timeouts contribute 0 instead of failing
 				// closed to `suspicious`. `false` preserves the legacy behavior.

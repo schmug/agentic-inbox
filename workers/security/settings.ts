@@ -3,198 +3,57 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 /**
- * Mailbox-level security settings, stored inline in `mailboxes/{id}.json`.
+ * Mailbox-effective security settings — thin wrapper around the inheritance
+ * resolver from #106.
  *
- * Read-only helper — writes go through the existing mailbox settings route.
- * New fields are optional so older mailbox JSON files load cleanly.
+ * Pre-#106 this module owned the field-by-field merge that filled in
+ * security defaults from `mailboxes/{id}.json`. Post-#106, all merge
+ * semantics live in `workers/lib/mailbox-settings.ts`
+ * (`resolveMailboxSettings`), and this module just re-exposes the resolved
+ * `security` block under the legacy function name + signature so the
+ * triage/auth/url scoring pipeline doesn't have to learn about the
+ * resolver's wider return shape.
+ *
+ * Defaults and the `MailboxSecuritySettings` type itself live in
+ * `./defaults` to keep the import graph acyclic — the resolver imports
+ * defaults, this wrapper imports the resolver, and a third party that just
+ * wants the type or the constant can import directly from `./defaults`
+ * (or, for back-compat, from this module via the re-exports below).
  */
 
 import type { Env } from "../types";
-import { DEFAULT_THRESHOLDS, type VerdictThresholds } from "./verdict";
-import { DEFAULT_ATTACHMENT_POLICY, type AttachmentPolicy } from "./attachments";
+import { resolveMailboxSettings } from "../lib/mailbox-settings";
+import {
+	DEFAULT_CLASSIFICATION_SETTINGS,
+	DEFAULT_SECURITY_SETTINGS,
+	type BusinessHours,
+	type ClassificationSettings,
+	type FolderPolicy,
+	type MailboxSecuritySettings,
+} from "./defaults";
+
+// Back-compat re-exports — pre-#106 callers imported these from this module.
+export {
+	DEFAULT_CLASSIFICATION_SETTINGS,
+	DEFAULT_SECURITY_SETTINGS,
+	type BusinessHours,
+	type ClassificationSettings,
+	type FolderPolicy,
+	type MailboxSecuritySettings,
+};
 
 /**
- * Business-hours definition for the off-hours scrutiny tier.
+ * Return the effective security settings for a mailbox after running the
+ * full inheritance hierarchy (mailbox > org > system default), with the
+ * resolved block normalised (lowercased allowlists, etc.).
  *
- * This is a *scoring* input — it tilts marginal verdicts, never decides them
- * alone. See `workers/security/time-rules.ts` for the rationale (BEC / wire
- * fraud is correlated with off-hours delivery). The short-circuit triage
- * layer is intentionally NOT wired to this signal: a trusted allowlisted
- * sender emailing at 3 AM is still a legitimate email.
+ * Never throws — the resolver returns `DEFAULT_SECURITY_SETTINGS` when
+ * neither tier set the block.
  */
-export interface BusinessHours {
-	/** IANA timezone, e.g. `America/New_York`. Invalid values fall back to no contribution. */
-	timezone: string;
-	/** Inclusive start hour in 24h local time. 7 means 07:00 counts as in-hours. */
-	start_hour: number;
-	/** Exclusive end hour in 24h local time. 19 means 19:00 counts as out-of-hours. */
-	end_hour: number;
-	/** When true, Saturday and Sunday count as outside business hours regardless of the hour. */
-	weekdays_only: boolean;
-	/** Master switch so existing mailboxes opt-in explicitly. Defaults to false. */
-	boost_on_off_hours: boolean;
-}
-
-/**
- * Classifier-stage tunables. Currently only one knob: how to treat an LLM
- * timeout/AbortError. See issue #28 and `workers/security/classification.ts`.
- */
-export interface ClassificationSettings {
-	/**
-	 * When true (default), an LLM classifier timeout/AbortError contributes
-	 * 0 to the verdict score and tags the email with `llm_unavailable` —
-	 * other pipeline stages (auth, URLs, reputation, intel) still produce a
-	 * verdict. When false, the legacy fail-closed-to-`suspicious` behavior
-	 * is preserved (inverts availability-as-bypass at the cost of some
-	 * false positives during Workers-AI throttling).
-	 */
-	skip_on_timeout: boolean;
-}
-
-export interface MailboxSecuritySettings {
-	enabled: boolean;
-	thresholds: VerdictThresholds;
-	/** Learning mode: tag only, never auto-quarantine. */
-	learning_mode: boolean;
-	/** Exact sender addresses (lowercased) that short-circuit to allow when DMARC passes. */
-	allowlist_senders: string[];
-	/** Registrable domains (lowercased) that short-circuit to allow when DMARC passes. */
-	allowlist_domains: string[];
-	/**
-	 * Lowercased list of trusted `authserv-id` values (e.g. `mx.cloudflare.net`,
-	 * `mx.google.com`). When set, only `Authentication-Results` headers from
-	 * these authserv-ids contribute to the DMARC/SPF/DKIM verdict — all others
-	 * are ignored. Prevents an attacker-controlled upstream from forging a
-	 * pass verdict by injecting their own `Authentication-Results` header.
-	 *
-	 * Empty list falls back to first-header-wins behaviour (insecure against
-	 * forgery). Operators should populate this list to match their mail path.
-	 */
-	trusted_authserv_ids: string[];
-	/** Enable the hard-allow triage tier. Requires DMARC pass — never allowlist alone. */
-	trusted_auto_allow: boolean;
-	/**
-	 * History-based hard-allow: if a sender has ≥ this many prior messages
-	 * with avg_score < 20 (and DMARC passes), auto-allow without running the
-	 * classifier. Set to 0 to disable history-based hard-allow.
-	 */
-	trusted_auto_allow_min_messages: number;
-	/** Enable the hard-block triage tier on confirmed intel-feed hits or flagged senders. */
-	intel_auto_block: boolean;
-	/**
-	 * Optional per-mailbox business-hours policy. When present and
-	 * `boost_on_off_hours` is true, mail received outside the configured window
-	 * gets a small verdict-score boost. See `time-rules.ts`.
-	 */
-	business_hours?: BusinessHours;
-	/**
-	 * Per-folder bypass policies keyed by folder id (e.g. "INBOX", "Newsletters").
-	 * See `triage.ts` for the folder-bypass tier semantics and
-	 * `workers/index.ts` for the `treat_as_verified` reputation-bump hook.
-	 */
-	folder_policies?: Record<string, FolderPolicy>;
-	/**
-	 * Attachment-type gate. Runs before hard-allow in triage so a
-	 * DMARC-passing allowlisted sender carrying an .exe still gets
-	 * quarantined. Defaults are conservative-but-actionable: executables
-	 * hard-block, containers/macros only score. See `attachments.ts` for
-	 * the full rules.
-	 */
-	attachment_policy: AttachmentPolicy;
-	/**
-	 * Classifier-stage settings (issue #28). Default: skip-on-timeout
-	 * enabled — a Workers-AI timeout/AbortError contributes 0 to the
-	 * score instead of failing closed to `suspicious`.
-	 */
-	classification: ClassificationSettings;
-}
-
-/**
- * Per-folder policy: either bypasses part of the pipeline (`mode`) or marks
- * the folder as a trust signal (`treat_as_verified` — moving mail in bumps
- * the sender's reputation). Both fields are independent.
- */
-export interface FolderPolicy {
-	mode?: "skip_all" | "skip_classifier";
-	treat_as_verified?: boolean;
-}
-
-/**
- * Default for the new classification block. Skip-on-timeout is ON so the
- * common case (Workers-AI throttling, model cold start) doesn't dump a
- * burst of legitimate mail into the `suspicious` bucket. Operators who want
- * the legacy fail-closed-to-`suspicious` behavior can flip this to false.
- */
-export const DEFAULT_CLASSIFICATION_SETTINGS: ClassificationSettings = {
-	skip_on_timeout: true,
-};
-
-export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
-	enabled: false, // opt-in — existing mailboxes are unaffected until the user flips this
-	thresholds: DEFAULT_THRESHOLDS,
-	learning_mode: false,
-	allowlist_senders: [],
-	allowlist_domains: [],
-	trusted_authserv_ids: [],
-	trusted_auto_allow: true,
-	trusted_auto_allow_min_messages: 10,
-	intel_auto_block: true,
-	attachment_policy: DEFAULT_ATTACHMENT_POLICY,
-	classification: DEFAULT_CLASSIFICATION_SETTINGS,
-};
-
 export async function getSecuritySettings(
 	env: Env,
 	mailboxId: string,
 ): Promise<MailboxSecuritySettings> {
-	try {
-		const obj = await env.BUCKET.get(`mailboxes/${mailboxId}.json`);
-		if (!obj) return DEFAULT_SECURITY_SETTINGS;
-		const json = (await obj.json()) as { security?: Partial<MailboxSecuritySettings> } | null;
-		const raw = json?.security ?? {};
-		const merged: MailboxSecuritySettings = {
-			...DEFAULT_SECURITY_SETTINGS,
-			...raw,
-			thresholds: { ...DEFAULT_THRESHOLDS, ...(raw.thresholds ?? {}) },
-			// Defensive normalisation: everything in allowlists is lowercased so
-			// comparisons at runtime don't need to repeat the case fold.
-			allowlist_senders: (raw.allowlist_senders ?? DEFAULT_SECURITY_SETTINGS.allowlist_senders).map((s) => s.toLowerCase()),
-			allowlist_domains: (raw.allowlist_domains ?? DEFAULT_SECURITY_SETTINGS.allowlist_domains).map((s) => s.toLowerCase()),
-			trusted_authserv_ids: (raw.trusted_authserv_ids ?? DEFAULT_SECURITY_SETTINGS.trusted_authserv_ids).map((s) => s.toLowerCase()),
-			// business_hours: only materialise if the user supplied at least a timezone.
-			// `boost_on_off_hours` defaults to false so a partially specified block is inert.
-			business_hours: raw.business_hours && raw.business_hours.timezone
-				? {
-					timezone: raw.business_hours.timezone,
-					start_hour: raw.business_hours.start_hour ?? 7,
-					end_hour: raw.business_hours.end_hour ?? 19,
-					weekdays_only: raw.business_hours.weekdays_only ?? true,
-					boost_on_off_hours: raw.business_hours.boost_on_off_hours ?? false,
-				}
-				: undefined,
-			// Merge attachment_policy field-by-field so a partially-specified user
-			// block (e.g. only `custom_blocklist_extensions`) doesn't silently
-			// drop the default actions back to "ignore" across the board.
-			attachment_policy: {
-				...DEFAULT_ATTACHMENT_POLICY,
-				...(raw.attachment_policy ?? {}),
-				custom_blocklist_extensions: (raw.attachment_policy?.custom_blocklist_extensions
-					?? DEFAULT_ATTACHMENT_POLICY.custom_blocklist_extensions)
-					.map((e) => e.trim().toLowerCase().replace(/^\./, ""))
-					.filter((e) => e.length > 0),
-			},
-			// Classifier-stage settings (issue #28). Only `skip_on_timeout` is
-			// honoured today; field-by-field merge means partial user blocks
-			// retain the defaults for unset fields rather than getting `false`
-			// silently substituted for "missing".
-			classification: {
-				...DEFAULT_CLASSIFICATION_SETTINGS,
-				...((raw.classification ?? {}) as Partial<ClassificationSettings>),
-			},
-		};
-		return merged;
-	} catch (e) {
-		console.error("getSecuritySettings failed:", (e as Error).message);
-		return DEFAULT_SECURITY_SETTINGS;
-	}
+	const resolved = await resolveMailboxSettings(env, mailboxId);
+	return resolved.security;
 }

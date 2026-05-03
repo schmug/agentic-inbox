@@ -8,16 +8,15 @@ import { z } from "zod";
  *
  * The schema is intentionally lenient on the write side (passthrough) so
  * future fields can land without coordinated frontend/backend deploys.
- * Strict on the read side: every consumer that reads a typed field uses
- * `MailboxSettings.parse(...)` which fills in defaults.
  *
- * `security` is a typed sub-shape: only `attachment_policy` and
- * `folder_policies` are validated here — the rest of the object is
- * passthrough so unrelated security fields (allowlist_senders, thresholds,
- * business_hours, etc.) round-trip untouched. Defaults intentionally NOT
- * set in the schema; the runtime consumer in `workers/security/settings.ts`
- * (`getSecuritySettings`) is the single source of default values, and
- * duplicating them here would invite drift.
+ * `security` is a typed sub-shape: only `attachment_policy`,
+ * `folder_policies`, and `classification` are validated here — the rest of
+ * the object is passthrough so unrelated security fields (allowlist_senders,
+ * thresholds, business_hours, etc.) round-trip untouched. Defaults are
+ * intentionally NOT set in the schema; the resolver in
+ * `workers/lib/mailbox-settings.ts` (`resolveMailboxSettings`) applies
+ * `DEFAULT_SECURITY_SETTINGS` (defined in `workers/security/defaults.ts`)
+ * as the bottom of the inheritance stack. See #106.
  */
 
 const AttachmentAction = z.enum(["block", "score", "ignore"]);
@@ -51,7 +50,7 @@ const ClassificationSettings = z
   })
   .passthrough();
 
-const SecuritySettings = z
+export const SecuritySettings = z
   .object({
     attachment_policy: AttachmentPolicy.optional(),
     folder_policies: z.record(z.string(), FolderPolicy).optional(),
@@ -73,7 +72,7 @@ const SecuritySettings = z
  * The whole `intel` block is optional + passthrough so unrelated future intel
  * fields (#29 peer subscriptions) round-trip without a coordinated deploy.
  */
-const HubConfig = z
+export const HubConfig = z
   .object({
     url: z.string().min(1),
     org_uuid: z.string().min(1),
@@ -83,50 +82,84 @@ const HubConfig = z
   })
   .passthrough();
 
-const IntelSettings = z
+/**
+ * Per-feed configuration for the threat-intel cron pipeline. Runtime shape
+ * lives in `workers/intel/feeds.ts` (`MailboxIntelSettings.feeds`). Declared
+ * here so the resolver can whole-replace the `intel.feeds` array cleanly
+ * (was previously opaque via `.passthrough()`).
+ */
+export const IntelFeed = z
   .object({
-    hub: HubConfig.optional(),
+    id: z.string().min(1),
+    url: z.string().optional(),
+    kind: z.enum(["domain", "url", "ip-cidr"]).optional(),
+    refresh_hours: z.number().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    auth_secret: z.string().optional(),
   })
   .passthrough();
 
+export const IntelSettings = z
+  .object({
+    hub: HubConfig.optional(),
+    feeds: z.array(IntelFeed).optional(),
+  })
+  .passthrough();
+
+export const AutoDraftSettings = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Per-mailbox settings stored at R2 key `mailboxes/<mailboxId>.json`.
+ *
+ * Semantic shift introduced by #106: **field absence = inherit**. Defaults
+ * are NOT materialised at the schema layer — they live in
+ * `workers/lib/mailbox-settings.ts` (`DEFAULT_MAILBOX_SETTINGS`) and are
+ * applied as a final fallback inside `resolveMailboxSettings`. Putting
+ * defaults on the schema would make every read look like an override, which
+ * the inheritance hierarchy can't distinguish from an intentional one.
+ *
+ * Three security-critical model fields (`injectionScannerModel`,
+ * `draftVerifierModel`, `classifierModel` from #67) are intentionally NOT in
+ * MailboxSettings — they live only in OrgSettings. Per-mailbox overrides
+ * for these are tracked as a separate feature (see follow-up: per-mailbox
+ * model overrides with user choice / local models / own API keys) so the
+ * UI can surface the security trade-off explicitly when shipped.
+ */
 export const MailboxSettings = z.object({
   agentSystemPrompt: z.string().optional(),
-  autoDraft: z
-    .object({
-      enabled: z.boolean().default(true),
-    })
-    .default({ enabled: true }),
-  agentModel: z.string().default("@cf/moonshotai/kimi-k2.5"),
-  /**
-   * Optional per-mailbox override for the prompt-injection scanner model
-   * (#67). Falls back to `DEFAULT_INJECTION_SCANNER_MODEL` when undefined.
-   * Wrong choice can let injections through — defaults are intentionally
-   * hardcoded to a tested model.
-   */
-  injectionScannerModel: z.string().optional(),
-  /**
-   * Optional per-mailbox override for the draft-verifier model (#67).
-   * Falls back to `DEFAULT_DRAFT_VERIFIER_MODEL` when undefined.
-   */
-  draftVerifierModel: z.string().optional(),
-  /**
-   * Optional per-mailbox override for the LLM email classifier (#67).
-   * Falls back to `DEFAULT_CLASSIFIER_MODEL` when undefined.
-   */
-  classifierModel: z.string().optional(),
+  autoDraft: AutoDraftSettings.optional(),
+  agentModel: z.string().optional(),
   security: SecuritySettings.optional(),
   intel: IntelSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;
 
-/** The hand-curated list shown in the Settings model dropdown. The first
- *  entry MUST match the default in MailboxSettings.agentModel above so an
- *  unconfigured mailbox renders with a list option selected, not "Custom". */
+/**
+ * Hand-curated list shown in the Settings model dropdown. The first entry
+ * MUST match `DEFAULT_MAILBOX_SETTINGS.agentModel` (defined in
+ * `workers/lib/mailbox-settings.ts`, applied as the bottom of the resolver
+ * stack) so an unconfigured mailbox renders with a list option selected,
+ * not "Custom".
+ */
 export const TEXT_MODELS = [
   "@cf/moonshotai/kimi-k2.5",
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 ] as const;
+
+/** System default for the agent model. Lives here (rather than at the schema
+ *  default layer) so the resolver can distinguish "absent → inherit" from
+ *  "explicitly set". Imported by `workers/lib/mailbox-settings.ts` for
+ *  inclusion in `DEFAULT_MAILBOX_SETTINGS`. */
+export const DEFAULT_AGENT_MODEL = "@cf/moonshotai/kimi-k2.5";
+
+/** System default for the auto-draft toggle. Same rationale as
+ *  `DEFAULT_AGENT_MODEL`. */
+export const DEFAULT_AUTO_DRAFT_ENABLED = true;
 
 /**
  * Defaults for the three security-critical AI surfaces (#67). These mirror

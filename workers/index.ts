@@ -20,11 +20,15 @@ import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
-import { getMailboxSettings } from "./lib/mailbox-settings";
+import {
+	resolveMailboxSettings,
+	stripDefaultEqual,
+} from "./lib/mailbox-settings";
+import { getOrgSettings, putOrgSettings } from "./lib/org-settings";
+import { OrgSettings } from "../shared/org-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
 import { runDeepScan } from "./intel/deep-scan";
-import { getSecuritySettings } from "./security/settings";
 import { isDmarcReport, ingestDmarcReport } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
 import { caseRoutes } from "./routes/cases";
@@ -368,6 +372,27 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	return c.json(stats);
 });
 
+// Org-wide settings (#106). The blob lives at R2 key `org/settings.json` and
+// is read on the per-email hot path via a module-scope ETag cache, so the
+// endpoints below intentionally bypass that cache: GET reads R2 directly
+// (returning whatever's persisted, not the resolved view), PUT invalidates
+// the cache as part of the write. The resolved view for a specific mailbox
+// is exposed at /api/v1/mailboxes/:mailboxId/settings/effective below.
+app.get("/api/v1/org/settings", async (c) => {
+	const settings = await getOrgSettings(c.env);
+	return c.json({ settings });
+});
+
+app.put("/api/v1/org/settings", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+	const parsed = OrgSettings.safeParse(body?.settings ?? {});
+	if (!parsed.success) {
+		return c.json({ error: "Invalid org settings", issues: parsed.error.issues }, 400);
+	}
+	const written = await putOrgSettings(c.env, parsed.data);
+	return c.json({ settings: written });
+});
+
 app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
 	const email = rawEmail.toLowerCase();
@@ -378,7 +403,15 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const key = `mailboxes/${email}.json`;
 	if (await c.env.BUCKET.head(key)) return c.json({ error: "Mailbox already exists" }, 409);
 	const defaultSettings = { fromName: name, forwarding: { enabled: false, email: "" }, signature: { enabled: false, text: "" }, autoReply: { enabled: false, subject: "", message: "" } };
-	const finalSettings = { ...defaultSettings, ...settings };
+	// #106 acceptance criterion 6 applies on create too: a fresh mailbox
+	// whose initial PUT-payload includes the rendered form defaults
+	// (`agentModel: "@cf/moonshotai/kimi-k2.5"`, `autoDraft: { enabled: true }`)
+	// must NOT silently shadow every org-level value on the very first
+	// write. defaultSettings (per-mailbox identity fields) is layered AFTER
+	// the strip so fromName/signature/forwarding/autoReply still get
+	// materialised — those are strictly per-mailbox (audit Q8).
+	const cleanedSettings = stripDefaultEqual((settings ?? {}) as MailboxSettings);
+	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
 	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email));
 	await stub.getFolders();
@@ -406,8 +439,7 @@ app.get("/api/v1/mailboxes/:mailboxId/dashboard", async (c: AppContext) => {
 	if (mailboxId) {
 		try {
 			const creds = await loadHubCredentials(
-				c.env as unknown as Record<string, unknown>,
-				c.env.BUCKET,
+				c.env as unknown as Record<string, unknown> & { BUCKET: R2Bucket },
 				mailboxId,
 			);
 			if (creds) {
@@ -461,11 +493,30 @@ app.put("/api/v1/mailboxes/:mailboxId", async (c) => {
 	if (!parsed.success) {
 		return c.json({ error: "Invalid settings", issues: parsed.error.issues }, 400);
 	}
-	const settings = parsed.data;
+	// #106 acceptance criterion 6: drop fields equal to the system default
+	// before persisting. A fresh mailbox PUT that just round-trips the UI's
+	// rendered defaults must NOT silently shadow every org-level value.
+	const settings = stripDefaultEqual(parsed.data);
 	const key = `mailboxes/${mailboxId}.json`;
 	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
 	await c.env.BUCKET.put(key, JSON.stringify(settings));
 	return c.json({ id: mailboxId, name: mailboxId, email: mailboxId, settings });
+});
+
+// Resolved view of a mailbox's effective settings — runs the full
+// inheritance hierarchy (mailbox > org > system default) and returns the
+// post-normalised result. Used by the agent path internally and exposed
+// here for the /settings UI's "Inherited from org" indicator (PR2) and
+// for debugging.
+app.get("/api/v1/mailboxes/:mailboxId/settings/effective", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const key = `mailboxes/${mailboxId}.json`;
+	if (!(await c.env.BUCKET.head(key))) return c.json({ error: "Not found" }, 404);
+	const resolved = await resolveMailboxSettings(c.env, mailboxId);
+	return c.json({
+		id: mailboxId,
+		settings: resolved,
+	});
 });
 
 app.delete("/api/v1/mailboxes/:mailboxId", async (c) => {
@@ -662,7 +713,7 @@ app.post("/api/v1/mailboxes/:mailboxId/emails/:id/move", async (c: AppContext) =
 	// move because of a reputation write.
 	if (before?.sender) {
 		try {
-			const settings = await getSecuritySettings(c.env, mailboxId);
+			const settings = (await resolveMailboxSettings(c.env, mailboxId)).security;
 			const destPolicy = settings.folder_policies?.[folderId];
 			const srcPolicy = before.folder_id ? settings.folder_policies?.[before.folder_id] : undefined;
 			if (destPolicy?.treat_as_verified && !srcPolicy?.treat_as_verified) {
@@ -951,7 +1002,7 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 	// propagate. Gated on the same `security.enabled` flag as the sync path.
 	if (securityVerdict) {
 		try {
-			const settings = await getSecuritySettings(env, mailboxId);
+			const settings = (await resolveMailboxSettings(env, mailboxId)).security;
 			ctx.waitUntil(
 				runDeepScan({ env, mailboxId, emailId: messageId, thresholds: settings.thresholds })
 					.then(
@@ -970,10 +1021,11 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		}
 	}
 
-	// Auto-draft dispatch is gated on per-mailbox settings. The security
-	// pipeline above always runs; only the agent's onNewEmail fetch is
-	// skipped when the operator has disabled auto-draft for this mailbox.
-	const mailboxSettings = await getMailboxSettings(env, mailboxId);
+	// Auto-draft dispatch is gated on resolved settings (mailbox > org >
+	// default). The security pipeline above always runs; only the agent's
+	// onNewEmail fetch is skipped when the operator has disabled auto-draft
+	// for this mailbox (or for the org as a whole).
+	const mailboxSettings = await resolveMailboxSettings(env, mailboxId);
 	if (!mailboxSettings.autoDraft.enabled) {
 		return;
 	}

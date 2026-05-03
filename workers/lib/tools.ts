@@ -27,7 +27,7 @@ import {
 	buildThreadingHeaders,
 } from "./email-helpers";
 import { verifyDraft } from "./ai";
-import { getMailboxSettings } from "./mailbox-settings";
+import { resolveMailboxSettings } from "./mailbox-settings";
 import { sendEmail } from "../email-sender";
 import { Folders } from "../../shared/folders";
 import type { Env } from "../types";
@@ -43,7 +43,7 @@ async function verifyDraftForMailbox(
 	mailboxId: string,
 	body: string,
 ): Promise<string> {
-	const settings = await getMailboxSettings(env, mailboxId);
+	const settings = await resolveMailboxSettings(env, mailboxId);
 	return verifyDraft(env.AI, body, { model: settings.draftVerifierModel });
 }
 
