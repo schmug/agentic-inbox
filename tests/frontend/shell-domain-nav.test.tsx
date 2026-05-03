@@ -73,6 +73,14 @@ const populated: DomainStats = {
 		hasLogo: null,
 		hasVmc: null,
 	},
+	spfPosture: {
+		record: null,
+		allQualifier: null,
+		mechanismCount: null,
+		includes: null,
+		totalLookups: null,
+		exceedsLimit: null,
+	},
 	recentCases: [],
 };
 

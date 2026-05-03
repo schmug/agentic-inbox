@@ -100,6 +100,7 @@ function DomainBody({ data }: { data: DomainStats }) {
 			<div className="grid gap-4 lg:grid-cols-3">
 				<MtaStsPostureCard posture={data.mtaStsPosture} />
 				<BimiPostureCard posture={data.bimiPosture} />
+				<SpfPostureCard posture={data.spfPosture} />
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
@@ -316,6 +317,55 @@ function BimiPostureCard({
 					<PostureRow
 						label="VMC"
 						value={posture.hasVmc ? "configured (a=)" : "—"}
+					/>
+				</dl>
+			)}
+		</div>
+	);
+}
+
+function SpfPostureCard({
+	posture,
+}: { posture: DomainStats["spfPosture"] }) {
+	const allNull =
+		posture.record === null &&
+		posture.allQualifier === null &&
+		posture.mechanismCount === null &&
+		posture.totalLookups === null;
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				SPF posture
+			</div>
+			{allNull ? (
+				<p className="text-[12.5px] text-ink-3">
+					SPF lookup unavailable, or no `v=spf1` record published. The dashboard
+					re-tries on the next domain stats refresh.
+				</p>
+			) : (
+				<dl className="space-y-1.5 text-[12.5px]">
+					<PostureRow
+						label="all"
+						value={posture.allQualifier ?? "—"}
+					/>
+					<PostureRow
+						label="mechanisms"
+						value={posture.mechanismCount === null ? "—" : String(posture.mechanismCount)}
+					/>
+					<PostureRow
+						label="includes"
+						value={posture.includes === null ? "—" : String(posture.includes)}
+					/>
+					<PostureRow
+						label="DNS lookups"
+						value={
+							posture.totalLookups === null
+								? "—"
+								: posture.exceedsLimit
+									? `${posture.totalLookups} (exceeds 10-lookup limit — permerror)`
+									: `${posture.totalLookups} / 10`
+						}
 					/>
 				</dl>
 			)}

@@ -365,6 +365,46 @@ describe("aggregateDomainStats", () => {
 		});
 	});
 
+	it("falls back to the all-null SPF posture when the handler doesn't supply one (#167)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.spfPosture).toEqual({
+			record: null,
+			allQualifier: null,
+			mechanismCount: null,
+			includes: null,
+			totalLookups: null,
+			exceedsLimit: null,
+		});
+	});
+
+	it("threads a real SPF posture through unchanged when supplied (#167)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			spfPosture: {
+				record: "v=spf1 include:_spf.google.com -all",
+				allQualifier: "-",
+				mechanismCount: 2,
+				includes: 1,
+				totalLookups: 1,
+				exceedsLimit: false,
+			},
+		});
+		expect(result!.spfPosture.allQualifier).toBe("-");
+		expect(result!.spfPosture.exceedsLimit).toBe(false);
+	});
+
 	it("tolerates null (failed) summaries as zero contributions", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",
