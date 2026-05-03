@@ -199,6 +199,16 @@ function NavContents({
 					icon={<GlobeIcon size={16} />}
 					label="Domains"
 				/>
+				{/* Org-wide settings (#153) — surfaced as a top-level entry so
+				    operators can reach `/settings` from a cold start, without
+				    first picking a mailbox. The per-mailbox `Settings` entry
+				    below is unaffected; that one stays mailbox-scoped. */}
+				<NavItem
+					to="/settings"
+					end
+					icon={<GearSixIcon size={16} />}
+					label="Org settings"
+				/>
 				{mailboxId && (
 					<>
 						<SectionLabel>This mailbox</SectionLabel>
