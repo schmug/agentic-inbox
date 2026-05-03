@@ -149,6 +149,11 @@ export const cases = sqliteTable("cases", {
 	notes: text("notes"),
 	shared_to_hub: integer("shared_to_hub").notNull().default(0),
 	hub_event_uuid: text("hub_event_uuid"),
+	// Per-case verdict score copied from the originating email's
+	// FinalVerdict.score at case-creation time. Nullable: paths that
+	// don't carry a scored verdict (manual API create without `score`,
+	// or pre-#126 rows) leave it NULL.
+	score: integer("score"),
 });
 
 export const caseEmails = sqliteTable(

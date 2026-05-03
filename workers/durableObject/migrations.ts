@@ -315,4 +315,16 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started_at ON pipeline_runs(started_at);
         `,
 	},
+	{
+		// Per-case verdict score, populated at case-creation time from the
+		// security pipeline's FinalVerdict.score (already persisted on the
+		// originating email row as `security_score`). Nullable: cases created
+		// before this migration, or via paths where the originating email
+		// had no scored verdict, leave the column NULL — the UI renders a
+		// muted "—" in that case. Forward-only ALTER; existing rows get NULL.
+		name: "13_cases_score",
+		sql: `
+            ALTER TABLE cases ADD COLUMN score INTEGER;
+        `,
+	},
 ];

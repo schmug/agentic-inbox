@@ -7,12 +7,10 @@ import { Route, Routes } from "react-router";
 import CaseDetailRoute from "~/routes/case-detail";
 import { renderWithProviders } from "./test-utils";
 
-// The case API today returns only the columns persisted on the `cases` table
-// (id, status, title, notes, …) plus the linked-emails and observables joins.
-// It does NOT return `score`, `summary`, or `stage_trace` — issue #87 is about
-// removing the placeholder UI that pretended otherwise. The mock mirrors that
-// real shape so the assertions below verify behavior under current data, not
-// a hypothetical future schema.
+// Per-case score is now persisted on the `cases` table at case-creation
+// time (issue #126). The API returns it as `score: number | null`. The
+// title bar renders <ScoreRing> when score is present and a muted "—"
+// when null/undefined.
 const baseCase = {
 	id: "case_abc123",
 	created_at: "2026-04-29T11:00:00Z",
@@ -22,6 +20,7 @@ const baseCase = {
 	notes: null,
 	shared_to_hub: 0,
 	hub_event_uuid: null,
+	score: null as number | null,
 	emails: [],
 	observables: [],
 };
@@ -47,7 +46,7 @@ function renderCaseDetail() {
 	);
 }
 
-describe("CaseDetailRoute (interim mitigation, issue #87)", () => {
+describe("CaseDetailRoute (issue #126 — real per-case score)", () => {
 	beforeEach(() => {
 		vi.unstubAllGlobals();
 	});
@@ -55,44 +54,49 @@ describe("CaseDetailRoute (interim mitigation, issue #87)", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("renders no fabricated score, no co-pilot placeholder, no pipeline-trace placeholder when the case API omits score/summary/stage_trace", async () => {
-		mockFetchOnce({ case: baseCase });
+	it("renders <ScoreRing> with the real score when data.score is present", async () => {
+		mockFetchOnce({ case: { ...baseCase, score: 75 } });
 		renderCaseDetail();
 
-		// Wait for the fetch-driven render to commit.
 		expect(
 			await screen.findByText(/Suspicious wire-transfer request/i),
 		).toBeInTheDocument();
 
-		// 1. No fabricated score badge. <ScoreRing> renders the literal
-		//    "/ 100" subtitle under the numeric score; if it's gone, the
-		//    title-bar fabrication is gone. We also confirm the
-		//    "open" → 80 / "closed-fp" → 30 numeric placeholders are absent.
-		expect(screen.queryByText(/\/\s*100/)).toBeNull();
-		expect(screen.queryByText(/^80$/)).toBeNull();
-		expect(screen.queryByText(/^30$/)).toBeNull();
-
-		// 2. No "Coming soon" co-pilot card.
-		expect(screen.queryByText(/coming soon/i)).toBeNull();
-		expect(screen.queryByText(/co-pilot summary/i)).toBeNull();
-
-		// 3. No pipeline-trace placeholder copy.
-		expect(
-			screen.queryByText(/stage-level scoring isn't surfaced/i),
-		).toBeNull();
-		expect(screen.queryByText(/pipeline trace/i)).toBeNull();
+		// ScoreRing renders the literal "/ 100" subtitle and the numeric
+		// rounded score. Confirm both, plus the absence of the empty-state
+		// glyph.
+		expect(screen.getByText(/\/\s*100/)).toBeInTheDocument();
+		expect(screen.getByText(/^75$/)).toBeInTheDocument();
+		expect(screen.queryByTestId("case-score-empty")).toBeNull();
 	});
 
-	it("still renders core case content (title, status, linked-emails empty state) so the page isn't blanked out", async () => {
-		mockFetchOnce({ case: { ...baseCase, status: "closed-fp" } });
+	it("renders a muted '—' in the score slot when data.score is null", async () => {
+		mockFetchOnce({ case: { ...baseCase, score: null } });
 		renderCaseDetail();
 
 		expect(
 			await screen.findByText(/Suspicious wire-transfer request/i),
 		).toBeInTheDocument();
-		// "closed-fp" maps to a "Released" / "Closed" verdict label via
-		// statusLabel(); we only need to confirm a status pill is present
-		// and the dangerous fabricated score isn't.
+
+		// No ring → no "/ 100" subtitle. Empty-state placeholder present.
+		expect(screen.queryByText(/\/\s*100/)).toBeNull();
+		expect(screen.getByTestId("case-score-empty")).toBeInTheDocument();
+
+		// And none of the legacy fabricated badges (status-derived
+		// 80 / 30 from the old PR #125 placeholder) leak through.
+		expect(screen.queryByText(/^80$/)).toBeNull();
+		expect(screen.queryByText(/^30$/)).toBeNull();
+	});
+
+	it("still renders core case content (title, status pill, id) even without a score", async () => {
+		mockFetchOnce({
+			case: { ...baseCase, status: "closed-fp", score: null },
+		});
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
 		await waitFor(() => {
 			expect(screen.queryByText(/\/\s*100/)).toBeNull();
 		});
