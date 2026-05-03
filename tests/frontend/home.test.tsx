@@ -28,6 +28,10 @@ let domainsState: {
 
 vi.mock("~/queries/domains", () => ({
 	useDomains: () => ({ ...domainsState, refetch: vi.fn() }),
+	// Shell calls `useDomainStats` to drive the domain-scoped sidebar (#143);
+	// at `/` the route doesn't match so the hook is gated to `enabled: false`,
+	// but the import still has to resolve.
+	useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 // The org-overview home page renders an "N mailboxes" hint sourced from

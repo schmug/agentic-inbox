@@ -15,6 +15,10 @@ let queryState: {
 
 vi.mock("~/queries/domains", () => ({
 	useDomains: () => ({ ...queryState, refetch }),
+	// Shell calls `useDomainStats` to drive the domain-scoped sidebar (#143);
+	// at `/domains` (the list route) it doesn't match so the hook is gated to
+	// `enabled: false`, but the import still has to resolve.
+	useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 // Shell pulls in mailbox/dashboard data — keep these stubs identical to
