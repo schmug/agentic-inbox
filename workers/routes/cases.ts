@@ -34,6 +34,10 @@ const CreateCaseBody = z.object({
 		kind: z.string().min(1).max(32),
 		value: z.string().min(1).max(500),
 	})).optional(),
+	// Per-case verdict score (issue #126). Optional on this generic
+	// create path — `report-phish` derives it from the email's persisted
+	// security_score automatically.
+	score: z.number().int().min(0).max(100).nullable().optional(),
 });
 
 const UpdateCaseBody = z.object({
@@ -95,11 +99,21 @@ caseRoutes.post("/report-phish", async (c) => {
 		observables.push({ kind: "domain", value: u.hostname });
 	}
 
+	// Pull the verdict score off the originating email — the security
+	// pipeline persists `FinalVerdict.score` to `emails.security_score`
+	// during ingest, so by the time the user hits "Report phish" it's
+	// already on the row. Cast: EmailFull's `security_score` is nullable
+	// number; `createCase` accepts `number | null`.
+	const verdictScore =
+		typeof (email as { security_score?: number | null }).security_score === "number"
+			? (email as { security_score?: number | null }).security_score!
+			: null;
 	const { id } = await c.var.mailboxStub.createCase({
 		title: `Reported phish: ${email.subject || "(no subject)"}`,
 		notes: `Reported from email ${emailId}. Sender: ${email.sender}.`,
 		emailId,
 		observables,
+		score: verdictScore,
 	});
 
 	// Reputation penalty on the sender so the pipeline flags future mail.

@@ -9,6 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
+import ScoreRing from "~/components/phishsoc/ScoreRing";
 import VerdictPill from "~/components/phishsoc/VerdictPill";
 import { statusLabel, statusTone } from "~/components/phishsoc/verdict";
 import { useFeedback } from "~/lib/feedback";
@@ -24,6 +25,11 @@ interface CaseRecord {
 	notes: string | null;
 	shared_to_hub: number;
 	hub_event_uuid: string | null;
+	// Per-case verdict score (issue #126). Nullable: paths that don't
+	// carry a scored verdict (manual API create without `score`, or
+	// pre-#126 rows) leave it null — render a muted "—" instead of the
+	// ring.
+	score: number | null;
 	emails: CaseEmail[];
 	observables: CaseObservable[];
 }
@@ -121,11 +127,26 @@ export default function CaseDetailRoute() {
 				<ArrowLeftIcon size={12} /> Cases
 			</Link>
 
-			{/* Title bar — score badge intentionally omitted. The cases table
-			    doesn't yet persist a verdict score (see issue #87); rendering a
-			    fabricated value misled operators making release decisions, so
-			    we show status only until per-case scoring lands. */}
+			{/* Title bar — real verdict score (issue #126). `data.score` is
+			    populated at case-creation time from the originating email's
+			    FinalVerdict.score. When null/undefined (manual API create
+			    without score, or pre-#126 rows) we render a muted "—" in the
+			    same slot rather than fabricating a value. */}
 			<div className="pp-card p-5 flex items-start gap-5">
+				{data.score != null ? (
+					<div className="shrink-0">
+						<ScoreRing score={data.score} />
+					</div>
+				) : (
+					<div
+						className="shrink-0 inline-flex items-center justify-center rounded-full border border-line text-ink-3 pp-serif"
+						style={{ width: 80, height: 80, fontSize: 28 }}
+						aria-label="No score"
+						data-testid="case-score-empty"
+					>
+						—
+					</div>
+				)}
 				<div className="flex-1 min-w-0">
 					<div className="flex items-center gap-2 mb-1.5">
 						<VerdictPill tone={tone}>{statusLabel(data.status)}</VerdictPill>

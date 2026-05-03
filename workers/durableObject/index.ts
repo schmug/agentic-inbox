@@ -1290,6 +1290,13 @@ export class MailboxDO extends DurableObject<Env> {
 		notes?: string;
 		emailId?: string;
 		observables?: Array<{ kind: string; value: string }>;
+		/**
+		 * Per-case verdict score. Persisted onto the case row so the
+		 * case-detail page can render `<ScoreRing>` from real data
+		 * (issue #126). Null/undefined leaves the column NULL — the UI
+		 * renders a muted "—" in that case.
+		 */
+		score?: number | null;
 	}) {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -1304,6 +1311,7 @@ export class MailboxDO extends DurableObject<Env> {
 				notes: input.notes ?? null,
 				shared_to_hub: 0,
 				hub_event_uuid: null,
+				score: input.score ?? null,
 			})
 			.run();
 		if (input.emailId) {
