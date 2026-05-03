@@ -101,7 +101,16 @@ function resolveFeeds(env: Env, settings: MailboxIntelSettings): FeedDefinition[
 			headers: Object.keys(headers).length > 0 ? headers : undefined,
 		});
 	}
-	return [...defaults, ...user].filter((f) => f.url);
+	// NOTE: We deliberately do NOT filter out feeds with an empty `url` here.
+	// Default-feed entries may ship with `url: ""` as placeholders for
+	// operator-configured endpoints (e.g. `crowdsec-community`, whose
+	// download URL is account-specific and not public). Such feeds:
+	//   - skip refresh in `refreshAllFeeds` via the explicit URL guard;
+	//   - still participate in lookup via `checkIpAgainstFeeds` /
+	//     `checkUrlAgainstFeeds` once their data has been materialised in
+	//     KV (either by an operator-configured override URL or out-of-band).
+	// Filtering them here would silently drop already-refreshed lookup data.
+	return [...defaults, ...user];
 }
 
 function parseFeedBody(body: string, kind: "domain" | "url"): string[] {
@@ -185,6 +194,11 @@ export async function refreshAllFeeds(env: Env): Promise<{ feeds: number; entrie
 		for (const feed of resolved) {
 			if (handled.has(feed.id)) continue; // global, not per-mailbox, to avoid duplicate work
 			handled.add(feed.id);
+			// Placeholder defaults (e.g. `crowdsec-community`) carry an
+			// empty URL until an operator overrides it. Skip silently —
+			// the lookup path still consults KV for any data that's been
+			// materialised out-of-band.
+			if (!feed.url) continue;
 			try {
 				const refreshed = await refreshFeed(env, mailboxId, feed);
 				feeds++;
