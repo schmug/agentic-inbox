@@ -159,7 +159,7 @@ describe("resolveMailboxSettings — agentModel inheritance", () => {
 });
 
 describe("resolveMailboxSettings — security whole-object replace", () => {
-	it("mailbox security replaces the org block whole — allowlists do NOT extend", async () => {
+	it("mailbox security extends the org allowlists — union, lowercased, upstream-first (#149)", async () => {
 		const bucket = makeFakeBucket({
 			"org/settings.json": {
 				security: { enabled: true, allowlist_senders: ["a@b.com"] },
@@ -169,9 +169,10 @@ describe("resolveMailboxSettings — security whole-object replace", () => {
 			},
 		});
 		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
-		// Only the mailbox value, NOT a merged ["a@b.com","c@d.com"]. v1
-		// extend-merge is intentionally out of scope (audit Q3 follow-up).
-		expect(resolved.security.allowlist_senders).toEqual(["c@d.com"]);
+		// #149 carve-out: allowlist_senders extends across tiers, NOT
+		// whole-replace. Order is upstream-first (org → mailbox) so audit
+		// logs stay comparable.
+		expect(resolved.security.allowlist_senders).toEqual(["a@b.com", "c@d.com"]);
 	});
 
 	it("mailbox absent + org security set → org block wins, normalised", async () => {
@@ -203,6 +204,204 @@ describe("resolveMailboxSettings — security whole-object replace", () => {
 		expect(resolved.security.enabled).toBe(true);
 		expect(resolved.security.thresholds).toEqual(DEFAULT_SECURITY_SETTINGS.thresholds);
 		expect(resolved.security.attachment_policy).toEqual(DEFAULT_SECURITY_SETTINGS.attachment_policy);
+	});
+});
+
+describe("resolveMailboxSettings — security allowlist extend-merge (#149)", () => {
+	it("org-only allowlist_senders → resolved = org list (lowercased)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, allowlist_senders: ["A@org.com"] },
+			},
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.allowlist_senders).toEqual(["a@org.com"]);
+	});
+
+	it("mailbox-only allowlist_senders → resolved = mailbox list (lowercased)", async () => {
+		const bucket = makeFakeBucket({
+			[MAILBOX_KEY]: {
+				security: { enabled: true, allowlist_senders: ["B@MAILBOX.com"] },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.allowlist_senders).toEqual(["b@mailbox.com"]);
+	});
+
+	it("org + mailbox both set → union, deduped, lowercased, org first", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					allowlist_senders: ["A@org.com", "shared@x.com"],
+					allowlist_domains: ["org.com", "shared.com"],
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: {
+					enabled: true,
+					allowlist_senders: ["b@mailbox.com", "SHARED@x.com"],
+					allowlist_domains: ["mailbox.com", "SHARED.com"],
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.allowlist_senders).toEqual([
+			"a@org.com",
+			"shared@x.com",
+			"b@mailbox.com",
+		]);
+		expect(resolved.security.allowlist_domains).toEqual([
+			"org.com",
+			"shared.com",
+			"mailbox.com",
+		]);
+	});
+
+	it("mailbox security set with no allowlist arrays → org allowlists still surface (regression guard)", async () => {
+		// The whole point of #149: a mailbox that flips a single security
+		// switch must NOT silently drop org allowlists. This is the case
+		// the v1 whole-replace used to break.
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, allowlist_senders: ["a@org.com"], allowlist_domains: ["org.com"] },
+			},
+			[MAILBOX_KEY]: {
+				security: { enabled: true, learning_mode: true },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.allowlist_senders).toEqual(["a@org.com"]);
+		expect(resolved.security.allowlist_domains).toEqual(["org.com"]);
+		// And the rest of the security block is the mailbox's whole-replace winner.
+		expect(resolved.security.learning_mode).toBe(true);
+	});
+
+	it("domain tier is NOT in the union (#149 out-of-scope; tracked as #150)", async () => {
+		// When mailbox.security is set, only org+mailbox extend. The domain
+		// tier's allowlists are NOT pulled in — domain extend semantics are
+		// deferred to #150 per the issue's out-of-scope list. The complementary
+		// "domain wins whole-replace when mailbox is absent" path is covered by
+		// the #142 test below ("domain security replaces org security WHOLE").
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, allowlist_senders: ["org@x.com"] },
+			},
+			[DOMAIN_KEY]: {
+				security: { enabled: true, allowlist_senders: ["domain@x.com"] },
+			},
+			[MAILBOX_KEY]: {
+				security: { enabled: true, allowlist_senders: ["mailbox@x.com"] },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.allowlist_senders).toEqual([
+			"org@x.com",
+			"mailbox@x.com",
+		]);
+		expect(resolved.security.allowlist_senders).not.toContain("domain@x.com");
+	});
+
+	it("regression guard: thresholds stay whole-replace (NOT extended)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, thresholds: { tag: 10, quarantine: 50, block: 70 } },
+			},
+			[MAILBOX_KEY]: {
+				security: { enabled: true, thresholds: { tag: 25, quarantine: 65, block: 90 } },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.thresholds).toEqual({ tag: 25, quarantine: 65, block: 90 });
+	});
+
+	it("regression guard: business_hours stays whole-replace", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					business_hours: { timezone: "America/New_York", start_hour: 8, end_hour: 18, weekdays_only: true, boost_on_off_hours: true },
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: {
+					enabled: true,
+					business_hours: { timezone: "Europe/London", start_hour: 9, end_hour: 17, weekdays_only: false, boost_on_off_hours: false },
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.business_hours?.timezone).toBe("Europe/London");
+		expect(resolved.security.business_hours?.start_hour).toBe(9);
+		expect(resolved.security.business_hours?.boost_on_off_hours).toBe(false);
+	});
+
+	it("regression guard: attachment_policy stays whole-replace (no field-merge across tiers)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					attachment_policy: { custom_blocklist_extensions: ["org-only"] },
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: {
+					enabled: true,
+					attachment_policy: { custom_blocklist_extensions: ["mailbox-only"] },
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		// Only the mailbox value — no merged ["org-only","mailbox-only"].
+		expect(resolved.security.attachment_policy.custom_blocklist_extensions).toEqual(["mailbox-only"]);
+	});
+
+	it("regression guard: folder_policies stays whole-replace", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: {
+					enabled: true,
+					folder_policies: { Inbox: { mode: "skip_classifier" } },
+				},
+			},
+			[MAILBOX_KEY]: {
+				security: {
+					enabled: true,
+					folder_policies: { Spam: { mode: "skip_all" } },
+				},
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.folder_policies).toEqual({ Spam: { mode: "skip_all" } });
+		expect(resolved.security.folder_policies?.Inbox).toBeUndefined();
+	});
+
+	it("regression guard: classification stays whole-replace", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, classification: { skip_on_timeout: false } },
+			},
+			[MAILBOX_KEY]: {
+				security: { enabled: true, classification: { skip_on_timeout: true } },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.security.classification.skip_on_timeout).toBe(true);
+	});
+
+	it("regression guard: trusted_authserv_ids stays whole-replace (NOT extended like allowlists)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				security: { enabled: true, trusted_authserv_ids: ["mx.cloudflare.net"] },
+			},
+			[MAILBOX_KEY]: {
+				security: { enabled: true, trusted_authserv_ids: ["mx.google.com"] },
+			},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		// Only the mailbox value — trusted_authserv_ids is NOT in the carve-out.
+		expect(resolved.security.trusted_authserv_ids).toEqual(["mx.google.com"]);
 	});
 });
 
