@@ -97,6 +97,9 @@ function DomainBody({ data }: { data: DomainStats }) {
 				<VerdictMixCard mix={data.verdictMix} />
 				<DmarcPostureCard posture={data.dmarcPosture} />
 			</div>
+			<div className="grid gap-4 lg:grid-cols-3">
+				<MtaStsPostureCard posture={data.mtaStsPosture} />
+			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
 		</>
@@ -234,6 +237,48 @@ function DmarcPostureCard({
 								: `${Math.round(posture.alignmentRate * 100)}%`
 						}
 					/>
+				</dl>
+			)}
+		</div>
+	);
+}
+
+function MtaStsPostureCard({
+	posture,
+}: { posture: DomainStats["mtaStsPosture"] }) {
+	const allNull =
+		posture.mode === null &&
+		posture.mx === null &&
+		posture.maxAge === null &&
+		posture.id === null;
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				MTA-STS posture
+			</div>
+			{allNull ? (
+				<p className="text-[12.5px] text-ink-3">
+					MTA-STS isn't published for this domain (or the lookup failed). Operators
+					configure it by publishing a `_mta-sts` TXT record plus a policy file at
+					`mta-sts.&lt;domain&gt;/.well-known/mta-sts.txt`.
+				</p>
+			) : (
+				<dl className="space-y-1.5 text-[12.5px]">
+					<PostureRow label="mode" value={posture.mode ?? "—"} />
+					<PostureRow
+						label="mx"
+						value={
+							posture.mx && posture.mx.length > 0
+								? posture.mx.join(", ")
+								: "—"
+						}
+					/>
+					<PostureRow
+						label="max_age"
+						value={posture.maxAge === null ? "—" : `${posture.maxAge}s`}
+					/>
+					<PostureRow label="id" value={posture.id ?? "—"} />
 				</dl>
 			)}
 		</div>

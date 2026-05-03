@@ -288,6 +288,46 @@ describe("aggregateDomainStats", () => {
 		});
 	});
 
+	it("falls back to the all-null MTA-STS posture when the handler doesn't supply one (#165)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.mtaStsPosture).toEqual({
+			mode: null,
+			mx: null,
+			maxAge: null,
+			id: null,
+		});
+	});
+
+	it("threads a real MTA-STS posture through unchanged when supplied (#165)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			mtaStsPosture: {
+				mode: "enforce",
+				mx: ["mail.acme.com"],
+				maxAge: 604800,
+				id: "20251102",
+			},
+		});
+		expect(result!.mtaStsPosture).toEqual({
+			mode: "enforce",
+			mx: ["mail.acme.com"],
+			maxAge: 604800,
+			id: "20251102",
+		});
+	});
+
 	it("tolerates null (failed) summaries as zero contributions", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",

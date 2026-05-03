@@ -422,6 +422,17 @@ export interface DmarcPosture {
 	alignmentRate: number | null;
 }
 
+/** MTA-STS posture (#165) — `mode`/`mx`/`max_age`/`id` from the published
+ * policy at `https://mta-sts.<domain>/.well-known/mta-sts.txt`, gated by the
+ * `_mta-sts.<domain>` TXT marker. All fields nullable; null fields render the
+ * "unavailable" affordance shared with DMARC posture. */
+export interface MtaStsPostureView {
+	mode: "enforce" | "testing" | "none" | null;
+	mx: readonly string[] | null;
+	maxAge: number | null;
+	id: string | null;
+}
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -445,6 +456,9 @@ export interface DomainStats {
 	openCases: number;
 	verdictMix: VerdictMix;
 	dmarcPosture: DmarcPosture;
+	/** MTA-STS posture (#165). All-null when the upstream lookup failed or
+	 * the domain doesn't publish a policy. */
+	mtaStsPosture: MtaStsPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -481,6 +495,12 @@ export function emptyDmarcPosture(): DmarcPosture {
 		ruaConfigured: null,
 		alignmentRate: null,
 	};
+}
+
+/** Empty MTA-STS posture sentinel — every field null, rendered as
+ * "not configured / unavailable" (same affordance as DMARC). */
+export function emptyMtaStsPostureView(): MtaStsPostureView {
+	return { mode: null, mx: null, maxAge: null, id: null };
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -602,6 +622,11 @@ interface AggregateDomainStatsInput {
 	 * forward-compat case where the handler couldn't compute posture.
 	 */
 	dmarcPosture?: DmarcPosture;
+	/**
+	 * MTA-STS posture (#165) from the `_mta-sts.<domain>` TXT marker plus
+	 * the published policy file. Omitted defaults to the all-null sentinel.
+	 */
+	mtaStsPosture?: MtaStsPostureView;
 }
 
 /**
@@ -659,6 +684,7 @@ export function aggregateDomainStats(
 		openCases,
 		verdictMix,
 		dmarcPosture: input.dmarcPosture ?? emptyDmarcPosture(),
+		mtaStsPosture: input.mtaStsPosture ?? emptyMtaStsPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }
