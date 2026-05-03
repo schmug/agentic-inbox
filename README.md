@@ -178,6 +178,10 @@ Fires after the sync verdict is stored and only ever *tightens* the decision (sy
 
 The [`hub/`](hub/) subdirectory is a MISP-compatible community threat-intel hub — mailboxes can push phishing reports (`workers/intel/report.ts`) and pull corroborated lists back via the destroylist feed. Trust-weighted so one org can't single-handedly promote its own intel.
 
+### Domain posture surfaces
+
+The per-domain page (`/domains/:domain`) surfaces published email-auth posture alongside threat verdicts. Today it shows DMARC apex policy + alignment rate and **MTA-STS** mode/mx/max_age (`_mta-sts.<domain>` TXT + `https://mta-sts.<domain>/.well-known/mta-sts.txt`, cached in KV by policy `id` so a roll auto-invalidates).
+
 ## Architecture
 
 ```

@@ -249,6 +249,15 @@ export interface DmarcPosture {
 	alignmentRate: number | null;
 }
 
+/** MTA-STS posture (#165). All fields nullable; an all-null posture renders
+ * the same "unavailable / not configured" affordance as DMARC posture. */
+export interface MtaStsPosture {
+	mode: "enforce" | "testing" | "none" | null;
+	mx: readonly string[] | null;
+	maxAge: number | null;
+	id: string | null;
+}
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -275,6 +284,7 @@ export interface DomainStats {
 	openCases: number;
 	verdictMix: OrgVerdictMix;
 	dmarcPosture: DmarcPosture;
+	mtaStsPosture: MtaStsPosture;
 	recentCases: DashboardCase[];
 }
 
