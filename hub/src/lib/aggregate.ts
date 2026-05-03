@@ -92,21 +92,47 @@ export interface PromotedEntry {
 	contributor_count: number;
 }
 
+/**
+ * Promoted entries visible to a caller for a given sharing group.
+ *
+ * The result is the union of:
+ *   (a) cross-org-corroborated entries that meet the standard threshold
+ *       (`score ≥ PROMOTION_SCORE AND contributor_count ≥ PROMOTION_CONTRIBUTORS`),
+ *       visible to every caller — preserves sybil resistance for other orgs.
+ *   (b) entries the caller's own org contributed itself, regardless of
+ *       contributor_count. This lets sibling mailboxes inside the same org
+ *       round-trip pre-block coverage from each other and lets fresh single-org
+ *       deployments verify the report → publish loop without waiting for
+ *       independent corroboration.
+ *
+ * The asymmetry only fires for the caller. Other orgs' single-contributor
+ * entries remain hidden until they also cross the standard threshold.
+ *
+ * `callerOrgUuid` is optional for backward compat with callers that don't
+ * scope to a calling org (e.g. internal stats); when omitted, only branch (a)
+ * applies.
+ */
 export async function getPromotedForSharingGroup(
 	db: D1Database,
 	sharingGroupUuid: string | null,
+	callerOrgUuid?: string | null,
 ): Promise<PromotedEntry[]> {
 	const res = await db
 		.prepare(
 			`SELECT attribute_type, value, score, contributor_count
-			 FROM corroboration
+			 FROM corroboration c
 			 WHERE (sharing_group_uuid IS ?1 OR (sharing_group_uuid IS NULL AND ?1 IS NULL))
-			   AND score >= ?2
-			   AND contributor_count >= ?3
+			   AND (
+			     (score >= ?2 AND contributor_count >= ?3)
+			     OR (?4 IS NOT NULL AND EXISTS (
+			       SELECT 1 FROM corroboration_contributors cc
+			       WHERE cc.corroboration_id = c.id AND cc.orgc_uuid = ?4
+			     ))
+			   )
 			 ORDER BY score DESC
 			 LIMIT 50000`,
 		)
-		.bind(sharingGroupUuid, PROMOTION_SCORE, PROMOTION_CONTRIBUTORS)
+		.bind(sharingGroupUuid, PROMOTION_SCORE, PROMOTION_CONTRIBUTORS, callerOrgUuid ?? null)
 		.all<PromotedEntry>();
 	return res.results ?? [];
 }

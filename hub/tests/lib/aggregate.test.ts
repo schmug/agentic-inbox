@@ -220,4 +220,128 @@ describe("getPromotedForSharingGroup", () => {
 		expect(sg1).toHaveLength(1);
 		expect(sg2).toHaveLength(0);
 	});
+
+	describe("own-org echo (caller bypasses contributor_count threshold)", () => {
+		it("echoes the caller's own single-contributor entries on their own pull", async () => {
+			// Acceptance #1: org A pulling sees its own contributions immediately,
+			// even when it's the only reporter.
+			await seedOrg("org-A", 1.0);
+			await seedSharingGroup("sg-1");
+			await applyCorroboration(db.d1, {
+				event_uuid: "e1", orgc_uuid: "org-A", sharing_group_uuid: "sg-1",
+				attributes: [{ type: "url", value: "https://only-A-knows.example" }],
+			});
+
+			const promoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-A");
+			expect(promoted).toHaveLength(1);
+			expect(promoted[0]).toMatchObject({
+				attribute_type: "url",
+				value: "https://only-A-knows.example",
+				contributor_count: 1,
+			});
+		});
+
+		it("does NOT leak org B's single-contributor entries on org A's pull (sybil resistance preserved)", async () => {
+			// Acceptance #2: org A's pull must not see org B's solo-contributor
+			// entries. The own-org branch only widens for the caller.
+			await seedOrg("org-A", 1.0);
+			await seedOrg("org-B", 1.0);
+			await seedSharingGroup("sg-1");
+			await applyCorroboration(db.d1, {
+				event_uuid: "e1", orgc_uuid: "org-B", sharing_group_uuid: "sg-1",
+				attributes: [{ type: "url", value: "https://only-B-knows.example" }],
+			});
+
+			const aPromoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-A");
+			expect(aPromoted).toEqual([]);
+
+			// And conversely, org B sees its own.
+			const bPromoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-B");
+			expect(bPromoted).toHaveLength(1);
+			expect(bPromoted[0].value).toBe("https://only-B-knows.example");
+		});
+
+		it("still surfaces cross-org corroborated entries (≥2 contributors) for any caller", async () => {
+			// Acceptance #1 preservation: standard threshold behaviour holds for
+			// any caller, including callers who didn't contribute themselves.
+			await seedOrg("org-A", 1.0);
+			await seedOrg("org-B", 1.0);
+			await seedOrg("org-C", 1.0);
+			await seedSharingGroup("sg-1");
+			for (const org of ["org-A", "org-B"]) {
+				await applyCorroboration(db.d1, {
+					event_uuid: `e-${org}`, orgc_uuid: org, sharing_group_uuid: "sg-1",
+					attributes: [{ type: "url", value: "https://corroborated.example" }],
+				});
+			}
+
+			// org-C didn't contribute, but cross-org promotion still applies.
+			const cPromoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-C");
+			expect(cPromoted).toHaveLength(1);
+			expect(cPromoted[0]).toMatchObject({
+				value: "https://corroborated.example",
+				contributor_count: 2,
+			});
+		});
+
+		it("de-duplicates entries that meet BOTH the cross-org threshold and the own-org branch", async () => {
+			// Acceptance #3: an entry where caller is one of N≥2 contributors
+			// should appear exactly once, not twice.
+			await seedOrg("org-A", 1.0);
+			await seedOrg("org-B", 1.0);
+			await seedSharingGroup("sg-1");
+			for (const org of ["org-A", "org-B"]) {
+				await applyCorroboration(db.d1, {
+					event_uuid: `e-${org}`, orgc_uuid: org, sharing_group_uuid: "sg-1",
+					attributes: [{ type: "url", value: "https://both.example" }],
+				});
+			}
+
+			const aPromoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-A");
+			expect(aPromoted).toHaveLength(1);
+			expect(aPromoted[0].value).toBe("https://both.example");
+		});
+
+		it("synthetic peer org never benefits from an own-org shortcut on a human caller's pull", async () => {
+			// Acceptance #4 / Constraint: inbound MISP sync writes corroboration
+			// rows attributed to a synthetic peer org. From a human caller's
+			// perspective the peer is NEVER the caller, so the own-org branch
+			// never fires for the peer's contributions. Pulled-only intel
+			// continues to require ≥2 contributors to promote.
+			await seedOrg("org-A", 1.0);
+			await seedOrg("peer-CIRCL", 0.5);
+			await seedSharingGroup("sg-1");
+			await applyCorroboration(db.d1, {
+				event_uuid: "e-peer", orgc_uuid: "peer-CIRCL", sharing_group_uuid: "sg-1",
+				attributes: [{ type: "url", value: "https://pulled-only.example" }],
+			});
+
+			// org-A pulling: should not see the peer's solo entry.
+			const aPromoted = await getPromotedForSharingGroup(db.d1, "sg-1", "org-A");
+			expect(aPromoted).toEqual([]);
+
+			// Once org-A independently corroborates, it promotes for everyone
+			// (cross-org threshold met).
+			await applyCorroboration(db.d1, {
+				event_uuid: "e-A", orgc_uuid: "org-A", sharing_group_uuid: "sg-1",
+				attributes: [{ type: "url", value: "https://pulled-only.example" }],
+			});
+			const aAfter = await getPromotedForSharingGroup(db.d1, "sg-1", "org-A");
+			expect(aAfter).toHaveLength(1);
+		});
+
+		it("with no caller org passed, behaves like the old strict threshold (back-compat)", async () => {
+			await seedOrg("org-A", 1.0);
+			await seedSharingGroup("sg-1");
+			await applyCorroboration(db.d1, {
+				event_uuid: "e1", orgc_uuid: "org-A", sharing_group_uuid: "sg-1",
+				attributes: [{ type: "url", value: "https://solo.example" }],
+			});
+
+			// No caller org => threshold-only path; solo contribution must not
+			// leak through.
+			expect(await getPromotedForSharingGroup(db.d1, "sg-1")).toEqual([]);
+			expect(await getPromotedForSharingGroup(db.d1, "sg-1", null)).toEqual([]);
+		});
+	});
 });
