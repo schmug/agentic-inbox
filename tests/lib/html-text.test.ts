@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { htmlToPlainText } from "shared/html-text";
+import { stripHtmlToText } from "../../workers/lib/email-helpers";
 
 describe("htmlToPlainText", () => {
 	it("returns empty string for empty input", () => {
@@ -69,4 +70,56 @@ describe("htmlToPlainText", () => {
 	it("handles unclosed tags without infinite-looping", () => {
 		expect(htmlToPlainText("hello <b world")).toBe("hello");
 	});
+});
+
+/**
+ * #116 acceptance: lock down XSS sanitization for both the shared
+ * `htmlToPlainText` tokenizer and the worker-side `stripHtmlToText`
+ * delegate (`workers/lib/email-helpers.ts`). PR #118 replaced the
+ * regex stripper with a DOM-free hand-rolled tokenizer, so the same
+ * pure-JS function runs in both browser and workerd. Standing up
+ * `@cloudflare/vitest-pool-workers` for an additional workerd-pool
+ * run would not exercise different code paths; the node pool is
+ * sufficient here.
+ *
+ * Each payload must:
+ *   1. not throw, and
+ *   2. produce output that does NOT contain `alert(1)` or any raw
+ *      `<script`, `onerror=`, or `onload=` substrings.
+ */
+describe("stripHtmlToText / htmlToPlainText XSS lockdown (#116)", () => {
+	const XSS_PAYLOADS: ReadonlyArray<{ name: string; html: string }> = [
+		{ name: "img onerror handler", html: "<img src=x onerror=alert(1)>" },
+		{ name: "inline script tag", html: "<script>alert(1)</script>" },
+		{ name: "svg onload handler", html: "<svg onload=alert(1)></svg>" },
+		{
+			name: "broken script close tag (CodeQL js/bad-tag-filter shape)",
+			html: "<script>alert(1)</script foo=bar>",
+		},
+	];
+
+	for (const sanitizer of [
+		{ name: "htmlToPlainText", fn: htmlToPlainText },
+		{ name: "stripHtmlToText", fn: stripHtmlToText },
+	] as const) {
+		describe(sanitizer.name, () => {
+			for (const { name, html } of XSS_PAYLOADS) {
+				it(`neutralizes: ${name}`, () => {
+					let output = "";
+					expect(() => {
+						output = sanitizer.fn(html);
+					}).not.toThrow();
+					expect(output).not.toContain("alert(1)");
+					expect(output.toLowerCase()).not.toContain("<script");
+					expect(output.toLowerCase()).not.toContain("onerror=");
+					expect(output.toLowerCase()).not.toContain("onload=");
+				});
+			}
+
+			it("passes through plain text unchanged (sanity)", () => {
+				const plain = "Hello, this is a normal message with no markup.";
+				expect(sanitizer.fn(plain)).toBe(plain);
+			});
+		});
+	}
 });
