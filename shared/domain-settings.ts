@@ -1,0 +1,56 @@
+// Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
+
+import { z } from "zod";
+import {
+	AutoDraftSettings,
+	IntelSettings,
+	SecuritySettings,
+} from "./mailbox-settings";
+
+/**
+ * Per-domain settings stored at R2 key `domains/<domain>.json` (#142).
+ *
+ * Sits between mailbox and org in the inheritance hierarchy:
+ * `mailbox > domain > org > system default`. An MSP managing 12 mailboxes
+ * under `acme.com` can set the agent prompt or security thresholds once at
+ * the domain level instead of editing 12 mailbox files.
+ *
+ * Mirrors `MailboxSettings` minus the strictly-per-mailbox identity fields
+ * (`fromName`, `signature`, `forwarding`, `autoReply`). The three
+ * security-critical model fields (`injectionScannerModel`,
+ * `draftVerifierModel`, `classifierModel`) are deliberately NOT here — they
+ * live only in `OrgSettings` (per audit Q7 from #106; per-tier overrides
+ * for the prompt-injection scanner are too sharp without UI guardrails).
+ *
+ * Whole-object replace across tiers — same rule as `OrgSettings`. A
+ * domain-level `security` block carries the entire object; the org's
+ * `security` is NOT deep-merged in. Per-array extend-merge (allowlists,
+ * business_hours per-field) is tracked separately as #149 / #150.
+ *
+ * R2 key derivation lives in `workers/lib/domain-settings.ts`
+ * (`domainSettingsKey(domain)`) so a future re-keying — e.g. multi-tenant
+ * `orgs/<orgId>/domains/<domain>.json` — is one helper change rather than
+ * a cross-cutting grep.
+ */
+export const DomainSettings = z
+	.object({
+		agentSystemPrompt: z.string().optional(),
+		autoDraft: AutoDraftSettings.optional(),
+		agentModel: z.string().optional(),
+		security: SecuritySettings.optional(),
+		intel: IntelSettings.optional(),
+	})
+	.passthrough();
+
+export type DomainSettings = z.infer<typeof DomainSettings>;
+
+/**
+ * Parse a raw value as `DomainSettings`. Returns the parsed value on
+ * success, or `null` when validation fails. Callers (the GET endpoint, the
+ * resolver) treat a missing/malformed `domains/<domain>.json` as "no
+ * domain-level overrides" — empty `{}` rather than throwing.
+ */
+export function parseDomainSettings(raw: unknown): DomainSettings | null {
+	const result = DomainSettings.safeParse(raw ?? {});
+	return result.success ? result.data : null;
+}

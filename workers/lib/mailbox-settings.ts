@@ -10,6 +10,8 @@ import {
 } from "../../shared/mailbox-settings";
 import type { OrgSettings } from "../../shared/org-settings";
 import { getOrgSettings } from "./org-settings";
+import type { DomainSettings } from "../../shared/domain-settings";
+import { domainFromMailboxId, getDomainSettings } from "./domain-settings";
 import {
 	DEFAULT_SECURITY_SETTINGS,
 	type MailboxSecuritySettings,
@@ -66,7 +68,12 @@ export const DEFAULT_MAILBOX_SETTINGS = {
 /**
  * Inheritance-resolved view of a mailbox's settings.
  *
- * Each field has been resolved through `mailbox > org > system default`.
+ * Each field has been resolved through `mailbox > domain > org > system
+ * default`. The domain tier (#142) sits between mailbox and org; an MSP
+ * managing 12 mailboxes under one domain can set the agent prompt or
+ * security policy once at the domain level instead of editing 12 mailbox
+ * files.
+ *
  * Fields that have a system default are guaranteed-present (e.g.
  * `agentModel: string`, not `string | undefined`). Fields with no
  * meaningful default (`agentSystemPrompt`) stay `string | undefined`.
@@ -74,9 +81,14 @@ export const DEFAULT_MAILBOX_SETTINGS = {
  * `intel.hub` and `intel.feeds` may be `undefined` when neither tier set
  * them — there's no system default for either.
  *
- * `raw` carries the per-mailbox JSON as-stored, so callers needing strictly
- * per-mailbox fields (`fromName`, `signature`, `forwarding`, `autoReply`)
- * can reach them without a second R2 read.
+ * `raw` carries the per-mailbox JSON as-stored. `domain`, `org` carry the
+ * raw blobs from the other tiers so the UI can introspect which tier
+ * supplied each resolved field (the per-mailbox settings page renders
+ * "Inherited from <domain>" / "Inherited from org" / "Default" badges
+ * based on which tier has each field set).
+ *
+ * `domainName` is the domain the mailbox belongs to (or null when the
+ * mailboxId can't be parsed). Surfaced so the UI can render the badge text.
  */
 export interface ResolvedMailboxSettings {
 	agentSystemPrompt: string | undefined;
@@ -91,50 +103,63 @@ export interface ResolvedMailboxSettings {
 		feeds?: NonNullable<OrgSettings["intel"]>["feeds"];
 	};
 	raw: MailboxSettings;
+	domain: DomainSettings;
+	domainName: string | null;
 	org: OrgSettings;
 }
 
 /**
  * Resolve a mailbox's effective settings through the full inheritance
- * hierarchy: `mailbox > org > system default`.
+ * hierarchy: `mailbox > domain > org > system default` (#142).
  *
  * Whole-object replacement for nested fields. If a mailbox sets `security`
- * (any sub-field), it carries the *whole* security object — the org
- * `security` block is NOT deep-merged in. Same for `intel.hub` and
- * `intel.feeds`. This matches the v1 decision in #106's audit (Q3, Q4,
- * Q6); per-array extend-merge semantics are tracked as separate follow-ups.
+ * (any sub-field), it carries the *whole* security object — the
+ * domain/org `security` blocks are NOT deep-merged in. Same for
+ * `intel.hub` and `intel.feeds`. This matches the v1 decision in #106's
+ * audit (Q3, Q4, Q6); per-array extend-merge semantics are tracked as
+ * separate follow-ups (#149, #150).
  *
  * `security` is post-normalised (lowercased allowlists, trimmed
  * blocklist extensions, etc.) so consumers don't repeat the case fold at
  * runtime — but the normalisation runs on whichever block won the resolve,
  * NOT field-by-field across tiers.
+ *
+ * The domain layer is keyed off the mailboxId's domain part. A malformed
+ * mailboxId (no `@`) skips the domain read entirely and falls through to
+ * org/default — same behaviour as if no `domains/<domain>.json` existed.
  */
 export async function resolveMailboxSettings(
 	env: R2BucketEnv,
 	mailboxId: string,
 ): Promise<ResolvedMailboxSettings> {
-	const [mailbox, org] = await Promise.all([
+	const domainName = domainFromMailboxId(mailboxId);
+	const [mailbox, domain, org] = await Promise.all([
 		getMailboxSettings(env, mailboxId),
+		domainName ? getDomainSettings(env, domainName) : Promise.resolve({} as DomainSettings),
 		getOrgSettings(env),
 	]);
 
-	// Whole-object replace across tiers. Whichever tier supplied the field
-	// wins outright — never deep-merged. Within the winning tier,
-	// mergeSecurityWithDefault completes any unset fields with the system
-	// default so consumers see a fully-populated MailboxSecuritySettings.
-	const securityWinner = mailbox.security ?? org.security;
+	// Whole-object replace across tiers, in order: mailbox > domain > org.
+	// Within the winning tier, mergeSecurityWithDefault completes any
+	// unset fields with the system default so consumers see a fully-
+	// populated MailboxSecuritySettings.
+	const securityWinner = mailbox.security ?? domain.security ?? org.security;
 	const security = securityWinner
 		? mergeSecurityWithDefault(securityWinner)
 		: DEFAULT_SECURITY_SETTINGS;
 
-	const intelRaw = (mailbox.intel ?? org.intel ?? {}) as NonNullable<MailboxSettings["intel"]>;
+	const intelRaw = (mailbox.intel ?? domain.intel ?? org.intel ?? {}) as NonNullable<MailboxSettings["intel"]>;
 
 	return {
 		agentSystemPrompt:
-			mailbox.agentSystemPrompt ?? org.agentSystemPrompt ?? undefined,
+			mailbox.agentSystemPrompt ?? domain.agentSystemPrompt ?? org.agentSystemPrompt ?? undefined,
 		agentModel:
-			mailbox.agentModel ?? org.agentModel ?? DEFAULT_MAILBOX_SETTINGS.agentModel,
-		autoDraft: resolveAutoDraft(mailbox.autoDraft, org.autoDraft),
+			mailbox.agentModel ?? domain.agentModel ?? org.agentModel ?? DEFAULT_MAILBOX_SETTINGS.agentModel,
+		autoDraft: resolveAutoDraft(mailbox.autoDraft, domain.autoDraft, org.autoDraft),
+		// The three security-critical model fields stay org-only by design
+		// (#106 audit Q7). Domain tier intentionally NOT consulted here —
+		// per-domain override is the same foot-gun as per-mailbox without
+		// the UI guardrails. Tracked as #151 if/when we want to allow it.
 		injectionScannerModel:
 			org.injectionScannerModel ?? DEFAULT_MAILBOX_SETTINGS.injectionScannerModel,
 		draftVerifierModel:
@@ -147,15 +172,18 @@ export async function resolveMailboxSettings(
 			feeds: intelRaw.feeds,
 		},
 		raw: mailbox,
+		domain,
+		domainName,
 		org,
 	};
 }
 
 function resolveAutoDraft(
 	mailbox: MailboxSettings["autoDraft"],
+	domain: DomainSettings["autoDraft"],
 	org: OrgSettings["autoDraft"],
 ): { enabled: boolean } {
-	const winner = mailbox ?? org;
+	const winner = mailbox ?? domain ?? org;
 	if (!winner) return { enabled: DEFAULT_AUTO_DRAFT_ENABLED };
 	return { enabled: winner.enabled ?? DEFAULT_AUTO_DRAFT_ENABLED };
 }
@@ -218,27 +246,30 @@ function normalizeSecurity(s: MailboxSecuritySettings): MailboxSecuritySettings 
 }
 
 /**
- * Strip fields from a mailbox settings PUT payload that are equal to the
- * system default — prevents fresh mailboxes from silently overriding every
- * org-level field (acceptance criterion 6 from #106). Whole-object
- * equality for nested fields: if `incoming.security` deep-equals
- * `DEFAULT_SECURITY_SETTINGS`, the whole `security` key is dropped;
- * otherwise the whole object is kept (we never partially strip a nested
- * block, since the override semantics are whole-object replace).
+ * Strip fields from a settings PUT payload that are equal to the system
+ * default — prevents a fresh PUT (mailbox or domain) from silently
+ * overriding every upstream field (acceptance criterion 6 from #106 +
+ * #142). Whole-object equality for nested fields: if `incoming.security`
+ * deep-equals `DEFAULT_SECURITY_SETTINGS`, the whole `security` key is
+ * dropped; otherwise the whole object is kept (we never partially strip
+ * a nested block, since the override semantics are whole-object replace).
  *
  * Does NOT mutate the input. Returns a new object containing only the
- * keys that survived stripping.
+ * keys that survived stripping. The signature is shared between
+ * MailboxSettings, DomainSettings, and OrgSettings — they all carry the
+ * same inheritable keys via passthrough, and the strip rule per key is
+ * keyed on the key name, not the schema type.
  */
-export function stripDefaultEqual(
-	settings: MailboxSettings,
-): MailboxSettings {
+export function stripDefaultEqual<T extends Record<string, unknown>>(
+	settings: T,
+): T {
 	const out: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(settings)) {
 		if (value === undefined) continue;
 		if (isDefaultEqual(key, value)) continue;
 		out[key] = value;
 	}
-	return out as MailboxSettings;
+	return out as T;
 }
 
 function isDefaultEqual(key: string, value: unknown): boolean {

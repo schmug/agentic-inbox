@@ -37,6 +37,16 @@ vi.mock("~/queries/org-settings", () => ({
 	useOrgSettings: () => ({ data: { settings: {} }, isLoading: false }),
 }));
 
+// Per-mailbox settings page also reads domain settings (#142). Returning
+// an empty resolved blob keeps the form in "no domain overrides" mode so
+// existing per-mailbox assertions hold.
+vi.mock("~/queries/domain-settings", () => ({
+	useDomainSettings: () => ({
+		data: { domain: "example.com", settings: {} },
+		isLoading: false,
+	}),
+}));
+
 import SettingsRoute from "~/routes/settings";
 import { renderWithProviders } from "./test-utils";
 

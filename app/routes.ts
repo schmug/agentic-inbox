@@ -14,6 +14,7 @@ export default [
 	route("settings", "routes/org-settings.tsx"),
 	route("domains", "routes/domains-list.tsx"),
 	route("domains/:domain", "routes/domain-detail.tsx"),
+	route("domains/:domain/settings", "routes/domain-settings.tsx"),
 	route("mailbox/:mailboxId", "routes/mailbox.tsx", [
 		index("routes/mailbox-index.tsx"),
 		route("dashboard", "routes/dashboard.tsx"),

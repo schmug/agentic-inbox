@@ -136,6 +136,17 @@ const api = {
 		get<{ id: string; settings: Record<string, unknown> }>(
 			`/api/v1/mailboxes/${mailboxId}/settings/effective`,
 		),
+	// Domain-level settings (#142). Sits between mailbox and org in the
+	// inheritance hierarchy. Same R2/ETag pattern as the org endpoints.
+	getDomainSettings: (domain: string) =>
+		get<{ domain: string; settings: Record<string, unknown> }>(
+			`/api/v1/domains/${encodeURIComponent(domain)}/settings`,
+		),
+	updateDomainSettings: (domain: string, settings: unknown) =>
+		put<{ domain: string; settings: Record<string, unknown> }>(
+			`/api/v1/domains/${encodeURIComponent(domain)}/settings`,
+			{ settings },
+		),
 
 	// Emails
 	listEmails: (mailboxId: string, params: Record<string, string>, opts?: { signal?: AbortSignal }) =>
