@@ -376,4 +376,48 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE cases ADD COLUMN stage_trace TEXT;
         `,
 	},
+	{
+		// Inbound TLS-RPT (RFC 8460) report ingestion (issue #169). Mirrors
+		// the DMARC RUA tables (#10): one row in `tlsrpt_reports` per
+		// received report, plus per-(policy, optional failure-detail) rows
+		// in `tlsrpt_records`. The policy-summary row holds
+		// `policies[].summary.{total-successful,total-failure}-session-count`
+		// with `sending_mta_ip`/`receiving_mx_hostname`/`result_type` NULL;
+		// each entry under `policies[].failure-details` produces a row with
+		// those columns populated. Per-mailbox-DO scope keeps multi-tenancy
+		// intact — reports landed on mailbox A never leak into mailbox B's
+		// surface.
+		name: "17_tlsrpt_reports",
+		sql: `
+            CREATE TABLE IF NOT EXISTS tlsrpt_reports (
+                id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL,
+                org_name TEXT,
+                report_id TEXT,
+                domain TEXT NOT NULL,
+                date_range_begin TEXT,
+                date_range_end TEXT,
+                contact_info TEXT,
+                raw_r2_key TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_tlsrpt_reports_domain ON tlsrpt_reports(domain);
+            CREATE INDEX IF NOT EXISTS idx_tlsrpt_reports_received_at ON tlsrpt_reports(received_at);
+
+            CREATE TABLE IF NOT EXISTS tlsrpt_records (
+                id TEXT PRIMARY KEY,
+                report_id TEXT NOT NULL,
+                policy_type TEXT,
+                policy_domain TEXT,
+                sending_mta_ip TEXT,
+                receiving_mx_hostname TEXT,
+                result_type TEXT,
+                successful_session_count INTEGER NOT NULL DEFAULT 0,
+                failed_session_count INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(report_id) REFERENCES tlsrpt_reports(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_tlsrpt_records_report_id ON tlsrpt_records(report_id);
+            CREATE INDEX IF NOT EXISTS idx_tlsrpt_records_policy_domain ON tlsrpt_records(policy_domain);
+            CREATE INDEX IF NOT EXISTS idx_tlsrpt_records_sending_mta_ip ON tlsrpt_records(sending_mta_ip);
+        `,
+	},
 ];

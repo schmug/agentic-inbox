@@ -23,6 +23,7 @@ export default [
 		route("settings", "routes/settings.tsx"),
 		route("search", "routes/search-results.tsx"),
 		route("dmarc", "routes/dmarc.tsx"),
+		route("tlsrpt", "routes/tlsrpt.tsx"),
 		route("cases", "routes/cases.tsx"),
 		route("cases/:caseId", "routes/case-detail.tsx"),
 		route("hub", "routes/hub.tsx"),

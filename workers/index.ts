@@ -33,6 +33,8 @@ import { runSecurityPipeline } from "./security";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
+import { isTlsRptReport, ingestTlsRptReport } from "./tlsrpt/ingest";
+import { tlsrptRoutes } from "./routes/tlsrpt";
 import { caseRoutes } from "./routes/cases";
 import { hubUiRoutes } from "./routes/hub-ui";
 import {
@@ -129,6 +131,7 @@ app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 // -- Config ---------------------------------------------------------
 
 app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
+app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
 
@@ -1089,6 +1092,22 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 			}
 		} catch (e) {
 			console.error("dmarc ingest failed:", (e as Error).message);
+		}
+	}
+
+	// TLS-RPT (RFC 8460) reports arrive as email with `application/tlsrpt+gzip`
+	// or `application/tlsrpt+json` payloads. Same divert pattern as DMARC RUA:
+	// the security pipeline must never classify a machine report. See
+	// workers/tlsrpt/ingest.ts. Issue #169.
+	if (isTlsRptReport(parsedEmail)) {
+		try {
+			const result = await ingestTlsRptReport(env, mailboxId, messageId, parsedEmail);
+			if (result.ingested) {
+				await stub.moveEmail(messageId, Folders.ARCHIVE);
+				return;
+			}
+		} catch (e) {
+			console.error("tlsrpt ingest failed:", (e as Error).message);
 		}
 	}
 

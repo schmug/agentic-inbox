@@ -200,3 +200,38 @@ export const caseObservables = sqliteTable("case_observables", {
 	kind: text("kind").notNull(),
 	value: text("value").notNull(),
 });
+
+// ── TLS-RPT (RFC 8460 inbound report ingestion) ──────────────────
+
+export const tlsrptReports = sqliteTable("tlsrpt_reports", {
+	id: text("id").primaryKey(),
+	received_at: text("received_at").notNull(),
+	org_name: text("org_name"),
+	report_id: text("report_id"),
+	domain: text("domain").notNull(),
+	date_range_begin: text("date_range_begin"),
+	date_range_end: text("date_range_end"),
+	contact_info: text("contact_info"),
+	raw_r2_key: text("raw_r2_key"),
+});
+
+// One row per (policy, optional failure-detail). The policy-summary row
+// carries the per-policy success/failure totals from the report's
+// `policies[].summary`; `sending_mta_ip`/`receiving_mx_hostname`/
+// `result_type` are NULL on that row. Each entry under
+// `policies[].failure-details` produces an additional row where those
+// columns are populated and `failed_session_count` accounts for the
+// failure breakdown. Sources rollups SUM across both row types.
+export const tlsrptRecords = sqliteTable("tlsrpt_records", {
+	id: text("id").primaryKey(),
+	report_id: text("report_id")
+		.notNull()
+		.references(() => tlsrptReports.id, { onDelete: "cascade" }),
+	policy_type: text("policy_type"),
+	policy_domain: text("policy_domain"),
+	sending_mta_ip: text("sending_mta_ip"),
+	receiving_mx_hostname: text("receiving_mx_hostname"),
+	result_type: text("result_type"),
+	successful_session_count: integer("successful_session_count").notNull().default(0),
+	failed_session_count: integer("failed_session_count").notNull().default(0),
+});
