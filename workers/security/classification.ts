@@ -191,7 +191,18 @@ function normalizeLabel(raw: unknown): ClassificationLabel {
 	return "suspicious";
 }
 
-export function scoreClassification(result: ClassificationResult): { score: number; reasons: string[] } {
+/**
+ * Confidence sources (issue #105, v1):
+ *   - `unavailable` (timeout / AbortError) → 0.1. The classifier never
+ *     reached a verdict; whatever the score (zero, here) contributed is
+ *     near-meaningless on its own. `scoreAuth`/`scoreUrls`/etc. are
+ *     uneffected and still drive the verdict.
+ *   - All other labels → directly use the model's reported `confidence`
+ *     (already clamped to [0,1] at parse time). High-confidence `safe`
+ *     produces high confidence in a zero contribution; high-confidence
+ *     `phishing` produces high confidence in a +50 contribution.
+ */
+export function scoreClassification(result: ClassificationResult): { score: number; reasons: string[]; confidence: number } {
 	// `unavailable` (issue #28 / Rule 5 narrowed): the classifier hit a
 	// timeout/AbortError. Contribute 0 to the score and tag the verdict so
 	// operators can see why the classifier didn't weigh in. Other scorers
@@ -199,7 +210,7 @@ export function scoreClassification(result: ClassificationResult): { score: numb
 	// and a clean inbound that scores well on auth + URLs + reputation +
 	// intel still reaches `allow`.
 	if (result.label === "unavailable") {
-		return { score: 0, reasons: ["llm_unavailable"] };
+		return { score: 0, reasons: ["llm_unavailable"], confidence: 0.1 };
 	}
 	const map: Record<Exclude<ClassificationLabel, "unavailable">, number> = {
 		safe: 0, spam: 20, suspicious: 30, bec: 45, phishing: 50,
@@ -211,5 +222,5 @@ export function scoreClassification(result: ClassificationResult): { score: numb
 	const reasons = result.label === "safe"
 		? []
 		: [`classifier: ${result.label} (${Math.round(result.confidence * 100)}%)`];
-	return { score: scaled, reasons };
+	return { score: scaled, reasons, confidence: result.confidence };
 }

@@ -100,6 +100,12 @@ export function evaluateTriage(inputs: TriageInputs): TriageResult {
 		const verdict: FinalVerdict = {
 			action: "allow",
 			score: 0,
+			// Triage tiers fire on deterministic operator-configured rules
+			// (folder policy, allowlist, intel match, attachment extension).
+			// The confidence in the short-circuit verdict is 1.0 because the
+			// rule itself is unambiguous; whether the rule was the *right*
+			// rule for the email is the operator's call, not the verdict's.
+			confidence: 1,
 			explanation: reason,
 			auth: inputs.auth,
 			classification: { ...SKIP_CLASSIFICATION, reasoning: "pipeline skipped by folder policy" },
@@ -147,6 +153,7 @@ function evaluateAttachmentGate(inputs: TriageInputs): TriageShortCircuit | null
 	const verdict: FinalVerdict = {
 		action: "quarantine",
 		score: 100,
+		confidence: 1,
 		explanation: reason,
 		auth: inputs.auth,
 		classification: { ...SKIP_CLASSIFICATION, label: "suspicious", reasoning: "classifier skipped by attachment-gate triage" },
@@ -170,6 +177,7 @@ function evaluateHardBlock(inputs: TriageInputs): TriageShortCircuit | null {
 	const verdict: FinalVerdict = {
 		action: "quarantine",
 		score: 100,
+		confidence: 1,
 		explanation: reasons.join("; "),
 		auth: inputs.auth,
 		classification: { ...SKIP_CLASSIFICATION, label: "phishing", reasoning: "classifier skipped by hard-block triage" },
@@ -213,6 +221,7 @@ function evaluateHardAllow(inputs: TriageInputs): TriageShortCircuit | null {
 	const verdict: FinalVerdict = {
 		action: "allow",
 		score: 0,
+		confidence: 1,
 		explanation: reasons.join("; "),
 		auth: inputs.auth,
 		classification: SKIP_CLASSIFICATION,

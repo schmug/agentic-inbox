@@ -164,12 +164,22 @@ function pushUrl(out: ExtractedUrl[], seen: Set<string>, rawUrl: string, display
 	});
 }
 
-export function scoreUrls(urls: ExtractedUrl[]): { score: number; reasons: string[] } {
+/**
+ * Confidence sources (issue #105, v1):
+ *   - 0.9 — a homograph fired (non-ASCII, bare punycode, or close
+ *     Levenshtein to a high-value domain). These checks are deterministic
+ *     once the URL is parsed.
+ *   - 0.6 — only a shortener match fired. Shortener-by-itself is a weak
+ *     signal (legit users do shorten links).
+ *   - 1.0 — no URL signals fired; nothing to be uncertain about.
+ */
+export function scoreUrls(urls: ExtractedUrl[]): { score: number; reasons: string[]; confidence: number } {
 	const reasons: string[] = [];
 	let score = 0;
 	const homograph = urls.find((u) => u.is_homograph);
 	if (homograph) { score += 20; reasons.push(`homograph URL (${homograph.hostname})`); }
 	const shortener = urls.find((u) => u.is_shortener);
 	if (shortener) { score += 5; reasons.push(`link shortener (${shortener.hostname})`); }
-	return { score, reasons };
+	const confidence = homograph ? 0.9 : shortener ? 0.6 : 1.0;
+	return { score, reasons, confidence };
 }

@@ -38,21 +38,35 @@ export interface FirstTimeSenderPrior {
  * returned null — no key, 404, 429, network error) keep the original
  * behaviour.
  */
+/**
+ * Confidence sources (issue #105, v1):
+ *   - History-known sender → confidence ramps with `message_count`,
+ *     reaching a high plateau at ~10 messages (`min(0.9, 0.3 + 0.06 *
+ *     count)`). 10 messages is the same threshold as
+ *     `trusted_auto_allow_min_messages` so the ramp aligns with the
+ *     operator's intuition for "we know this sender".
+ *   - `flagged` history → 0.95 regardless of count: an operator has
+ *     explicitly marked this sender bad.
+ *   - First-time sender with a CTI prior → 0.7 (we have an external
+ *     signal, but only one).
+ *   - First-time sender with no CTI → 0.3 (the legacy +5 is a
+ *     low-information default).
+ */
 export function scoreReputation(
 	rep: SenderReputation | null,
 	prior?: FirstTimeSenderPrior,
-): { score: number; reasons: string[] } {
+): { score: number; reasons: string[]; confidence: number } {
 	const reasons: string[] = [];
 	let score = 0;
 	if (!rep || rep.message_count === 0) {
 		if (prior) {
 			score += prior.score;
 			reasons.push(prior.reason);
-		} else {
-			score += 5;
-			reasons.push("first-time sender");
+			return { score, reasons, confidence: 0.7 };
 		}
-		return { score, reasons };
+		score += 5;
+		reasons.push("first-time sender");
+		return { score, reasons, confidence: 0.3 };
 	}
 	if (rep.flagged) { score += 15; reasons.push("sender previously flagged"); }
 	// Consistently-bad history adds suspicion. The score here is a small
@@ -63,7 +77,10 @@ export function scoreReputation(
 		score += 10;
 		reasons.push(`bad sender history (avg ${rep.avg_score.toFixed(0)})`);
 	}
-	return { score, reasons };
+	const confidence = rep.flagged
+		? 0.95
+		: Math.min(0.9, 0.3 + 0.06 * rep.message_count);
+	return { score, reasons, confidence };
 }
 
 /**

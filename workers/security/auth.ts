@@ -192,8 +192,20 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
 	return verdict;
 }
 
-/** Auth-signal score contribution (positive = suspicious). */
-export function scoreAuth(verdict: AuthVerdict): { score: number; reasons: string[] } {
+/**
+ * Auth-signal score contribution (positive = suspicious).
+ *
+ * Confidence (issue #105, v1):
+ *   - 0.9 — at least one trusted authserv-id matched the verdict (the
+ *     pipeline gating made spoofing the result expensive).
+ *   - 0.5 — auth headers were present but no `trusted_authserv_ids` was
+ *     configured, so we fell back to first-header-wins (still useful as a
+ *     signal, but exploitable by an attacker who can inject their own
+ *     `Authentication-Results` header before the authentic one).
+ *   - 0.2 — no `Authentication-Results` headers found at all (verdict is
+ *     all-`none`); whatever we contributed has very little to back it up.
+ */
+export function scoreAuth(verdict: AuthVerdict): { score: number; reasons: string[]; confidence: number } {
 	const reasons: string[] = [];
 	let score = 0;
 	if (verdict.dmarc === "fail") { score += 20; reasons.push("DMARC failed"); }
@@ -201,7 +213,10 @@ export function scoreAuth(verdict: AuthVerdict): { score: number; reasons: strin
 	if (verdict.dkim === "fail") { score += 10; reasons.push("DKIM failed"); }
 	if (score > 30) score = 30;
 	if (verdict.dmarc === "pass") score -= 10;
-	return { score, reasons };
+	const allNone =
+		verdict.spf === "none" && verdict.dkim === "none" && verdict.dmarc === "none";
+	const confidence = verdict.trusted ? 0.9 : allNone ? 0.2 : 0.5;
+	return { score, reasons, confidence };
 }
 
 /**
