@@ -14,6 +14,7 @@ import { attachmentObjectKey } from "../lib/attachments";
 import { computeVerdictMix } from "../lib/dashboard-aggregation";
 import { summarizeCase } from "../lib/ai";
 import { dkimObservationCutoffIso } from "../dkim/posture";
+import { parseStageTrace } from "../security/stage-trace";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -917,15 +918,30 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async persistSecurityVerdict(
 		emailId: string,
-		data: { verdict_json: string; score: number; explanation: string },
+		data: {
+			verdict_json: string;
+			score: number;
+			explanation: string;
+			/**
+			 * JSON-encoded `StageRecord[]` (issue #128). Optional so the
+			 * deep-scan path — which only updates the verdict score on
+			 * upgrade — doesn't need to thread a trace it never measured.
+			 * When omitted the column is left untouched.
+			 */
+			stage_trace_json?: string;
+		},
 	) {
+		const patch: Record<string, unknown> = {
+			security_verdict: data.verdict_json,
+			security_score: data.score,
+			security_explanation: data.explanation,
+		};
+		if (data.stage_trace_json !== undefined) {
+			patch.stage_trace = data.stage_trace_json;
+		}
 		this.db
 			.update(schema.emails)
-			.set({
-				security_verdict: data.verdict_json,
-				security_score: data.score,
-				security_explanation: data.explanation,
-			})
+			.set(patch)
 			.where(eq(schema.emails.id, emailId))
 			.run();
 	}
@@ -1299,6 +1315,13 @@ export class MailboxDO extends DurableObject<Env> {
 		 * renders a muted "—" in that case.
 		 */
 		score?: number | null;
+		/**
+		 * JSON-encoded `StageRecord[]` copied from the originating email
+		 * at case-creation time (issue #128). Powers the case-detail
+		 * pipeline-trace timeline. Null/undefined leaves the column NULL
+		 * — the UI hides the timeline card.
+		 */
+		stage_trace?: string | null;
 	}) {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -1322,6 +1345,7 @@ export class MailboxDO extends DurableObject<Env> {
 				score: input.score ?? null,
 				summary: null,
 				summary_status: summaryStatus,
+				stage_trace: input.stage_trace ?? null,
 			})
 			.run();
 		if (input.emailId) {
@@ -1373,7 +1397,22 @@ export class MailboxDO extends DurableObject<Env> {
 			.from(schema.caseObservables)
 			.where(eq(schema.caseObservables.case_id, id))
 			.all();
-		return { ...row, emails, observables };
+		// Surface the per-stage trace as parsed JSON (issue #128). Storage
+		// is opaque TEXT; the case API exposes a typed array. Three cases:
+		//   - column NULL/empty → `stage_trace: null`, no error → card hidden.
+		//   - column has bytes, parse succeeds → typed array → card renders.
+		//   - column has bytes, parse fails → `stage_trace: null` AND
+		//     `stage_trace_error: "malformed"` → card renders an error
+		//     affordance ("Pipeline trace unavailable"). Without this
+		//     distinction a corrupted row would silently look like an
+		//     untraced case, hiding a real bug.
+		const rawTrace = row.stage_trace ?? null;
+		const stage_trace = parseStageTrace(rawTrace);
+		const stage_trace_error =
+			stage_trace === null && typeof rawTrace === "string" && rawTrace.length > 0
+				? "malformed"
+				: null;
+		return { ...row, stage_trace, stage_trace_error, emails, observables };
 	}
 
 	async updateCase(

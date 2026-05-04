@@ -23,6 +23,16 @@ const baseCase = {
 	score: null as number | null,
 	summary: null as string | null,
 	summary_status: null as "pending" | "ready" | "failed" | null,
+	stage_trace: null as
+		| Array<{
+			stage: string;
+			status: string;
+			score_contrib: number;
+			duration_ms: number;
+			reason?: string;
+		}>
+		| null,
+	stage_trace_error: null as string | null,
 	emails: [],
 	observables: [],
 };
@@ -216,6 +226,151 @@ describe("CaseDetailRoute — AI co-pilot summary card (#127)", () => {
 		expect(screen.queryByTestId("copilot-summary-pending")).toBeNull();
 		expect(screen.getByTestId("copilot-summary-ready")).toHaveTextContent(
 			summaryText,
+		);
+	});
+});
+
+// ── Pipeline trace timeline (issue #128) ──────────────────────────
+//
+// The card renders only when `data.stage_trace` is a non-empty array.
+// PR #125 deleted the fabricated explanatory placeholder; this card
+// must stay hidden in the same conditions (no trace = empty space, not
+// marketing copy). When present we render one row per stage with a
+// status pill, score contribution, and duration.
+describe("CaseDetailRoute — pipeline trace timeline (#128)", () => {
+	const sampleTrace = [
+		{ stage: "auth" as const, status: "ok" as const, score_contrib: 0, duration_ms: 1, reason: "DMARC pass" },
+		{ stage: "url" as const, status: "ok" as const, score_contrib: 12, duration_ms: 2 },
+		{ stage: "reputation" as const, status: "ok" as const, score_contrib: 5, duration_ms: 3 },
+		{ stage: "intel" as const, status: "ok" as const, score_contrib: 0, duration_ms: 1 },
+		{ stage: "triage" as const, status: "ok" as const, score_contrib: 0, duration_ms: 0 },
+		{ stage: "llm" as const, status: "ok" as const, score_contrib: 35, duration_ms: 1850 },
+		{ stage: "verdict" as const, status: "ok" as const, score_contrib: 52, duration_ms: 1 },
+	];
+
+	beforeEach(() => { vi.unstubAllGlobals(); });
+	afterEach(() => { vi.unstubAllGlobals(); });
+
+	it("hides the card entirely when stage_trace is null (no fabricated placeholder)", async () => {
+		mockFetchOnce({ case: { ...baseCase, stage_trace: null } });
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
+		expect(screen.queryByTestId("pipeline-trace-card")).toBeNull();
+		// Guard against PR #125 regression: the explanatory copy must stay deleted.
+		expect(
+			screen.queryByText(/Stage-level scoring isn't surfaced/i),
+		).toBeNull();
+	});
+
+	it("hides the card when stage_trace is an empty array (treated as absent)", async () => {
+		mockFetchOnce({ case: { ...baseCase, stage_trace: [] } });
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
+		expect(screen.queryByTestId("pipeline-trace-card")).toBeNull();
+	});
+
+	it("renders one row per stage in the order returned by the API", async () => {
+		mockFetchOnce({ case: { ...baseCase, stage_trace: sampleTrace } });
+		renderCaseDetail();
+
+		await screen.findByTestId("pipeline-trace-card");
+
+		// All seven stages render.
+		for (const r of sampleTrace) {
+			expect(
+				screen.getByTestId(`pipeline-stage-${r.stage}`),
+			).toBeInTheDocument();
+		}
+		// Human-readable labels for the named stages we want to surface.
+		expect(screen.getByText(/Authentication/)).toBeInTheDocument();
+		expect(screen.getByText(/Classifier \(LLM\)/)).toBeInTheDocument();
+		expect(screen.getByText(/Verdict/)).toBeInTheDocument();
+	});
+
+	it("surfaces score contribution and duration on each row", async () => {
+		mockFetchOnce({ case: { ...baseCase, stage_trace: sampleTrace } });
+		renderCaseDetail();
+
+		await screen.findByTestId("pipeline-trace-card");
+
+		// LLM row carries the largest contribution and a real duration.
+		const llmRow = screen.getByTestId("pipeline-stage-llm");
+		expect(llmRow).toHaveTextContent("+35");
+		expect(llmRow).toHaveTextContent("1850ms");
+
+		// Verdict row labels the final score (no leading "+", with separator).
+		const verdictRow = screen.getByTestId("pipeline-stage-verdict");
+		expect(verdictRow).toHaveTextContent("score 52");
+	});
+
+	it("renders a short-circuited triage row with the final verdict score", async () => {
+		// Pipeline contract: on the triage short-circuit path, the boost
+		// the intel feed contributed is folded into the triage verdict
+		// score, and the intel row carries score_contrib=0 with the
+		// matched feed surfaced via `reason`. This keeps row-sum sanity:
+		// an analyst summing visible contributions gets a number that
+		// matches the final verdict.
+		const shortCircuitTrace = [
+			{ stage: "auth" as const, status: "ok" as const, score_contrib: 0, duration_ms: 1 },
+			{ stage: "url" as const, status: "ok" as const, score_contrib: 0, duration_ms: 1 },
+			{ stage: "reputation" as const, status: "ok" as const, score_contrib: 0, duration_ms: 0 },
+			{
+				stage: "intel" as const,
+				status: "ok" as const,
+				score_contrib: 0,
+				duration_ms: 1,
+				reason: "phishtank:https://evil.example/login",
+			},
+			{
+				stage: "triage" as const,
+				status: "short_circuited" as const,
+				score_contrib: 95,
+				duration_ms: 1,
+				reason: "hard_block: confirmed-intel match",
+			},
+			{ stage: "llm" as const, status: "skipped" as const, score_contrib: 0, duration_ms: 0 },
+			{ stage: "verdict" as const, status: "ok" as const, score_contrib: 95, duration_ms: 0 },
+		];
+		mockFetchOnce({ case: { ...baseCase, stage_trace: shortCircuitTrace } });
+		renderCaseDetail();
+
+		await screen.findByTestId("pipeline-trace-card");
+
+		const triageRow = screen.getByTestId("pipeline-stage-triage");
+		expect(triageRow.dataset.status).toBe("short_circuited");
+		expect(triageRow).toHaveTextContent("short-circuited");
+		expect(triageRow).toHaveTextContent("+95");
+
+		// LLM was skipped — no "+0" contribution leaks through, status pill present.
+		const llmRow = screen.getByTestId("pipeline-stage-llm");
+		expect(llmRow.dataset.status).toBe("skipped");
+		expect(llmRow).toHaveTextContent("skipped");
+
+		// Intel row: matched feed surfaced via reason, but no doubled
+		// score_contrib — the boost lives on the triage row.
+		const intelRow = screen.getByTestId("pipeline-stage-intel");
+		expect(intelRow).toHaveTextContent("phishtank:https://evil.example/login");
+		expect(intelRow).not.toHaveTextContent(/\+\d/);
+	});
+
+	it("renders a one-line error affordance when stage_trace_error is set (corrupted storage)", async () => {
+		mockFetchOnce({
+			case: { ...baseCase, stage_trace: null, stage_trace_error: "malformed" },
+		});
+		renderCaseDetail();
+
+		expect(
+			await screen.findByTestId("pipeline-trace-error"),
+		).toBeInTheDocument();
+		expect(screen.queryByTestId("pipeline-trace-card")).toBeNull();
+		expect(screen.getByTestId("pipeline-trace-error")).toHaveTextContent(
+			/Pipeline trace unavailable/i,
 		);
 	});
 });

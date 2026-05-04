@@ -118,12 +118,21 @@ caseRoutes.post("/report-phish", async (c) => {
 		typeof (email as { security_score?: number | null }).security_score === "number"
 			? (email as { security_score?: number | null }).security_score!
 			: null;
+	// Same plumbing for the per-stage trace (issue #128). Stored on the
+	// email row as opaque JSON during ingest; copied verbatim to the
+	// case row here so the case-detail timeline doesn't have to join
+	// back to the email at render time.
+	const stageTrace =
+		typeof (email as { stage_trace?: string | null }).stage_trace === "string"
+			? (email as { stage_trace?: string | null }).stage_trace!
+			: null;
 	const { id } = await c.var.mailboxStub.createCase({
 		title: `Reported phish: ${email.subject || "(no subject)"}`,
 		notes: `Reported from email ${emailId}. Sender: ${email.sender}.`,
 		emailId,
 		observables,
 		score: verdictScore,
+		stage_trace: stageTrace,
 	});
 
 	// Async AI co-pilot summary generation (issue #127). createCase

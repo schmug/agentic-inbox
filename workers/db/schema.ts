@@ -32,6 +32,14 @@ export const emails = sqliteTable("emails", {
 	security_verdict: text("security_verdict"),
 	security_score: integer("security_score"),
 	security_explanation: text("security_explanation"),
+	// Per-stage pipeline trace (issue #128). JSON array of StageRecord
+	// (see workers/security/stage-trace.ts) captured during
+	// `runSecurityPipeline`, persisted alongside the verdict so the
+	// originating email always carries the breakdown the case-detail
+	// timeline renders. NULL when the pipeline didn't run for the
+	// message (security disabled for the mailbox, ingest predates this
+	// migration, or pipeline threw before persistence).
+	stage_trace: text("stage_trace"),
 	deep_scan_status: text("deep_scan_status").default("pending"),
 });
 
@@ -162,6 +170,13 @@ export const cases = sqliteTable("cases", {
 	// rows). The frontend hides the card when status is NULL.
 	summary: text("summary"),
 	summary_status: text("summary_status"),
+	// Per-stage pipeline trace copied from the originating email at
+	// case-creation time (issue #128). JSON array of StageRecord — see
+	// workers/security/stage-trace.ts. NULL when the originating email
+	// had no trace (pipeline disabled, manual API create with no linked
+	// email, or pre-#128 rows). The frontend hides the timeline card
+	// when this is NULL/empty.
+	stage_trace: text("stage_trace"),
 });
 
 export const caseEmails = sqliteTable(
