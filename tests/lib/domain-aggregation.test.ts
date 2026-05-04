@@ -445,6 +445,43 @@ describe("aggregateDomainStats", () => {
 		});
 	});
 
+	it("falls back to the empty DKIM posture when the handler doesn't supply one (#170)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+		});
+		expect(result!.dkimPosture).toEqual({ selectors: [] });
+	});
+
+	it("threads a real DKIM posture through unchanged when supplied (#170)", () => {
+		const result = aggregateDomainStats({
+			domain: "acme.com",
+			mailboxes: [
+				{ id: "alice@acme.com", email: "alice@acme.com", name: "Alice" },
+			],
+			summaries: [domainSummary()],
+			now: NOW.toISOString(),
+			dkimPosture: {
+				selectors: [
+					{ selector: "google", published: true },
+					{ selector: "retired", published: false },
+					{ selector: "blip", published: null },
+				],
+			},
+		});
+		expect(result!.dkimPosture).toEqual({
+			selectors: [
+				{ selector: "google", published: true },
+				{ selector: "retired", published: false },
+				{ selector: "blip", published: null },
+			],
+		});
+	});
+
 	it("tolerates null (failed) summaries as zero contributions", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",

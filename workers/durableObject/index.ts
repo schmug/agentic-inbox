@@ -13,6 +13,7 @@ import { applyMigrations, mailboxMigrations } from "./migrations";
 import { attachmentObjectKey } from "../lib/attachments";
 import { computeVerdictMix } from "../lib/dashboard-aggregation";
 import { summarizeCase } from "../lib/ai";
+import { dkimObservationCutoffIso } from "../dkim/posture";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1539,6 +1540,81 @@ export class MailboxDO extends DurableObject<Env> {
 			aligned: Number(row?.aligned ?? 0) || 0,
 			total: Number(row?.total ?? 0) || 0,
 		};
+	}
+
+	/**
+	 * Record `(domain, selector)` pairs observed on inbound DKIM=pass / =fail
+	 * evaluations into the `dkim_selectors_observed` rollup. Idempotent:
+	 * re-observing an existing pair updates `last_seen_iso`; the unique key
+	 * keeps cardinality bounded by `(distinct selectors per domain)`.
+	 *
+	 * Lazy GC: every write also prunes rows whose `last_seen_iso` is older
+	 * than `nowIso - 30d`, so the table size never exceeds the active
+	 * 30-day observation set. Reads (`getDkimSelectorsObserved`) apply the
+	 * same horizon as a defence in depth — the GC pass is opportunistic
+	 * (only fires on writes), so a domain that hasn't sent mail in months
+	 * could still carry stale rows until the next observation lands.
+	 *
+	 * Empty input is a no-op — the security pipeline calls this on every
+	 * inbound message regardless of whether DKIM headers were present.
+	 *
+	 * Issue: #170.
+	 */
+	async recordDkimSelectorsObserved(
+		observations: ReadonlyArray<{ domain: string; selector: string }>,
+		opts: { now?: string } = {},
+	): Promise<void> {
+		if (observations.length === 0) return;
+		const nowIso = opts.now ?? new Date().toISOString();
+		const cutoffIso = dkimObservationCutoffIso(nowIso);
+
+		const seen = new Set<string>();
+		for (const obs of observations) {
+			if (!obs?.domain || !obs?.selector) continue;
+			const domain = obs.domain.toLowerCase();
+			const selector = obs.selector.toLowerCase();
+			const key = `${domain}|${selector}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			this.ctx.storage.sql.exec(
+				`INSERT INTO dkim_selectors_observed (domain, selector, last_seen_iso)
+				 VALUES (?1, ?2, ?3)
+				 ON CONFLICT(domain, selector) DO UPDATE SET last_seen_iso = ?3`,
+				domain,
+				selector,
+				nowIso,
+			);
+		}
+
+		this.ctx.storage.sql.exec(
+			`DELETE FROM dkim_selectors_observed WHERE last_seen_iso < ?1`,
+			cutoffIso,
+		);
+	}
+
+	/**
+	 * Read the `(selector)` set observed for `domain` over the last 30 days.
+	 * Lower-cased and de-duplicated on the way in, so the caller can
+	 * union across mailboxes without further normalisation. Returns an
+	 * empty array when no observations have landed in the window.
+	 */
+	async getDkimSelectorsObserved(
+		domain: string,
+		opts: { now?: string } = {},
+	): Promise<string[]> {
+		if (!domain || typeof domain !== "string") return [];
+		const nowIso = opts.now ?? new Date().toISOString();
+		const cutoffIso = dkimObservationCutoffIso(nowIso);
+		const rows = [
+			...this.ctx.storage.sql.exec(
+				`SELECT selector FROM dkim_selectors_observed
+				 WHERE domain = ?1 AND last_seen_iso >= ?2
+				 ORDER BY selector ASC`,
+				domain.toLowerCase(),
+				cutoffIso,
+			),
+		] as Array<{ selector: string }>;
+		return rows.map((r) => r.selector);
 	}
 
 	/**

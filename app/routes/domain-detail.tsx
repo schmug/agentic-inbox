@@ -104,6 +104,7 @@ function DomainBody({ data }: { data: DomainStats }) {
 			</div>
 			<div className="grid gap-4 lg:grid-cols-3">
 				<TlsRptPostureCard posture={data.tlsRptPosture} />
+				<DkimPostureCard posture={data.dkimPosture} />
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
@@ -424,6 +425,43 @@ function TlsRptPostureCard({
 						</ul>
 					) : null}
 				</>
+			)}
+		</div>
+	);
+}
+
+function DkimPostureCard({
+	posture,
+}: { posture: DomainStats["dkimPosture"] }) {
+	// Per #170 constraint: "Unavailable" (published=null) and "genuinely
+	// missing" (published=false) render the SAME affordance — the operator
+	// just sees "missing" and re-checks on the next refresh. The KV layer
+	// distinguishes the two so a transient blip doesn't poison the cache.
+	const selectors = posture.selectors;
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				DKIM posture
+			</div>
+			{selectors.length === 0 ? (
+				<p className="text-[12.5px] text-ink-3">
+					No DKIM selectors observed on inbound mail in the last 30 days.
+					Selectors are lifted from `Authentication-Results.dkim header.s=`
+					on inbound messages, then resolved at
+					`&lt;selector&gt;._domainkey.&lt;domain&gt;` to confirm the
+					record is still published.
+				</p>
+			) : (
+				<dl className="space-y-1.5 text-[12.5px]">
+					{selectors.map((s) => (
+						<PostureRow
+							key={s.selector}
+							label={s.selector}
+							value={s.published === true ? "published" : "missing"}
+						/>
+					))}
+				</dl>
 			)}
 		</div>
 	);

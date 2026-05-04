@@ -45,10 +45,23 @@ export interface AuthVerdict {
 	 * that as a strong suspicion signal.
 	 */
 	trusted?: boolean;
+	/**
+	 * `(domain, selector)` pairs observed on `dkim=pass` / `dkim=fail` results
+	 * with both `header.d=` and `header.s=` properties present. Subject to the
+	 * same trusted-authserv-id gate as the rest of the verdict — observations
+	 * from forged headers (untrusted authserv-id when gating is on) are never
+	 * surfaced. `dkim=none/temperror/permerror` results are excluded because
+	 * they don't carry a verified selector to roll up.
+	 *
+	 * Domain and selector are lower-cased at extraction so the per-mailbox-DO
+	 * `(domain, selector)` PRIMARY KEY de-dupes case variants without extra
+	 * normalisation in the storage path. Issue #170.
+	 */
+	dkimObservations: ReadonlyArray<{ domain: string; selector: string }>;
 }
 
 export function emptyVerdict(): AuthVerdict {
-	return { spf: "none", dkim: "none", dmarc: "none" };
+	return { spf: "none", dkim: "none", dmarc: "none", dkimObservations: [] };
 }
 
 /**
@@ -71,6 +84,19 @@ function findAuthHeaders(rawHeaders: unknown): string[] {
 }
 
 const RESULT_RE = /(spf|dkim|dmarc)\s*=\s*(pass|fail|neutral|none|softfail|temperror|permerror)/gi;
+
+/**
+ * Match `header.d=<value>` or `header.s=<value>` with either a quoted or bare
+ * value. Values run until the next whitespace or `;` (the method-segment
+ * delimiter). Quoted values let through `header.s="some selector"` which
+ * exists in the wild for selectors with unusual characters. Used to extract
+ * DKIM selector observations for the per-mailbox `dkim_selectors_observed`
+ * rollup (#170).
+ */
+const HEADER_PROP_RE = /header\.([ds])\s*=\s*(?:"([^"]*)"|([^\s;]+))/gi;
+/** Match `dkim=pass` or `dkim=fail` with a word boundary so `dkim=none`,
+ * `dkim=temperror`, etc. are excluded from selector observation. */
+const DKIM_PASS_OR_FAIL_RE = /\bdkim\s*=\s*(pass|fail)\b/i;
 
 function extractAuthservId(raw: string): string | undefined {
 	const firstToken = raw.split(";")[0]?.trim();
@@ -97,7 +123,18 @@ function matchesTrusted(authservId: string, trusted: readonly string[]): boolean
 }
 
 export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions = {}): AuthVerdict {
-	const verdict = emptyVerdict();
+	const verdict: AuthVerdict = {
+		spf: "none",
+		dkim: "none",
+		dmarc: "none",
+		dkimObservations: [],
+	};
+	// Local mutable observations buffer; we freeze into the readonly field at
+	// the end. Dedupe by `domain|selector` so a header carrying multiple
+	// signatures from the same selector (gmail re-sign chains do this)
+	// contributes once.
+	const observations: Array<{ domain: string; selector: string }> = [];
+	const seen = new Set<string>();
 	const headerValues = findAuthHeaders(rawHeaders);
 	if (headerValues.length === 0) return verdict;
 
@@ -126,7 +163,32 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
 				set[method] = true;
 			}
 		}
+
+		// DKIM selector observations. Each `;`-separated method segment with a
+		// `dkim=pass` or `dkim=fail` result contributes one `(domain, selector)`
+		// pair when both `header.d=` and `header.s=` are present. The split on
+		// `;` matters: a single header like `auth; spf=pass header.d=other;
+		// dkim=pass header.s=sel1` would otherwise associate `header.d=other`
+		// (an SPF property) with the DKIM selector and emit a wrong domain.
+		for (const segment of raw.split(";")) {
+			if (!DKIM_PASS_OR_FAIL_RE.test(segment)) continue;
+			let domain = "";
+			let selector = "";
+			for (const m of segment.matchAll(HEADER_PROP_RE)) {
+				const name = m[1].toLowerCase();
+				const value = m[2] ?? m[3] ?? "";
+				if (!value) continue;
+				if (name === "d" && !domain) domain = value.toLowerCase();
+				else if (name === "s" && !selector) selector = value.toLowerCase();
+			}
+			if (!domain || !selector) continue;
+			const key = `${domain}|${selector}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			observations.push({ domain, selector });
+		}
 	}
+	verdict.dkimObservations = observations;
 	return verdict;
 }
 

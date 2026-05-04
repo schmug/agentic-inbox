@@ -130,6 +130,152 @@ describe("parseAuthResults — authserv-id gating", () => {
 	});
 });
 
+describe("parseAuthResults — DKIM selector observations", () => {
+	it("returns an empty observations list when no Authentication-Results header is present", () => {
+		const v = parseAuthResults([header("From", "a@b.com")]);
+		expect(v.dkimObservations).toEqual([]);
+	});
+
+	it("extracts (domain, selector) on a dkim=pass with header.d= and header.s=", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"mx.google.com; spf=pass smtp.mailfrom=example.com; dkim=pass header.i=@example.com header.s=selector1 header.d=example.com header.b=abc; dmarc=pass",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "selector1" },
+		]);
+	});
+
+	it("extracts on dkim=fail too — failing signatures still carry an observed selector", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"srv1; dkim=fail header.d=example.com header.s=sel-fail header.b=xyz",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel-fail" },
+		]);
+	});
+
+	it("extracts every signature from a header with multiple dkim=pass segments", () => {
+		// Forwarders frequently re-sign and emit one Authentication-Results
+		// header that carries both the original and the forwarder signatures.
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"mx.google.com; dkim=pass header.d=example.com header.s=sel1 header.b=AAA; dkim=pass header.d=mailinglist.example header.s=fwd-sel header.b=BBB; dmarc=pass",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel1" },
+			{ domain: "mailinglist.example", selector: "fwd-sel" },
+		]);
+	});
+
+	it("dedupes a selector observed twice in the same header (case-insensitive)", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"srv; dkim=pass header.d=Example.com header.s=Sel1 header.b=AAA; dkim=pass header.d=example.com header.s=sel1 header.b=BBB",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel1" },
+		]);
+	});
+
+	it("ignores dkim=none / temperror / permerror — no verified selector to roll up", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"srv; dkim=none header.d=example.com header.s=ignored1; dkim=temperror header.d=example.com header.s=ignored2; dkim=permerror header.d=example.com header.s=ignored3",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([]);
+	});
+
+	it("skips a dkim=pass segment missing header.d= or header.s=", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"srv; dkim=pass header.b=onlybody-no-domain-no-selector",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([]);
+	});
+
+	it("does NOT cross method boundaries — header.d= on the SPF segment is not paired with the DKIM selector", () => {
+		// `;`-segment scoping prevents misattribution. Without it, an SPF segment
+		// carrying `header.d=other` followed by a DKIM segment with `header.s=sel`
+		// would emit `(other, sel)` — a wrong observation that would hit DoH for
+		// a selector that doesn't exist under that domain.
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"srv; spf=pass header.d=other.example; dkim=pass header.s=sel1 header.d=example.com",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel1" },
+		]);
+	});
+
+	it("handles quoted selectors and quoted domains", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				'srv; dkim=pass header.d="example.com" header.s="sel quoted"',
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel quoted" },
+		]);
+	});
+
+	it("does NOT record observations from headers whose authserv-id is untrusted", () => {
+		// Threat model: an attacker-controlled relay can inject an
+		// Authentication-Results header claiming `dkim=pass header.d=victim.com
+		// header.s=attacker-sel`. Recording that selector would make the
+		// dashboard advertise an attacker-chosen DKIM selector as "observed"
+		// for victim.com. The trusted-id gate prevents this.
+		const v = parseAuthResults(
+			[
+				header(
+					"Authentication-Results",
+					"attacker.example; dkim=pass header.d=victim.com header.s=attacker-sel",
+				),
+				header(
+					"Authentication-Results",
+					"mx.cloudflare.net; dkim=pass header.d=victim.com header.s=legit-sel",
+				),
+			],
+			{ trustedAuthservIds: ["mx.cloudflare.net"] },
+		);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "victim.com", selector: "legit-sel" },
+		]);
+	});
+
+	it("dedupes selectors observed across multiple Authentication-Results headers", () => {
+		const v = parseAuthResults([
+			header(
+				"Authentication-Results",
+				"inner; dkim=pass header.d=example.com header.s=sel1",
+			),
+			header(
+				"Authentication-Results",
+				"outer; dkim=pass header.d=example.com header.s=sel1",
+			),
+		]);
+		expect(v.dkimObservations).toEqual([
+			{ domain: "example.com", selector: "sel1" },
+		]);
+	});
+});
+
 describe("scoreAuth", () => {
 	it("scores a clean pass as a net-negative (credit)", () => {
 		const { score } = scoreAuth({ spf: "pass", dkim: "pass", dmarc: "pass" });

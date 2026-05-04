@@ -464,6 +464,27 @@ export interface TlsRptPostureView {
 	endpoints: readonly string[] | null;
 }
 
+/** DKIM published-record posture (#170). Per-selector list of selectors
+ * observed over the last 30 days on inbound mail to this domain, each with
+ * its current published-at-`<selector>._domainkey.<domain>` status.
+ *
+ * `published: true` — DoH returned a TXT entry that's a valid DKIM record.
+ * `published: false` — durable "no record" (NXDOMAIN, NOERROR-no-data, or
+ *   `p=` empty / "key revoked").
+ * `published: null` — transient "lookup unavailable" (DoH timed out, returned
+ *   non-200, or non-cacheable status). The UI renders this with the same
+ *   affordance as `false` per the #170 Constraints, but the cache layer
+ *   keeps them separate.
+ *
+ * Empty `selectors` is the natural state for a domain that's never sent
+ * inbound DKIM-signed mail; the UI shows the empty-state affordance. */
+export interface DkimPostureView {
+	selectors: ReadonlyArray<{
+		selector: string;
+		published: boolean | null;
+	}>;
+}
+
 export interface DomainListEntry {
 	domain: string;
 	mailboxesCount: number;
@@ -499,6 +520,10 @@ export interface DomainStats {
 	/** TLS-RPT posture (#168). `configured: null` when the upstream lookup
 	 * failed; `configured: false` when no `v=TLSRPTv1` record is published. */
 	tlsRptPosture: TlsRptPostureView;
+	/** DKIM published-record posture (#170). Per-selector list across the
+	 * 30-day inbound-mail observation window. Empty `selectors` is the natural
+	 * state for a domain that's never received DKIM-signed inbound mail. */
+	dkimPosture: DkimPostureView;
 	recentCases: DomainRecentCase[];
 }
 
@@ -566,6 +591,12 @@ export function emptySpfPostureView(): SpfPostureView {
  * result. Mirrors the BIMI sentinel shape. */
 export function emptyTlsRptPostureView(): TlsRptPostureView {
 	return { configured: null, endpoints: null };
+}
+
+/** Empty DKIM posture sentinel — empty selector list, rendered by the UI
+ * as "no DKIM selectors observed in the last 30 days". */
+export function emptyDkimPostureView(): DkimPostureView {
+	return { selectors: [] };
 }
 
 /** Per-mailbox alignment totals harvested from `dmarc_records` by the DO.
@@ -707,6 +738,13 @@ interface AggregateDomainStatsInput {
 	 * Omitted defaults to the all-null sentinel.
 	 */
 	tlsRptPosture?: TlsRptPostureView;
+	/**
+	 * DKIM posture (#170) from per-mailbox observed selectors fanned out
+	 * across the domain plus DoH lookups against
+	 * `<selector>._domainkey.<domain>`. Omitted defaults to the empty
+	 * sentinel (no selectors observed).
+	 */
+	dkimPosture?: DkimPostureView;
 }
 
 /**
@@ -768,6 +806,7 @@ export function aggregateDomainStats(
 		bimiPosture: input.bimiPosture ?? emptyBimiPostureView(),
 		spfPosture: input.spfPosture ?? emptySpfPostureView(),
 		tlsRptPosture: input.tlsRptPosture ?? emptyTlsRptPostureView(),
+		dkimPosture: input.dkimPosture ?? emptyDkimPostureView(),
 		recentCases: recentCases.slice(0, 5),
 	};
 }
