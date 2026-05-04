@@ -27,6 +27,18 @@ export type VerdictAction = "allow" | "tag" | "quarantine" | "block";
 export interface FinalVerdict {
 	action: VerdictAction;
 	score: number;
+	/**
+	 * Aggregate confidence in [0,1]. Independent dimension from `score`:
+	 * a high-score-low-confidence verdict (LLM timed out, only one signal
+	 * fired) is fundamentally different from a high-score-high-confidence
+	 * verdict (multiple corroborating signals). Computed as a score-weighted
+	 * average of per-scorer confidences with `|score_i|` as the weight, so
+	 * scorers that contributed more to the verdict influence overall
+	 * confidence more. When the sum of weights is zero (every scorer
+	 * contributed zero) we fall back to the plain mean of confidences. See
+	 * {@link aggregateVerdict} and issue #105.
+	 */
+	confidence: number;
 	explanation: string;
 	auth: AuthVerdict;
 	classification: ClassificationResult;
@@ -79,22 +91,30 @@ export function aggregateVerdict(
 ): FinalVerdict {
 	const signals: string[] = [];
 	let score = 0;
+	// Per-scorer (score, confidence) pairs collected for the weighted-average
+	// aggregation below. Each scorer pushes one entry; the attachment scorer
+	// is skipped entirely when no policy/attachments are present (see below).
+	const contributions: Array<{ score: number; confidence: number }> = [];
 
 	const auth = scoreAuth(inputs.auth);
 	score += auth.score;
 	signals.push(...auth.reasons);
+	contributions.push({ score: auth.score, confidence: auth.confidence });
 
 	const cls = scoreClassification(inputs.classification);
 	score += cls.score;
 	signals.push(...cls.reasons);
+	contributions.push({ score: cls.score, confidence: cls.confidence });
 
 	const urls = scoreUrls(inputs.urls);
 	score += urls.score;
 	signals.push(...urls.reasons);
+	contributions.push({ score: urls.score, confidence: urls.confidence });
 
 	const rep = scoreReputation(inputs.reputation, inputs.firstTimeSenderPrior);
 	score += rep.score;
 	signals.push(...rep.reasons);
+	contributions.push({ score: rep.score, confidence: rep.confidence });
 
 	// Attachment-type gate. Hard-blocks are handled by the triage tier before
 	// we ever reach aggregation; here we only pick up the "score" action
@@ -105,6 +125,7 @@ export function aggregateVerdict(
 		const att = scoreAttachments(inputs.attachments, inputs.attachmentPolicy);
 		score += att.score;
 		signals.push(...att.reasons);
+		contributions.push({ score: att.score, confidence: att.confidence });
 	}
 
 	score = Math.max(0, Math.min(100, Math.round(score)));
@@ -121,9 +142,43 @@ export function aggregateVerdict(
 	return {
 		action,
 		score,
+		confidence: aggregateConfidence(contributions),
 		explanation,
 		auth: inputs.auth,
 		classification: inputs.classification,
 		signals,
 	};
+}
+
+/**
+ * Combine per-scorer confidences into a single value in [0,1].
+ *
+ * v1 (issue #105): score-weighted average using `|score_i|` as the weight.
+ * Scorers that drove the verdict more dominate the aggregate. The absolute
+ * value matters because `scoreAuth` can contribute negative score (DMARC
+ * pass = -10) — that's still a strong signal worth weighting at 10, not 0.
+ *
+ * Edge case: every scorer contributed exactly zero (a pristine-but-uncertain
+ * email — no auth headers, no urls, classifier returned safe-with-zero).
+ * Sum of weights is zero so the weighted-average is undefined; we fall back
+ * to the plain mean of confidences. Result is rounded to 3 decimal places
+ * so JSON-serialised verdicts don't churn on float dust.
+ */
+function aggregateConfidence(
+	contributions: ReadonlyArray<{ score: number; confidence: number }>,
+): number {
+	if (contributions.length === 0) return 1;
+	let weightedSum = 0;
+	let weightTotal = 0;
+	let plainSum = 0;
+	for (const c of contributions) {
+		const w = Math.abs(c.score);
+		weightedSum += w * c.confidence;
+		weightTotal += w;
+		plainSum += c.confidence;
+	}
+	const raw = weightTotal > 0
+		? weightedSum / weightTotal
+		: plainSum / contributions.length;
+	return Math.round(raw * 1000) / 1000;
 }

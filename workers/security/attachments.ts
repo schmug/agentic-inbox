@@ -67,6 +67,14 @@ export interface AttachmentScoreResult {
 	hardBlock: boolean;
 	/** Which attachment triggered the hard-block, if any — useful for UI/logging. */
 	hardBlockReason?: string;
+	/**
+	 * Per-issue-#105 confidence in this scorer's contribution, in [0,1].
+	 * Always 0.95 when any policy rule fired (extension-class matching is
+	 * deterministic given filename) and 1.0 when no contribution was made
+	 * (nothing to be uncertain about). Mimetype-inferred classification —
+	 * if/when added — would justify a lower value; not in v1.
+	 */
+	confidence: number;
 }
 
 /**
@@ -125,7 +133,7 @@ export function scoreAttachments(
 	policy: AttachmentPolicy,
 ): AttachmentScoreResult {
 	if (!attachments || attachments.length === 0) {
-		return { score: 0, reasons: [], hardBlock: false };
+		return { score: 0, reasons: [], hardBlock: false, confidence: 1.0 };
 	}
 
 	// Normalise once — callers may pass user-supplied config, and duplicates
@@ -177,7 +185,8 @@ export function scoreAttachments(
 		reasons.push(`attachment ${category} .${ext} (${name}) +${boost}`);
 	}
 
-	return { score, reasons, hardBlock, hardBlockReason };
+	const fired = reasons.length > 0;
+	return { score, reasons, hardBlock, hardBlockReason, confidence: fired ? 0.95 : 1.0 };
 }
 
 // Hand-traced examples (kept in code so the intent is grep-able):
