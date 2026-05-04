@@ -37,6 +37,14 @@ vi.mock("../../workers/lib/mailbox", async (orig) => {
 import { caseRoutes } from "../../workers/routes/cases";
 import type { MailboxContext } from "../../workers/lib/mailbox";
 
+interface FakeStageRecord {
+	stage: string;
+	status: string;
+	score_contrib: number;
+	duration_ms: number;
+	reason?: string;
+}
+
 interface FakeCaseRow {
 	id: string;
 	created_at: string;
@@ -47,6 +55,7 @@ interface FakeCaseRow {
 	shared_to_hub: number;
 	hub_event_uuid: string | null;
 	score: number | null;
+	stage_trace: FakeStageRecord[] | null;
 	emails: Array<{ case_id: string; email_id: string }>;
 	observables: Array<{ id: string; case_id: string; kind: string; value: string }>;
 }
@@ -58,6 +67,12 @@ interface FakeEmailRow {
 	body: string | null;
 	date: string;
 	security_score: number | null;
+	// JSON-encoded stage trace (issue #128). The DO stores opaque TEXT;
+	// `getEmail` returns the row as-is without parsing, so the route's
+	// report-phish handler reads the raw string and passes it through
+	// to `createCase` unchanged. `null` mirrors the real DO behaviour
+	// when the pipeline didn't run for the message.
+	stage_trace: string | null;
 }
 
 function makeStub(emails: Record<string, FakeEmailRow>) {
@@ -67,6 +82,7 @@ function makeStub(emails: Record<string, FakeEmailRow>) {
 		notes?: string;
 		emailId?: string;
 		score?: number | null;
+		stage_trace?: string | null;
 	}> = [];
 
 	const stub = {
@@ -79,15 +95,30 @@ function makeStub(emails: Record<string, FakeEmailRow>) {
 			emailId?: string;
 			observables?: Array<{ kind: string; value: string }>;
 			score?: number | null;
+			stage_trace?: string | null;
 		}) {
 			createCalls.push({
 				title: input.title,
 				notes: input.notes,
 				emailId: input.emailId,
 				score: input.score,
+				stage_trace: input.stage_trace,
 			});
 			const id = `case_${cases.size + 1}`;
 			const now = "2026-05-03T00:00:00Z";
+			// Mirror the real DO's getCase shape: stored TEXT is parsed back
+			// into a structured array on read. The route tests round-trip
+			// the value, so JSON-decoding here keeps the response shape
+			// honest. Malformed input → null (matches the prod parse).
+			let parsed: FakeStageRecord[] | null = null;
+			if (typeof input.stage_trace === "string" && input.stage_trace.length > 0) {
+				try {
+					const obj = JSON.parse(input.stage_trace);
+					if (Array.isArray(obj)) parsed = obj as FakeStageRecord[];
+				} catch {
+					parsed = null;
+				}
+			}
 			const row: FakeCaseRow = {
 				id,
 				created_at: now,
@@ -98,6 +129,7 @@ function makeStub(emails: Record<string, FakeEmailRow>) {
 				shared_to_hub: 0,
 				hub_event_uuid: null,
 				score: input.score ?? null,
+				stage_trace: parsed,
 				emails: input.emailId
 					? [{ case_id: id, email_id: input.emailId }]
 					: [],
@@ -182,6 +214,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				body: "<p>Click https://phish.example/login</p>",
 				date: "2026-05-01T00:00:00Z",
 				security_score: 78,
+				stage_trace: null,
 			},
 		});
 		const app = makeApp(stub);
@@ -217,6 +250,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				body: "hi",
 				date: "2026-05-01T00:00:00Z",
 				security_score: null,
+				stage_trace: null,
 			},
 		});
 		const app = makeApp(stub);
@@ -327,6 +361,223 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 		);
 		expect(res.status).toBe(400);
 		expect(createCalls).toHaveLength(0);
+	});
+});
+
+describe("workers/routes/cases — issue #128 per-case pipeline trace", () => {
+	const fakeTrace = [
+		{ stage: "auth", status: "ok", score_contrib: 0, duration_ms: 1, reason: "DMARC pass" },
+		{ stage: "url", status: "ok", score_contrib: 12, duration_ms: 2, reason: "homograph link" },
+		{ stage: "reputation", status: "ok", score_contrib: 5, duration_ms: 3 },
+		{ stage: "intel", status: "ok", score_contrib: 0, duration_ms: 1 },
+		{ stage: "triage", status: "ok", score_contrib: 0, duration_ms: 0 },
+		{ stage: "llm", status: "ok", score_contrib: 35, duration_ms: 1850 },
+		{ stage: "verdict", status: "ok", score_contrib: 52, duration_ms: 1 },
+	];
+
+	it("report-phish: copies the email's stage_trace (raw JSON) onto the case row", async () => {
+		const { stub, createCalls, cases } = makeStub({
+			"em_traced": {
+				id: "em_traced",
+				subject: "URGENT: wire transfer",
+				sender: "ceo@evil.example",
+				body: "<p>Click https://phish.example/login</p>",
+				date: "2026-05-01T00:00:00Z",
+				security_score: 52,
+				stage_trace: JSON.stringify(fakeTrace),
+			},
+		});
+		const app = makeApp(stub);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/report-phish",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ emailId: "em_traced" }),
+			},
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { caseId: string };
+
+		// The route must pass the email's raw JSON trace through to
+		// createCase verbatim. The DO is the only layer that parses;
+		// the route is plumbing.
+		expect(createCalls).toHaveLength(1);
+		expect(createCalls[0].stage_trace).toBe(JSON.stringify(fakeTrace));
+
+		// And the persisted-and-returned shape mirrors the real DO:
+		// stage_trace round-trips back as a structured array.
+		const persisted = cases.get(body.caseId);
+		expect(persisted?.stage_trace).toEqual(fakeTrace);
+	});
+
+	it("report-phish: persists stage_trace=null when the originating email has no trace", async () => {
+		const { stub, createCalls, cases } = makeStub({
+			"em_untraced": {
+				id: "em_untraced",
+				subject: "newsletter",
+				sender: "list@example.com",
+				body: "hi",
+				date: "2026-05-01T00:00:00Z",
+				security_score: null,
+				stage_trace: null,
+			},
+		});
+		const app = makeApp(stub);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/report-phish",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ emailId: "em_untraced" }),
+			},
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { caseId: string };
+
+		expect(createCalls[0].stage_trace).toBeNull();
+		expect(cases.get(body.caseId)?.stage_trace).toBeNull();
+	});
+
+	it("GET /:caseId returns stage_trace as a structured array when present", async () => {
+		const { stub } = makeStub({});
+		await stub.createCase({
+			title: "case with trace",
+			emailId: undefined,
+			observables: [],
+			score: 52,
+			stage_trace: JSON.stringify(fakeTrace),
+		});
+		const app = makeApp(stub);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/case_1",
+			undefined,
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			case: { id: string; stage_trace: typeof fakeTrace | null };
+		};
+		expect(body.case.stage_trace).toEqual(fakeTrace);
+	});
+
+	it("GET /:caseId returns stage_trace: null when the case was created without one", async () => {
+		const { stub } = makeStub({});
+		await stub.createCase({
+			title: "untraced case",
+			emailId: undefined,
+			observables: [],
+			score: 42,
+			// stage_trace omitted → createCase normalizes to null
+		});
+		const app = makeApp(stub);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/case_1",
+			undefined,
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			case: { stage_trace: typeof fakeTrace | null };
+		};
+		expect(body.case.stage_trace).toBeNull();
+	});
+
+	it("report-phish round-trips a malformed trace as null + stage_trace_error", async () => {
+		// Hand-rolled stub mirroring the real DO's getCase parse-error
+		// surfacing: when the email's persisted trace is opaque-but-broken
+		// JSON, the case ends up with stage_trace=null AND
+		// stage_trace_error="malformed". The route remains plumbing — it
+		// passes the bytes through verbatim; the DO is the layer that
+		// distinguishes "no trace" from "corrupted trace".
+		const cases = new Map<string, {
+			id: string;
+			score: number | null;
+			stage_trace: typeof fakeTrace | null;
+			stage_trace_error: string | null;
+		}>();
+		const corrupting = {
+			async getEmail(_id: string) {
+				return {
+					id: "em_corrupt",
+					subject: "x",
+					sender: "x@example.com",
+					body: "x",
+					date: "2026-05-01T00:00:00Z",
+					security_score: null,
+					stage_trace: "not-valid-json{",
+				};
+			},
+			async createCase(input: {
+				title: string;
+				score?: number | null;
+				stage_trace?: string | null;
+			}) {
+				const id = `case_${cases.size + 1}`;
+				let parsed: typeof fakeTrace | null = null;
+				let parseError: string | null = null;
+				if (typeof input.stage_trace === "string" && input.stage_trace.length > 0) {
+					try {
+						const obj = JSON.parse(input.stage_trace);
+						if (Array.isArray(obj)) parsed = obj as typeof fakeTrace;
+						else parseError = "malformed";
+					} catch {
+						parseError = "malformed";
+					}
+				}
+				cases.set(id, {
+					id,
+					score: input.score ?? null,
+					stage_trace: parsed,
+					stage_trace_error: parseError,
+				});
+				return { id };
+			},
+			async getCase(id: string) {
+				return cases.get(id) ?? null;
+			},
+			async updateCase() {},
+			async flagSender() {},
+			async generateCaseSummary() {},
+		};
+		const app = makeApp(corrupting as Parameters<typeof makeApp>[0]);
+
+		const res = await app.request(
+			"/api/v1/mailboxes/m1/cases/report-phish",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ emailId: "em_corrupt" }),
+			},
+			fakeEnv,
+			fakeCtx,
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { caseId: string };
+		const get = await app.request(
+			`/api/v1/mailboxes/m1/cases/${body.caseId}`,
+			undefined,
+			fakeEnv,
+			fakeCtx,
+		);
+		const got = (await get.json()) as {
+			case: {
+				stage_trace: typeof fakeTrace | null;
+				stage_trace_error: string | null;
+			};
+		};
+		expect(got.case.stage_trace).toBeNull();
+		expect(got.case.stage_trace_error).toBe("malformed");
 	});
 });
 

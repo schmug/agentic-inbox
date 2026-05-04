@@ -5,9 +5,11 @@
 import {
 	ArrowLeftIcon,
 	BriefcaseIcon,
+	CheckCircleIcon,
 	ShieldWarningIcon,
 	SparkleIcon,
 	WarningIcon,
+	XCircleIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
@@ -19,6 +21,37 @@ import { useFeedback } from "~/lib/feedback";
 interface CaseEmail { case_id: string; email_id: string; }
 interface CaseObservable { id: string; kind: string; value: string; }
 type SummaryStatus = "pending" | "ready" | "failed" | null;
+
+// Per-stage pipeline trace (issue #128). One record per pipeline stage in
+// fixed order; `getCase` parses the persisted JSON and returns either a
+// validated 7-row array or `null` (storage missing / malformed). The
+// timeline card is hidden when null/empty.
+type StageId =
+	| "auth"
+	| "url"
+	| "reputation"
+	| "intel"
+	| "triage"
+	| "llm"
+	| "verdict";
+type StageStatus = "ok" | "skipped" | "failed" | "short_circuited";
+interface StageRecord {
+	stage: StageId;
+	status: StageStatus;
+	score_contrib: number;
+	duration_ms: number;
+	reason?: string;
+}
+
+const STAGE_LABELS: Record<StageId, string> = {
+	auth: "Authentication",
+	url: "URL extraction",
+	reputation: "Sender reputation",
+	intel: "Threat intel",
+	triage: "Triage",
+	llm: "Classifier (LLM)",
+	verdict: "Verdict",
+};
 interface CaseRecord {
 	id: string;
 	created_at: string;
@@ -40,6 +73,16 @@ interface CaseRecord {
 	// status is 'pending' and stops on any terminal value.
 	summary?: string | null;
 	summary_status?: SummaryStatus;
+	// Per-stage pipeline trace (issue #128). Backend returns either a
+	// validated array or null. Empty array is treated the same as null
+	// (timeline card hidden) so the frontend can't accidentally render
+	// a bare-bones placeholder if the pipeline emitted nothing.
+	stage_trace?: StageRecord[] | null;
+	// Storage parse-error signal. Non-null only when the persisted JSON
+	// failed validation (corrupted row, schema drift). Drives the
+	// in-card error affordance — distinct from "no trace persisted at
+	// all", which keeps the card hidden.
+	stage_trace_error?: string | null;
 	emails: CaseEmail[];
 	observables: CaseObservable[];
 }
@@ -343,11 +386,20 @@ export default function CaseDetailRoute() {
 						</button>
 					</div>
 
-					{/* Pipeline trace card intentionally omitted until per-stage
-					    scoring is persisted on the case record. Today the
-					    pipeline runs per-email and stages aren't stored on the
-					    case, so any rendered timeline would be either empty or
-					    fabricated. */}
+					{/* Per-stage pipeline trace (issue #128). Mounted when the
+					    case carries a non-empty trace — pre-#128 cases, cases
+					    created before the pipeline ran, and cases on mailboxes
+					    with security disabled all return null/empty and the
+					    card stays hidden (empty space is honest; fabricated
+					    stages are not — see PR #125). When the persisted JSON
+					    is corrupted (`stage_trace_error`) the card renders a
+					    one-line "unavailable" affordance instead of staying
+					    silently hidden, so a real storage bug is visible. */}
+					{data.stage_trace && data.stage_trace.length > 0 ? (
+						<PipelineTraceCard trace={data.stage_trace} />
+					) : data.stage_trace_error ? (
+						<PipelineTraceErrorCard reason={data.stage_trace_error} />
+					) : null}
 				</div>
 			</div>
 		</div>
@@ -406,5 +458,161 @@ function CoPilotSummaryCard({ status, summary, onRetry }: CoPilotSummaryCardProp
 				</div>
 			)}
 		</div>
+	);
+}
+
+interface PipelineTraceErrorCardProps {
+	reason: string;
+}
+
+// Fallback when `cases.stage_trace` storage exists but failed to parse
+// (corrupted row, schema drift). Distinct from "no trace at all" so a
+// real bug doesn't silently look like an unscored case.
+function PipelineTraceErrorCard({ reason }: PipelineTraceErrorCardProps) {
+	return (
+		<div className="pp-card p-5" data-testid="pipeline-trace-error">
+			<div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+				Pipeline trace
+			</div>
+			<div className="flex items-start gap-1.5 text-[12.5px] text-ink-3">
+				<WarningIcon size={13} weight="fill" className="mt-[2px] shrink-0 text-danger" />
+				<span>
+					Pipeline trace unavailable
+					<span className="pp-mono text-ink-3"> ({reason})</span>
+				</span>
+			</div>
+		</div>
+	);
+}
+
+interface PipelineTraceCardProps {
+	trace: StageRecord[];
+}
+
+// Vertical timeline of the 7 pipeline stages (auth → verdict). Renders one
+// row per record in the order the backend returns them. Status pills
+// distinguish ok / skipped / failed / short_circuited; score contribution
+// and duration are surfaced inline so an analyst can see at a glance which
+// stage drove the verdict and where time went.
+function PipelineTraceCard({ trace }: PipelineTraceCardProps) {
+	return (
+		<div className="pp-card p-5" data-testid="pipeline-trace-card">
+			<div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-3">
+				Pipeline trace
+			</div>
+			<ol className="relative space-y-3">
+				{trace.map((stage, idx) => (
+					<PipelineStageRow
+						key={stage.stage}
+						stage={stage}
+						isLast={idx === trace.length - 1}
+					/>
+				))}
+			</ol>
+		</div>
+	);
+}
+
+interface PipelineStageRowProps {
+	stage: StageRecord;
+	isLast: boolean;
+}
+
+function PipelineStageRow({ stage, isLast }: PipelineStageRowProps) {
+	const label = STAGE_LABELS[stage.stage] ?? stage.stage;
+	return (
+		<li
+			className="relative flex items-start gap-3"
+			data-testid={`pipeline-stage-${stage.stage}`}
+			data-status={stage.status}
+		>
+			{/* Vertical connector — drawn from the icon centre down to the
+			    next row. Skipped on the last row. */}
+			{!isLast && (
+				<span
+					aria-hidden="true"
+					className="absolute left-[7px] top-4 bottom-[-12px] w-px bg-line"
+				/>
+			)}
+			<StageStatusGlyph status={stage.status} />
+			<div className="flex-1 min-w-0">
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="text-[12.5px] text-ink">{label}</span>
+					<span className="pp-mono text-[11px] text-ink-3 shrink-0">
+						{stage.duration_ms}ms
+					</span>
+				</div>
+				<div className="flex items-baseline gap-2 text-[11px] text-ink-3">
+					<StageStatusBadge status={stage.status} />
+					{stage.score_contrib !== 0 && (
+						<span className="pp-mono">
+							{stage.stage === "verdict"
+								? `score ${stage.score_contrib}`
+								: `+${stage.score_contrib}`}
+						</span>
+					)}
+					{stage.reason && (
+						<span className="truncate" title={stage.reason}>
+							{stage.reason}
+						</span>
+					)}
+				</div>
+			</div>
+		</li>
+	);
+}
+
+function StageStatusGlyph({ status }: { status: StageStatus }) {
+	if (status === "ok") {
+		return (
+			<CheckCircleIcon
+				size={15}
+				weight="fill"
+				className="mt-[1px] shrink-0 text-safe"
+				aria-hidden="true"
+			/>
+		);
+	}
+	if (status === "failed") {
+		return (
+			<XCircleIcon
+				size={15}
+				weight="fill"
+				className="mt-[1px] shrink-0 text-danger"
+				aria-hidden="true"
+			/>
+		);
+	}
+	if (status === "short_circuited") {
+		return (
+			<ShieldWarningIcon
+				size={15}
+				weight="fill"
+				className="mt-[1px] shrink-0 text-suspect"
+				aria-hidden="true"
+			/>
+		);
+	}
+	return (
+		<span
+			aria-hidden="true"
+			className="mt-[5px] shrink-0 inline-block h-[7px] w-[7px] rounded-full border border-line bg-paper"
+		/>
+	);
+}
+
+function StageStatusBadge({ status }: { status: StageStatus }) {
+	const text =
+		status === "ok"
+			? "ok"
+			: status === "skipped"
+				? "skipped"
+				: status === "failed"
+					? "failed"
+					: "short-circuited";
+	return (
+		<span className="pp-mono uppercase tracking-[0.04em] text-[10px]">
+			{text}
+		</span>
 	);
 }

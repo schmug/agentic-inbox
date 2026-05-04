@@ -361,4 +361,19 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_dkim_selectors_observed_last_seen ON dkim_selectors_observed(last_seen_iso);
         `,
 	},
+	{
+		// Per-stage pipeline trace for the case-detail timeline (issue #128).
+		// JSON-encoded `StageRecord[]` (see workers/security/stage-trace.ts).
+		// `emails.stage_trace` is the source of truth, written by
+		// `persistSecurityVerdict` alongside the existing verdict columns;
+		// `cases.stage_trace` is copied off the originating email at
+		// case-creation time, mirroring the #126 score plumbing pattern.
+		// Forward-only ALTERs; pre-#128 rows leave both columns NULL and
+		// the frontend hides the timeline card.
+		name: "16_stage_trace",
+		sql: `
+            ALTER TABLE emails ADD COLUMN stage_trace TEXT;
+            ALTER TABLE cases ADD COLUMN stage_trace TEXT;
+        `,
+	},
 ];
