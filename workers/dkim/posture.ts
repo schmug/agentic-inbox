@@ -49,6 +49,39 @@ export function emptyDkimPosture(): DkimPosture {
 	return { selectors: [] };
 }
 
+/** Number of days an observed selector remains in the rollup before the
+ * DO's read filter (and lazy-GC pass on writes) drops it. The 30-day window
+ * is the issue's stated horizon (#170 Constraints). Exported so the DO and
+ * tests share the same source of truth — keeping the cutoff math in one
+ * place avoids the failure mode where one site reads the same data the
+ * other just deleted. */
+export const DKIM_OBSERVATION_WINDOW_DAYS = 30;
+
+/**
+ * Compute the inclusive ISO cutoff for the DKIM-selector observation window.
+ * Rows whose `last_seen_iso >= cutoff` are still fresh; rows older than the
+ * cutoff are eligible for GC and excluded from reads.
+ *
+ * Pure helper so the boundary semantics are unit-testable without standing
+ * up a DO. The codebase has no DO test harness, so the cutoff math is the
+ * one piece of the 30-day-window invariant we can exercise directly.
+ */
+export function dkimObservationCutoffIso(
+	nowIso: string,
+	windowDays: number = DKIM_OBSERVATION_WINDOW_DAYS,
+): string {
+	const nowMs = new Date(nowIso).getTime();
+	if (!Number.isFinite(nowMs)) {
+		// Defensive: a caller passing a malformed `nowIso` would otherwise
+		// produce a NaN cutoff and the SQL filter would silently match
+		// nothing. Fall back to "now − window" using the runtime clock so
+		// the read still returns recent rows.
+		const fallback = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+		return new Date(fallback).toISOString();
+	}
+	return new Date(nowMs - windowDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
 const KV_PREFIX = "dkim-published:v1:";
 /** 1h TTL: matches the DMARC / MTA-STS / BIMI / SPF / TLS-RPT cadence so
  * operators don't have to memorise a different per-surface refresh time. */

@@ -13,6 +13,7 @@ import { applyMigrations, mailboxMigrations } from "./migrations";
 import { attachmentObjectKey } from "../lib/attachments";
 import { computeVerdictMix } from "../lib/dashboard-aggregation";
 import { summarizeCase } from "../lib/ai";
+import { dkimObservationCutoffIso } from "../dkim/posture";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1565,9 +1566,7 @@ export class MailboxDO extends DurableObject<Env> {
 	): Promise<void> {
 		if (observations.length === 0) return;
 		const nowIso = opts.now ?? new Date().toISOString();
-		const cutoffIso = new Date(
-			new Date(nowIso).getTime() - 30 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const cutoffIso = dkimObservationCutoffIso(nowIso);
 
 		const seen = new Set<string>();
 		for (const obs of observations) {
@@ -1605,9 +1604,7 @@ export class MailboxDO extends DurableObject<Env> {
 	): Promise<string[]> {
 		if (!domain || typeof domain !== "string") return [];
 		const nowIso = opts.now ?? new Date().toISOString();
-		const cutoffIso = new Date(
-			new Date(nowIso).getTime() - 30 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const cutoffIso = dkimObservationCutoffIso(nowIso);
 		const rows = [
 			...this.ctx.storage.sql.exec(
 				`SELECT selector FROM dkim_selectors_observed

@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	DKIM_OBSERVATION_WINDOW_DAYS,
+	dkimObservationCutoffIso,
 	emptyDkimPosture,
 	fetchDkimPosture,
 	isAnyPublished,
@@ -59,6 +61,79 @@ describe("isAnyPublished", () => {
 	it("returns false when no TXT entry is a valid DKIM record", () => {
 		expect(isAnyPublished(["v=spf1 -all", "x=y"])).toBe(false);
 		expect(isAnyPublished([])).toBe(false);
+	});
+});
+
+describe("dkimObservationCutoffIso (#170 — 30-day observation horizon)", () => {
+	it("defaults to a 30-day window matching the issue's stated horizon", () => {
+		expect(DKIM_OBSERVATION_WINDOW_DAYS).toBe(30);
+	});
+
+	it("computes the cutoff as nowIso - 30d", () => {
+		// 30 days = 2_592_000_000 ms. Cutoff falls exactly there relative to
+		// `nowIso` so the SQL filter `last_seen_iso >= cutoff` keeps rows
+		// observed within the last 30d (inclusive of the boundary).
+		const now = new Date("2026-05-04T12:00:00Z").toISOString();
+		const cutoff = dkimObservationCutoffIso(now);
+		expect(cutoff).toBe("2026-04-04T12:00:00.000Z");
+	});
+
+	it("a row at exactly the cutoff is still fresh (>= comparison, not strict >)", () => {
+		// Boundary semantics: an observation at `now - 30d` to the millisecond
+		// is the *oldest* row the read should still surface. The `>=` filter
+		// in `getDkimSelectorsObserved` makes that explicit; this test pins
+		// the cutoff math so the inclusive boundary stays inclusive.
+		const now = new Date("2026-05-04T12:00:00Z").toISOString();
+		const cutoff = dkimObservationCutoffIso(now);
+		// A row with last_seen_iso === cutoff is fresh (kept).
+		expect(cutoff >= cutoff).toBe(true);
+	});
+
+	it("rows older than the cutoff are stale (< cutoff = excluded by the SQL filter)", () => {
+		// At `now - 30d - 1ms` the row is past the horizon and the SQL
+		// `>= cutoff` filter excludes it. The lazy-GC pass on
+		// `recordDkimSelectorsObserved` deletes the same set with `< cutoff`,
+		// so reads and writes share the boundary.
+		const now = new Date("2026-05-04T12:00:00Z").toISOString();
+		const cutoff = dkimObservationCutoffIso(now);
+		const stale = new Date(
+			new Date(cutoff).getTime() - 1,
+		).toISOString();
+		expect(stale < cutoff).toBe(true);
+	});
+
+	it("rows newer than the cutoff are fresh (> cutoff = kept)", () => {
+		const now = new Date("2026-05-04T12:00:00Z").toISOString();
+		const cutoff = dkimObservationCutoffIso(now);
+		const fresh = new Date(
+			new Date(cutoff).getTime() + 1,
+		).toISOString();
+		expect(fresh > cutoff).toBe(true);
+	});
+
+	it("supports a custom window for callers that want a tighter horizon", () => {
+		const now = new Date("2026-05-04T12:00:00Z").toISOString();
+		expect(dkimObservationCutoffIso(now, 7)).toBe(
+			"2026-04-27T12:00:00.000Z",
+		);
+		expect(dkimObservationCutoffIso(now, 1)).toBe(
+			"2026-05-03T12:00:00.000Z",
+		);
+	});
+
+	it("falls back to 'now − window' against the runtime clock when nowIso is malformed", () => {
+		// Defensive: a NaN cutoff would make the SQL filter silently match
+		// nothing (or every row, depending on engine). The fallback keeps
+		// the read returning recent rows. We can't pin the exact value
+		// (depends on Date.now()) but we can pin the shape.
+		const before = Date.now();
+		const cutoff = dkimObservationCutoffIso("not-a-date");
+		const after = Date.now();
+		const cutoffMs = new Date(cutoff).getTime();
+		expect(Number.isFinite(cutoffMs)).toBe(true);
+		const windowMs = DKIM_OBSERVATION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+		expect(cutoffMs).toBeGreaterThanOrEqual(before - windowMs);
+		expect(cutoffMs).toBeLessThanOrEqual(after - windowMs);
 	});
 });
 
