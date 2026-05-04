@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Badge, Button, Pagination, Tooltip } from "@cloudflare/kumo";
-import { ArrowLeftIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import MailboxSplitView from "~/components/MailboxSplitView";
@@ -13,22 +13,7 @@ import { useUpdateEmail } from "~/queries/emails";
 import { useSearchEmails, SEARCH_PAGE_SIZE } from "~/queries/search";
 import { useUIStore } from "~/hooks/useUIStore";
 import type { Email } from "~/types";
-
-function highlightTerms(text: string, query: string): React.ReactNode {
-	if (!query || !text) return text;
-	const freeText = query.replace(/\b(?:from|to|subject|in|is|has|before|after):"[^"]*"/gi, "").replace(/\b(?:from|to|subject|in|is|has|before|after):\S+/gi, "").trim();
-	if (!freeText) return text;
-	try {
-		const escaped = freeText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`(${escaped})`, "gi");
-		const parts = text.split(regex);
-		if (parts.length === 1) return text;
-		// Use case-insensitive string comparison instead of regex.test() with g flag,
-		// which has stateful lastIndex causing alternating true/false results.
-		const lowerEscaped = escaped.toLowerCase();
-		return parts.map((part, i) => part.toLowerCase() === lowerEscaped ? <mark key={i} className="bg-accent-tint text-accent-ink rounded-sm px-0.5">{part}</mark> : part);
-	} catch { return text; }
-}
+import { highlightTerms, SearchEmptyState } from "./search-shared";
 
 export default function SearchResultsRoute() {
 	const { mailboxId } = useParams<{ mailboxId: string }>();
@@ -109,12 +94,7 @@ export default function SearchResultsRoute() {
 							))}
 						</div>
 					) : results.length === 0 ? (
-						<div className="flex flex-col items-center justify-center py-24 px-6 text-center">
-							<div className="mb-4"><MagnifyingGlassIcon size={48} weight="thin" className="text-ink-3" /></div>
-							<h3 className="text-base font-semibold text-ink mb-1.5">No results found</h3>
-							<p className="text-sm text-ink-3 max-w-xs">{urlQuery ? `Nothing matched "${urlQuery}". Try different keywords or check your spelling.` : "Enter a search term to find emails by subject, sender, or content."}</p>
-							{urlQuery && <p className="text-xs text-ink-3 mt-3 max-w-sm">Tip: Use operators like <code className="bg-paper-3 px-1 rounded pp-mono">from:name</code>, <code className="bg-paper-3 px-1 rounded pp-mono">is:unread</code>, <code className="bg-paper-3 px-1 rounded pp-mono">has:attachment</code>, <code className="bg-paper-3 px-1 rounded pp-mono">before:2025-01-01</code></p>}
-						</div>
+						<SearchEmptyState query={urlQuery} />
 					) : (
 						<div>{results.map((email) => {
 							const isSelected = selectedEmailId === email.id;
