@@ -204,6 +204,10 @@ const api = {
 	searchEmails: (mailboxId: string, params: Record<string, string>) =>
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/search`, { params }),
 
+	// Org-scope search across every mailbox the caller can see (#197).
+	searchOrgEmails: (params: Record<string, string>) =>
+		get<EmailListResponse>("/api/v1/org/search", { params }),
+
 	// Dashboard
 	getDashboardSummary: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
 		get<DashboardSummary>(`/api/v1/mailboxes/${mailboxId}/dashboard`, { signal: opts?.signal }),

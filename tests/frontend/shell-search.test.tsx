@@ -89,6 +89,14 @@ function renderOrgShell(initialEntries: string[]) {
 					</Shell>
 				}
 			/>
+			<Route
+				path="/search"
+				element={
+					<Shell>
+						<LocationReporter />
+					</Shell>
+				}
+			/>
 		</Routes>,
 		{ initialEntries },
 	);
@@ -161,10 +169,10 @@ describe("Shell search", () => {
 	});
 });
 
-// Path-(b) fix for #187: on org-level routes (no `:mailboxId` in URL) the
-// search submit handler used to silently no-op. We now render the input as
-// `disabled` with explanatory placeholder so cmd+K + Enter can't appear to
-// swallow a query without feedback. Org-scope search is tracked separately.
+// Org-scope search (#197): on org-level routes (no `:mailboxId` in URL), a
+// submit must navigate to the top-level `/search?q=…` route that fans out
+// across every mailbox the caller can see. The previous disabled-input
+// fallback (#187) is gone — operators get an actual cross-mailbox surface.
 describe("Shell search on org-level routes (no mailboxId)", () => {
 	it.each([
 		["/"],
@@ -172,48 +180,44 @@ describe("Shell search on org-level routes (no mailboxId)", () => {
 		["/mailboxes"],
 		["/domains"],
 		["/domains/example.com"],
-	])("disables the search input on %s", (path) => {
+	])("submitting on %s navigates to /search?q=…", async (path) => {
+		const user = userEvent.setup();
 		renderOrgShell([path]);
 		const input = screen.getByRole("searchbox", { name: /search/i });
-		expect(input).toBeDisabled();
-		expect(input.getAttribute("placeholder")).toBe(
-			"Pick a mailbox to search emails",
+		expect(input).not.toBeDisabled();
+		await user.click(input);
+		await user.keyboard("invoice");
+		await user.keyboard("{Enter}");
+		expect(screen.getByTestId("location")).toHaveTextContent(
+			"/search?q=invoice",
 		);
 	});
 
-	it("cmd+K does not focus the disabled input on org routes", async () => {
+	it("URL-encodes special characters in org-scope queries", async () => {
 		const user = userEvent.setup();
 		renderOrgShell(["/"]);
 		const input = screen.getByRole("searchbox", { name: /search/i });
-		expect(input).toBeDisabled();
-		expect(document.activeElement).not.toBe(input);
-		await user.keyboard("{Meta>}k{/Meta}");
-		// A `disabled` input cannot receive focus, so cmd+K is effectively a
-		// no-op on org routes — exactly what the acceptance criterion asks for.
-		expect(document.activeElement).not.toBe(input);
+		await user.click(input);
+		await user.type(input, "from:bob & jane");
+		await user.keyboard("{Enter}");
+		const location = screen.getByTestId("location").textContent ?? "";
+		expect(location).toContain("/search?q=");
+		expect(location).toContain("%26");
+		expect(location).toContain("from%3Abob");
 	});
 
-	it("submitting the form on org routes does not navigate", async () => {
+	it("cmd+K focuses the search input on org routes too", async () => {
 		const user = userEvent.setup();
 		renderOrgShell(["/"]);
-		expect(screen.getByTestId("location")).toHaveTextContent("/");
-		const form = screen
-			.getByRole("searchbox", { name: /search/i })
-			.closest("form");
-		expect(form).not.toBeNull();
-		// Even if a programmatic submit fires (e.g. user found a way to bypass
-		// the disabled input), the handler still bails when `mailboxId` is
-		// missing — belt-and-suspenders verification.
-		form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-		// Yield to microtasks / react-router's effect queue.
-		await user.keyboard("{Tab}");
-		expect(screen.getByTestId("location")).toHaveTextContent("/");
-	});
-
-	it("re-enables the input once a mailbox-scoped route is mounted", () => {
-		renderShell(["/mailbox/m1/dashboard"]);
 		const input = screen.getByRole("searchbox", { name: /search/i });
 		expect(input).not.toBeDisabled();
+		await user.keyboard("{Meta>}k{/Meta}");
+		expect(document.activeElement).toBe(input);
+	});
+
+	it("placeholder copy matches the mailbox-scoped surface", () => {
+		renderOrgShell(["/"]);
+		const input = screen.getByRole("searchbox", { name: /search/i });
 		expect(input.getAttribute("placeholder")).toMatch(/⌘K/);
 	});
 });

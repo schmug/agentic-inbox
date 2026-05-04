@@ -61,6 +61,7 @@ import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
+import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
 
 type AppContext = Context<MailboxContext>;
 
@@ -233,6 +234,56 @@ app.get("/api/v1/org/overview", async (c) => {
 	}
 
 	return c.json(overview);
+});
+
+// -- Org-scope search (#197) ----------------------------------------
+
+/** Per-mailbox cap for org-search fan-out. We pull at most this many rows
+ * from each mailbox to bound the merged-page sort + response size. The org
+ * page slices the merged ordering to the requested page; common operator
+ * queries fit well below the cap. */
+const ORG_SEARCH_PER_MAILBOX_CAP = 200;
+
+app.get("/api/v1/org/search", async (c) => {
+	const searchOpts = {
+		query: c.req.query("query") || "",
+		folder: c.req.query("folder"),
+		from: c.req.query("from"),
+		to: c.req.query("to"),
+		subject: c.req.query("subject"),
+		date_start: c.req.query("date_start"),
+		date_end: c.req.query("date_end"),
+		is_read: boolQuery(c, "is_read"),
+		is_starred: boolQuery(c, "is_starred"),
+		has_attachment: boolQuery(c, "has_attachment"),
+	};
+	const page = Math.max(1, intQuery(c, "page") ?? 1);
+	const limit = Math.min(Math.max(intQuery(c, "limit") ?? 25, 1), 100);
+
+	const mailboxes = await listMailboxes(c.env.BUCKET);
+	const settled = await Promise.allSettled(
+		mailboxes.map(async (m) => {
+			const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id)) as any;
+			const [emails, count] = await Promise.all([
+				stub.searchEmails({
+					...searchOpts,
+					page: 1,
+					limit: ORG_SEARCH_PER_MAILBOX_CAP,
+				}),
+				stub.countSearchResults(searchOpts),
+			]);
+			return { mailboxId: m.id, mailboxEmail: m.email, emails, count };
+		}),
+	);
+	const perMailbox: PerMailboxSearchResult[] = [];
+	for (const r of settled) {
+		if (r.status !== "fulfilled") {
+			console.error("org-search: mailbox search failed:", (r.reason as Error)?.message);
+			continue;
+		}
+		perMailbox.push(r.value);
+	}
+	return c.json(aggregateOrgSearch(perMailbox, page, limit));
 });
 
 // -- Per-domain stats + drill-down (#85) ----------------------------

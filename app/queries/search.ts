@@ -58,3 +58,48 @@ export function useSearchEmails(
 		enabled: !!mailboxId && !!query,
 	});
 }
+
+/**
+ * Org-scope variant of {@link useSearchEmails} (#197). Hits the cross-mailbox
+ * search endpoint and exposes results tagged with the originating mailbox so
+ * the org page can render a per-row mailbox chip.
+ */
+export type OrgSearchResultRow = Email & {
+	mailbox_id: string;
+	mailbox_email: string;
+};
+
+export function useOrgSearchEmails(query: string, page: number) {
+	return useQuery<{ results: OrgSearchResultRow[]; totalCount: number }>({
+		queryKey: query
+			? queryKeys.search.orgResults(query, page)
+			: ["search", "_org_disabled"],
+		queryFn: async () => {
+			const parsed = parseSearchQuery(query);
+			const params: Record<string, string> = {
+				page: String(page),
+				limit: String(SEARCH_PAGE_SIZE),
+			};
+			if (parsed.query) params.query = parsed.query;
+			if (parsed.from) params.from = parsed.from;
+			if (parsed.to) params.to = parsed.to;
+			if (parsed.subject) params.subject = parsed.subject;
+			if (parsed.folder) params.folder = parsed.folder;
+			if (parsed.date_start) params.date_start = parsed.date_start;
+			if (parsed.date_end) params.date_end = parsed.date_end;
+			if (parsed.is_read !== undefined) params.is_read = String(parsed.is_read);
+			if (parsed.is_starred !== undefined) params.is_starred = String(parsed.is_starred);
+			if (parsed.has_attachment) params.has_attachment = "true";
+
+			const data = await api.searchOrgEmails(params) as {
+				emails: OrgSearchResultRow[];
+				totalCount: number;
+			};
+			return {
+				results: data?.emails ?? [],
+				totalCount: data?.totalCount ?? 0,
+			};
+		},
+		enabled: !!query,
+	});
+}

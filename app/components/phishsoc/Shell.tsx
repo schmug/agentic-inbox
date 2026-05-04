@@ -390,10 +390,17 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 	const handleSearchSubmit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		const q = searchQuery.trim();
-		if (!q || !mailboxId) return;
-		navigate(
-			`/mailbox/${encodeURIComponent(mailboxId)}/search?q=${encodeURIComponent(q)}`,
-		);
+		if (!q) return;
+		// On a mailbox-scoped route, scope the search to that mailbox. On every
+		// other route (org-level: `/`, `/settings`, `/mailboxes`, `/domains`,
+		// `/domains/:domain`) fall back to the org-scope search route (#197).
+		if (mailboxId) {
+			navigate(
+				`/mailbox/${encodeURIComponent(mailboxId)}/search?q=${encodeURIComponent(q)}`,
+			);
+		} else {
+			navigate(`/search?q=${encodeURIComponent(q)}`);
+		}
 	};
 
 	const navContents = (
@@ -471,33 +478,14 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						onSubmit={handleSearchSubmit}
 						className="flex items-center gap-2 flex-1 max-w-xl"
 					>
-						<MagnifyingGlassIcon
-							size={14}
-							className={`shrink-0 ${mailboxId ? "text-ink-3" : "text-ink-4"}`}
-						/>
-						{/*
-						 * Search today is mailbox-scoped: the only registered route is
-						 * `/mailbox/:mailboxId/search`, and the submit handler bails when
-						 * `mailboxId` is missing. On org-level routes (`/`, `/settings`,
-						 * `/mailboxes`, `/domains`, `/domains/:domain`) we surface a
-						 * disabled input with explanatory placeholder so cmd+K + Enter
-						 * doesn't appear to silently swallow the query (#187). Org-scope
-						 * search across every mailbox the user can see is tracked
-						 * separately.
-						 */}
+						<MagnifyingGlassIcon size={14} className="shrink-0 text-ink-3" />
 						<input
 							ref={searchInputRef}
 							type="search"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							disabled={!mailboxId}
-							aria-disabled={!mailboxId}
-							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4 disabled:cursor-not-allowed"
-							placeholder={
-								mailboxId
-									? "Search emails…  ⌘K"
-									: "Pick a mailbox to search emails"
-							}
+							className="flex-1 bg-transparent border-0 outline-none text-[13px] text-ink placeholder:text-ink-4"
+							placeholder="Search emails…  ⌘K"
 							aria-label="Search"
 						/>
 					</form>
