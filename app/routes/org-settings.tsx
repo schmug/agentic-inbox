@@ -13,6 +13,7 @@ import {
 	validateHubConfig,
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
+import Shell from "~/components/phishsoc/Shell";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
 import {
 	DEFAULT_CLASSIFIER_MODEL,
@@ -149,15 +150,18 @@ export default function OrgSettingsRoute() {
 
 	if (isLoading) {
 		return (
-			<div className="flex justify-center py-20">
-				<Loader size="lg" />
-			</div>
+			<Shell>
+				<div className="flex justify-center py-20">
+					<Loader size="lg" />
+				</div>
+			</Shell>
 		);
 	}
 
 	const isCustomPrompt = agentPrompt.trim().length > 0;
 
 	return (
+		<Shell>
 		<div className="max-w-2xl px-4 py-4 md:px-8 md:py-6 h-full overflow-y-auto">
 			<h1 className="pp-serif text-ink mb-2">Organization settings</h1>
 			<p className="text-xs text-ink-3 mb-6 max-w-xl">
@@ -332,5 +336,6 @@ export default function OrgSettingsRoute() {
 				</div>
 			</div>
 		</div>
+		</Shell>
 	);
 }
