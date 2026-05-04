@@ -101,6 +101,23 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 	const auth = parseAuthResults(parsedEmail.headers, {
 		trustedAuthservIds: settings.trusted_authserv_ids,
 	});
+
+	// DKIM selector observation rollup (#170). Best-effort — a slow / failed
+	// DO write must NOT delay the verdict path. Trusted-id gating already
+	// happened inside `parseAuthResults`, so anything in `auth.dkimObservations`
+	// is safe to persist; the DO method de-dupes and runs the lazy 30d GC.
+	if (auth.dkimObservations.length > 0) {
+		const stub = getMailboxStub(env, mailboxId);
+		void stub
+			.recordDkimSelectorsObserved(auth.dkimObservations)
+			.catch((e) =>
+				console.error(
+					"recordDkimSelectorsObserved failed:",
+					(e as Error).message,
+				),
+			);
+	}
+
 	const urls = extractUrls(bodyHtml);
 
 	// Intel feed lookup — first confirmed hit wins. Kept early (pre-triage)

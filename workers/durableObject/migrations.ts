@@ -340,4 +340,25 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE cases ADD COLUMN summary_status TEXT;
         `,
 	},
+	{
+		// DKIM selectors observed from inbound mail's Authentication-Results
+		// (issue #170). One row per `(domain, selector)` pair seen on a
+		// trusted DKIM=pass / DKIM=fail evaluation; `last_seen_iso` updated
+		// on every re-observation. The 30d observation window is enforced
+		// by the read path, with a delete-on-write GC pruning older rows
+		// the next time observations land. Per-mailbox-DO scope keeps
+		// multi-tenant safety intact — selectors observed on mailbox A
+		// never leak into mailbox B's posture.
+		name: "15_dkim_selectors_observed",
+		sql: `
+            CREATE TABLE IF NOT EXISTS dkim_selectors_observed (
+                domain TEXT NOT NULL,
+                selector TEXT NOT NULL,
+                last_seen_iso TEXT NOT NULL,
+                PRIMARY KEY (domain, selector)
+            );
+            CREATE INDEX IF NOT EXISTS idx_dkim_selectors_observed_domain ON dkim_selectors_observed(domain);
+            CREATE INDEX IF NOT EXISTS idx_dkim_selectors_observed_last_seen ON dkim_selectors_observed(last_seen_iso);
+        `,
+	},
 ];

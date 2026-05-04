@@ -85,6 +85,9 @@ const populated: DomainStats = {
 		configured: null,
 		endpoints: null,
 	},
+	dkimPosture: {
+		selectors: [],
+	},
 	recentCases: [],
 };
 

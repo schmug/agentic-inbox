@@ -91,6 +91,9 @@ const populated: DomainStats = {
 		configured: null,
 		endpoints: null,
 	},
+	dkimPosture: {
+		selectors: [],
+	},
 	recentCases: [
 		{
 			id: "C1",
@@ -162,6 +165,47 @@ describe("DomainDetailRoute", () => {
 		// Recent cases panel.
 		expect(screen.getByText(/recent cases/i)).toBeInTheDocument();
 		expect(screen.getByText(/suspicious wire transfer/i)).toBeInTheDocument();
+	});
+
+	it("renders the DKIM tile empty-state when no selectors have been observed (#170)", () => {
+		queryState = { data: populated, isLoading: false, isError: false };
+		renderDomainDetail("acme.com");
+		const dkimCard = screen
+			.getByText(/dkim posture/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(
+			within(dkimCard).getByText(/no dkim selectors observed on inbound mail/i),
+		).toBeInTheDocument();
+	});
+
+	it("renders observed DKIM selectors with published / missing affordances (#170)", () => {
+		queryState = {
+			data: {
+				...populated,
+				dkimPosture: {
+					selectors: [
+						{ selector: "google", published: true },
+						{ selector: "retired", published: false },
+						// `null` is the transient-unavailable sentinel; per the
+						// #170 Constraints it renders identically to `false`
+						// (the same "missing" affordance) so the operator
+						// re-checks on the next refresh rather than acting on a
+						// distinct "lookup failed" tier.
+						{ selector: "blip", published: null },
+					],
+				},
+			},
+			isLoading: false,
+			isError: false,
+		};
+		renderDomainDetail("acme.com");
+		const dkimCard = screen
+			.getByText(/dkim posture/i)
+			.closest(".pp-card") as HTMLElement;
+		expect(within(dkimCard).getByText("google")).toBeInTheDocument();
+		expect(within(dkimCard).getByText("published")).toBeInTheDocument();
+		// Two selectors render "missing": the durable-false and the transient-null.
+		expect(within(dkimCard).getAllByText("missing")).toHaveLength(2);
 	});
 
 	it("renders the DMARC fields when posture data is present (forward-compatible)", () => {

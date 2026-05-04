@@ -58,6 +58,7 @@ import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
 import { emptyBimiPosture, fetchBimiPosture } from "./bimi/posture";
 import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
 import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
+import { emptyDkimPosture, fetchDkimPosture } from "./dkim/posture";
 import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
@@ -383,6 +384,16 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			.get(c.env.MAILBOX.idFromName(m.id))
 			.getDmarcAlignmentTotals(domain, alignmentSinceIso),
 	);
+	// Per-mailbox DKIM-selector fan-out (#170). Each mailbox observes its own
+	// selector set; we union here so the per-domain DKIM tile reflects every
+	// inbound DKIM signature seen for `domain` over the 30-day window. The
+	// per-mailbox-DO scoping is preserved — selectors observed on a mailbox
+	// of a different domain never enter this fan-out.
+	const dkimSelectorPromises = scoped.map((m) =>
+		c.env.MAILBOX
+			.get(c.env.MAILBOX.idFromName(m.id))
+			.getDkimSelectorsObserved(domain),
+	);
 	const txtPromise = fetchDmarcTxtPosture(domain, {
 		kv: c.env.BLOOM_KV ?? null,
 	});
@@ -402,6 +413,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	const [
 		settledSummaries,
 		settledAlignments,
+		settledDkimSelectors,
 		settledTxt,
 		settledMtaSts,
 		settledBimi,
@@ -410,6 +422,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 	] = await Promise.all([
 		Promise.allSettled(summaryPromises),
 		Promise.allSettled(alignmentPromises),
+		Promise.allSettled(dkimSelectorPromises),
 		Promise.allSettled([txtPromise]),
 		Promise.allSettled([mtaStsPromise]),
 		Promise.allSettled([bimiPromise]),
@@ -469,6 +482,35 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 			? settledTlsRpt[0].value
 			: emptyTlsRptPosture();
 
+	// Union the per-mailbox selector lists. A failed DO call contributes
+	// nothing rather than blocking the whole DKIM tile — same degradation
+	// model as `getDmarcAlignmentTotals`.
+	const observedSelectors = new Set<string>();
+	for (const r of settledDkimSelectors) {
+		if (r.status !== "fulfilled") {
+			console.error(
+				"domain-stats: dkim-selectors failed:",
+				(r.reason as Error)?.message,
+			);
+			continue;
+		}
+		for (const sel of r.value) {
+			if (typeof sel === "string" && sel.length > 0) observedSelectors.add(sel);
+		}
+	}
+
+	const dkimPosture = observedSelectors.size === 0
+		? emptyDkimPosture()
+		: await fetchDkimPosture(domain, [...observedSelectors], {
+			kv: c.env.BLOOM_KV ?? null,
+		}).catch((e) => {
+			console.error(
+				"domain-stats: dkim posture lookup failed:",
+				(e as Error).message,
+			);
+			return emptyDkimPosture();
+		});
+
 	const mailboxRefs: DomainMailboxRef[] = scoped.map((m) => ({
 		id: m.id,
 		email: m.email,
@@ -484,6 +526,7 @@ app.get("/api/v1/domains/:domain/stats", async (c) => {
 		bimiPosture,
 		spfPosture,
 		tlsRptPosture,
+		dkimPosture,
 	});
 	// `aggregateDomainStats` only returns null when `mailboxes.length === 0`,
 	// which we already guarded above with the 404 — but narrow the type

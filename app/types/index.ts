@@ -287,6 +287,21 @@ export interface TlsRptPosture {
 	endpoints: readonly string[] | null;
 }
 
+/** DKIM published-record posture (#170). Per-selector list of selectors
+ * observed over a 30-day inbound-mail window, each with current
+ * `<selector>._domainkey.<domain>` published-yes/no/unavailable status.
+ *
+ * Empty `selectors` is the natural state for a domain that's never sent
+ * inbound DKIM-signed mail. `published: null` is the transient "lookup
+ * unavailable" sentinel; the UI renders it identically to `false` (per
+ * #170 Constraints) but the cache layer keeps them separate. */
+export interface DkimPosture {
+	selectors: ReadonlyArray<{
+		selector: string;
+		published: boolean | null;
+	}>;
+}
+
 /** One row in the `/api/v1/domains` list. */
 export interface DomainListEntry {
 	domain: string;
@@ -317,6 +332,7 @@ export interface DomainStats {
 	bimiPosture: BimiPosture;
 	spfPosture: SpfPosture;
 	tlsRptPosture: TlsRptPosture;
+	dkimPosture: DkimPosture;
 	recentCases: DashboardCase[];
 }
 
