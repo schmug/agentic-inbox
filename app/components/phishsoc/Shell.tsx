@@ -28,6 +28,7 @@ import Breadcrumb from "./Breadcrumb";
 import Logo from "./Logo";
 import MailboxSwitcher from "./MailboxSwitcher";
 import NotificationsBell from "./NotificationsBell";
+import OrgAgentPanel from "./OrgAgentPanel";
 
 type PipelineTone = "safe" | "suspect" | "danger" | "muted";
 
@@ -502,34 +503,19 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 					</form>
 					<div className="ml-auto flex items-center gap-1.5 shrink-0">
 						<NotificationsBell mailboxId={mailboxId} />
-						{/* The agent panel only mounts inside `/mailbox/:mailboxId/*`
-						    routes (mailbox.tsx is the only caller passing
-						    `rightPanel={<AgentSidebar />}`). On org-level routes
-						    (`/`, `/settings`, `/mailboxes`, `/domains`,
-						    `/domains/:domain`) clicking the button toggled
-						    internal state but nothing visible happened — silent
-						    no-op (#186). Until an org-scope co-pilot ships
-						    (follow-up #198), gate the trigger on `mailboxId` so
-						    the button only fires where it can do work. We render
-						    `disabled` with a `title` tooltip rather than hiding
-						    so the affordance stays discoverable and the topbar
-						    layout doesn't shift when entering a mailbox. */}
+						{/* Mailbox routes pass `rightPanel={<AgentSidebar />}` (the
+						    per-mailbox `EmailAgent`-backed chat). Org-level routes
+						    pass no `rightPanel` and fall back to the org-scope
+						    co-pilot mounted below (#198). Either way the button
+						    opens a working panel — the disabled branch from #186
+						    is gone. */}
 						<button
 							type="button"
 							onClick={() => toggleAgentPanel()}
-							disabled={!mailboxId}
-							aria-disabled={!mailboxId}
-							title={
-								mailboxId
-									? undefined
-									: "Pick a mailbox to chat with the agent"
-							}
-							aria-expanded={mailboxId ? isAgentPanelOpen : undefined}
+							aria-expanded={isAgentPanelOpen}
 							aria-controls="agent-panel"
 							className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
-								!mailboxId
-									? "bg-paper-2 text-ink-3 border-line cursor-not-allowed opacity-60"
-									: isAgentPanelOpen
+								isAgentPanelOpen
 									? "bg-accent text-paper border-accent hover:bg-[color-mix(in_oklch,var(--accent)_85%,black)]"
 									: "bg-accent-tint text-accent border-[color-mix(in_oklch,var(--accent)_25%,transparent)] hover:bg-[color-mix(in_oklch,var(--accent-tint)_70%,var(--paper))]"
 							}`}
@@ -537,13 +523,7 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 							<SparkleIcon
 								size={13}
 								weight="fill"
-								className={
-									!mailboxId
-										? "text-ink-3"
-										: isAgentPanelOpen
-										? "text-paper"
-										: "text-accent"
-								}
+								className={isAgentPanelOpen ? "text-paper" : "text-accent"}
 							/>
 							Ask co-pilot
 						</button>
@@ -561,7 +541,15 @@ export default function Shell({ children, rightPanel }: ShellProps) {
 						<Breadcrumb />
 						<div className="flex-1 min-h-0">{children}</div>
 					</main>
-					{rightPanel && <AgentPanelSlot rightPanel={rightPanel} />}
+					{rightPanel ? (
+						<AgentPanelSlot rightPanel={rightPanel} />
+					) : !mailboxId ? (
+						// Org-scope fallback (#198). Mailbox routes always pass
+						// `rightPanel`; if a future Shell caller on a mailbox
+						// route forgets to, we don't accidentally mount the
+						// org panel against per-mailbox context.
+						<AgentPanelSlot rightPanel={<OrgAgentPanel />} />
+					) : null}
 				</div>
 			</div>
 		</div>
