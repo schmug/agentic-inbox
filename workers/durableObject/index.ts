@@ -1581,6 +1581,124 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
+	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────
+
+	async insertTlsRptReport(
+		report: {
+			id: string;
+			received_at: string;
+			org_name: string | null;
+			report_id: string | null;
+			domain: string;
+			date_range_begin: string | null;
+			date_range_end: string | null;
+			contact_info: string | null;
+			raw_r2_key: string | null;
+		},
+		records: Array<{
+			id: string;
+			policy_type: string | null;
+			policy_domain: string | null;
+			sending_mta_ip: string | null;
+			receiving_mx_hostname: string | null;
+			result_type: string | null;
+			successful_session_count: number;
+			failed_session_count: number;
+		}>,
+	) {
+		this.db.insert(schema.tlsrptReports).values(report).run();
+		if (records.length > 0) {
+			this.db
+				.insert(schema.tlsrptRecords)
+				.values(records.map((r) => ({ ...r, report_id: report.id })))
+				.run();
+		}
+	}
+
+	async listTlsRptReports(
+		options: { domain?: string; limit?: number; offset?: number } = {},
+	) {
+		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+		const offset = Math.max(options.offset ?? 0, 0);
+		const conditions: SQL[] = [];
+		if (options.domain) conditions.push(eq(schema.tlsrptReports.domain, options.domain));
+		return this.db
+			.select()
+			.from(schema.tlsrptReports)
+			.where(conditions.length > 0 ? and(...conditions) : undefined)
+			.orderBy(desc(schema.tlsrptReports.received_at))
+			.limit(limit)
+			.offset(offset)
+			.all();
+	}
+
+	async getTlsRptRecords(reportId: string) {
+		return this.db
+			.select()
+			.from(schema.tlsrptRecords)
+			.where(eq(schema.tlsrptRecords.report_id, reportId))
+			.all();
+	}
+
+	/**
+	 * Sources rollup for `domain`: success/failure session counts grouped
+	 * by `(sending_mta_ip, receiving_mx_hostname)`. The NULL-IP bucket
+	 * carries the policy-summary rows from each report; per-failure-detail
+	 * rows populate the IP bucket with their result-type breakdown. The UI
+	 * surfaces both the per-MTA breakdown and the per-result-type rollup
+	 * via {@link getTlsRptFailureRollup}.
+	 */
+	async getTlsRptSummary(domain: string) {
+		return this.db
+			.select({
+				sending_mta_ip: schema.tlsrptRecords.sending_mta_ip,
+				receiving_mx_hostname: schema.tlsrptRecords.receiving_mx_hostname,
+				successful_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.successful_session_count}), 0)`.mapWith(Number),
+				failed_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(Number),
+				first_seen: sql<string>`MIN(${schema.tlsrptReports.received_at})`.mapWith(String),
+				last_seen: sql<string>`MAX(${schema.tlsrptReports.received_at})`.mapWith(String),
+			})
+			.from(schema.tlsrptRecords)
+			.innerJoin(
+				schema.tlsrptReports,
+				eq(schema.tlsrptReports.id, schema.tlsrptRecords.report_id),
+			)
+			.where(eq(schema.tlsrptReports.domain, domain))
+			.groupBy(
+				schema.tlsrptRecords.sending_mta_ip,
+				schema.tlsrptRecords.receiving_mx_hostname,
+			)
+			.orderBy(
+				sql`SUM(${schema.tlsrptRecords.failed_session_count}) DESC`,
+				sql`SUM(${schema.tlsrptRecords.successful_session_count}) DESC`,
+			)
+			.limit(200)
+			.all();
+	}
+
+	/** Per-`result_type` rollup for `domain`. Sums across all reports. */
+	async getTlsRptFailureRollup(domain: string) {
+		return this.db
+			.select({
+				result_type: schema.tlsrptRecords.result_type,
+				failed_session_count: sql<number>`COALESCE(SUM(${schema.tlsrptRecords.failed_session_count}), 0)`.mapWith(Number),
+			})
+			.from(schema.tlsrptRecords)
+			.innerJoin(
+				schema.tlsrptReports,
+				eq(schema.tlsrptReports.id, schema.tlsrptRecords.report_id),
+			)
+			.where(
+				and(
+					eq(schema.tlsrptReports.domain, domain),
+					sql`${schema.tlsrptRecords.result_type} IS NOT NULL`,
+				),
+			)
+			.groupBy(schema.tlsrptRecords.result_type)
+			.orderBy(sql`SUM(${schema.tlsrptRecords.failed_session_count}) DESC`)
+			.all();
+	}
+
 	/**
 	 * Record `(domain, selector)` pairs observed on inbound DKIM=pass / =fail
 	 * evaluations into the `dkim_selectors_observed` rollup. Idempotent:
