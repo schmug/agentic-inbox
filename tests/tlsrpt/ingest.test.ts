@@ -88,8 +88,6 @@ describe("isTlsRptReport", () => {
 });
 
 describe("ingestTlsRptReport", () => {
-	const env = { BUCKET: {}, MAILBOX: {} } as never;
-
 	it("rejects a JSON payload above the 5MB cap before persisting", async () => {
 		const oversized = new Uint8Array(TLSRPT_MAX_DECOMPRESSED_BYTES + 1);
 		const insertSpy = vi.fn();
