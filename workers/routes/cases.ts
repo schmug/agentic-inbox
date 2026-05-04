@@ -58,6 +58,16 @@ caseRoutes.post("/", async (c) => {
 	const parsed = CreateCaseBody.safeParse(await c.req.json().catch(() => null));
 	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 	const result = await c.var.mailboxStub.createCase(parsed.data);
+	// Dispatch AI co-pilot summary generation in the background when the
+	// case has a linked email (issue #127). createCase marks
+	// summary_status='pending' on the row in the same transaction; this
+	// `waitUntil` resolves it to 'ready' or 'failed'. Cases without a
+	// linked email leave both summary columns NULL — the UI hides the card.
+	if (parsed.data.emailId) {
+		c.executionCtx.waitUntil(
+			c.var.mailboxStub.generateCaseSummary(result.id),
+		);
+	}
 	return c.json(result, 201);
 });
 
@@ -115,6 +125,12 @@ caseRoutes.post("/report-phish", async (c) => {
 		observables,
 		score: verdictScore,
 	});
+
+	// Async AI co-pilot summary generation (issue #127). createCase
+	// marked summary_status='pending'; this waitUntil-dispatched task
+	// resolves it to 'ready' or 'failed' so the case-detail page can
+	// poll while the analyst is reviewing the case.
+	c.executionCtx.waitUntil(c.var.mailboxStub.generateCaseSummary(id));
 
 	// Reputation penalty on the sender so the pipeline flags future mail.
 	if (email.sender) {

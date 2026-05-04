@@ -15,6 +15,7 @@
  */
 
 import {
+	DEFAULT_CLASSIFIER_MODEL,
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
 } from "../../shared/mailbox-settings";
@@ -210,4 +211,76 @@ export async function verifyDraft(
 
 function normalizeWhitespace(s: string): string {
 	return s.replace(/\s+/g, " ").trim();
+}
+
+// ── Case Co-pilot Summary ──────────────────────────────────────────
+
+const CASE_SUMMARY_PROMPT = `You are a security analyst writing a brief verdict-reasoning summary for a phishing investigation case.
+
+You will receive an email's metadata and body excerpt. Produce 2-3 short sentences in plain English explaining why this email looks suspicious or benign — what an analyst should notice. Reference concrete signals (sender pattern, urgency cues, suspicious links, brand impersonation, financial requests, etc.) when present.
+
+RULES:
+1. Output ONLY the summary text. No preamble ("Here is the summary:"), no bullet lists, no markdown headings.
+2. 2-3 sentences total. Not a paragraph essay.
+3. Speak directly to the analyst ("This email…", "The sender…"), not in the third person about the case.
+4. If signals are weak, say so — do not fabricate certainty.
+5. Do not repeat the subject verbatim or quote large chunks of the body.`;
+
+export interface SummarizeCaseInput {
+	subject: string;
+	sender: string;
+	bodyHtml: string | null | undefined;
+	score?: number | null;
+}
+
+/**
+ * AI co-pilot summary for a case (issue #127).
+ *
+ * Produces a 2-3 sentence verdict-reasoning string from a single linked
+ * email's subject, sender, and body excerpt. Returns null on AI failure
+ * so callers can persist 'failed' status; throws are not used because
+ * generation runs in a `waitUntil` background task and a thrown error
+ * would just orphan the case in 'pending'.
+ */
+export async function summarizeCase(
+	ai: Ai,
+	input: SummarizeCaseInput,
+	options: { model?: string; maxBodyChars?: number } = {},
+): Promise<string | null> {
+	const subject = input.subject?.trim() || "(no subject)";
+	const sender = input.sender?.trim() || "(unknown sender)";
+	const bodyText = input.bodyHtml ? stripHtmlToText(input.bodyHtml).trim() : "";
+	const maxBodyChars = options.maxBodyChars ?? 4000;
+	const bodyExcerpt = bodyText.length > maxBodyChars
+		? `${bodyText.slice(0, maxBodyChars)}…`
+		: bodyText;
+
+	const scoreLine = typeof input.score === "number"
+		? `Verdict score: ${input.score}/100\n`
+		: "";
+
+	const userMessage = `${scoreLine}Sender: ${sender}\nSubject: ${subject}\n\nBody:\n${bodyExcerpt || "(empty)"}`;
+
+	const model = options.model?.trim() || DEFAULT_CLASSIFIER_MODEL;
+
+	try {
+		const response = (await ai.run(
+			model as Parameters<typeof ai.run>[0],
+			{
+				messages: [
+					{ role: "system", content: CASE_SUMMARY_PROMPT },
+					{ role: "user", content: userMessage },
+				],
+				max_tokens: 320,
+				temperature: 0.2,
+			},
+		)) as { response?: string };
+
+		const summary = response?.response?.trim() ?? "";
+		if (!summary) return null;
+		return summary;
+	} catch (e) {
+		console.error("Case summarizer failed:", (e as Error).message);
+		return null;
+	}
 }

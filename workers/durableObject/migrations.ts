@@ -327,4 +327,17 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE cases ADD COLUMN score INTEGER;
         `,
 	},
+	{
+		// AI co-pilot summary on case detail (issue #127). `summary` holds
+		// the rendered text; `summary_status` is one of 'pending' | 'ready'
+		// | 'failed', or NULL when no summary was requested (manual API
+		// create with no linked email, or pre-#127 rows). Forward-only
+		// ALTERs; existing rows leave both columns NULL and the UI hides
+		// the card.
+		name: "14_cases_summary",
+		sql: `
+            ALTER TABLE cases ADD COLUMN summary TEXT;
+            ALTER TABLE cases ADD COLUMN summary_status TEXT;
+        `,
+	},
 ];
