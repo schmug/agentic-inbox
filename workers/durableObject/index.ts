@@ -12,6 +12,7 @@ import type { Env } from "../types";
 import { applyMigrations, mailboxMigrations } from "./migrations";
 import { attachmentObjectKey } from "../lib/attachments";
 import { computeVerdictMix } from "../lib/dashboard-aggregation";
+import { summarizeCase } from "../lib/ai";
 
 /**
  * SQL expression to normalize email subjects by stripping common
@@ -1300,6 +1301,12 @@ export class MailboxDO extends DurableObject<Env> {
 	}) {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
+		// AI co-pilot summary (issue #127): mark 'pending' at creation
+		// time when there's a linked email so the route handler can
+		// dispatch `generateCaseSummary` via `waitUntil` and the frontend
+		// can show a loading state. Without an emailId we leave both
+		// summary columns NULL — the UI hides the card.
+		const summaryStatus = input.emailId ? "pending" : null;
 		this.db
 			.insert(schema.cases)
 			.values({
@@ -1312,6 +1319,8 @@ export class MailboxDO extends DurableObject<Env> {
 				shared_to_hub: 0,
 				hub_event_uuid: null,
 				score: input.score ?? null,
+				summary: null,
+				summary_status: summaryStatus,
 			})
 			.run();
 		if (input.emailId) {
@@ -1398,6 +1407,70 @@ export class MailboxDO extends DurableObject<Env> {
 			.values({ id, case_id: caseId, kind, value })
 			.run();
 		return { id };
+	}
+
+	/**
+	 * Generate the AI co-pilot summary for a case (issue #127).
+	 *
+	 * Designed to be invoked from a route's `c.executionCtx.waitUntil`
+	 * after `createCase` returns, so the user-facing response stays
+	 * fast. Resolves the linked email (first one — multi-email cases
+	 * are summarized from the originating message), runs the AI
+	 * summarizer, and persists the result with a terminal
+	 * `summary_status` of `'ready'` or `'failed'`. If the case has
+	 * been deleted between dispatch and execution, this no-ops.
+	 */
+	async generateCaseSummary(caseId: string): Promise<void> {
+		const row = this.db
+			.select()
+			.from(schema.cases)
+			.where(eq(schema.cases.id, caseId))
+			.get();
+		if (!row) return;
+
+		const linked = this.db
+			.select()
+			.from(schema.caseEmails)
+			.where(eq(schema.caseEmails.case_id, caseId))
+			.limit(1)
+			.get();
+
+		const finalize = (status: "ready" | "failed", summary: string | null) => {
+			this.db
+				.update(schema.cases)
+				.set({
+					summary,
+					summary_status: status,
+					updated_at: new Date().toISOString(),
+				})
+				.where(eq(schema.cases.id, caseId))
+				.run();
+		};
+
+		if (!linked) {
+			finalize("failed", null);
+			return;
+		}
+
+		const email = await this.getEmail(linked.email_id);
+		if (!email) {
+			finalize("failed", null);
+			return;
+		}
+
+		const summary = await summarizeCase(this.env.AI, {
+			subject: email.subject ?? "",
+			sender: email.sender ?? "",
+			bodyHtml: email.body ?? null,
+			score: typeof row.score === "number" ? row.score : null,
+		});
+
+		if (!summary) {
+			finalize("failed", null);
+			return;
+		}
+
+		finalize("ready", summary);
 	}
 
 	async getDmarcSummary(domain: string) {

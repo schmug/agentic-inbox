@@ -116,10 +116,25 @@ function makeStub(emails: Record<string, FakeEmailRow>) {
 		},
 		async updateCase() { /* no-op for these tests */ },
 		async flagSender() { /* no-op */ },
+		// AI co-pilot summary dispatch (issue #127). The route fires
+		// this via `c.executionCtx.waitUntil` after createCase; the
+		// score-plumbing tests don't care about the summary outcome,
+		// so the stub just no-ops.
+		async generateCaseSummary() { /* no-op */ },
 	};
 
 	return { stub, cases, createCalls };
 }
+
+// Minimal ExecutionContext stub. Hono's `app.request` accepts the ctx
+// as its 4th argument; routes that fire `c.executionCtx.waitUntil(...)`
+// (the report-phish summary dispatch in issue #127) require it to be
+// present. We don't await the dispatched promise — the test only
+// asserts the synchronous response shape.
+const fakeCtx = {
+	waitUntil: () => {},
+	passThroughOnException: () => {},
+} as unknown as ExecutionContext;
 
 function makeApp(stub: ReturnType<typeof makeStub>["stub"]) {
 	// Mount caseRoutes under the same prefix the real app uses so the
@@ -179,6 +194,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				body: JSON.stringify({ emailId: "em_1" }),
 			},
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { caseId: string };
@@ -213,6 +229,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				body: JSON.stringify({ emailId: "em_unscored" }),
 			},
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(201);
 		const body = (await res.json()) as { caseId: string };
@@ -236,6 +253,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 			"/api/v1/mailboxes/m1/cases/case_1",
 			undefined,
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
@@ -259,6 +277,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 			"/api/v1/mailboxes/m1/cases/case_1",
 			undefined,
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
@@ -282,6 +301,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				}),
 			},
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(201);
 		expect(createCalls).toHaveLength(1);
@@ -303,6 +323,7 @@ describe("workers/routes/cases — issue #126 per-case score", () => {
 				}),
 			},
 			fakeEnv,
+			fakeCtx,
 		);
 		expect(res.status).toBe(400);
 		expect(createCalls).toHaveLength(0);

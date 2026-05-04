@@ -154,6 +154,14 @@ export const cases = sqliteTable("cases", {
 	// don't carry a scored verdict (manual API create without `score`,
 	// or pre-#126 rows) leave it NULL.
 	score: integer("score"),
+	// AI-generated plain-language verdict-reasoning summary (issue #127).
+	// `summary_status` tracks generation lifecycle: 'pending' while the
+	// async waitUntil-dispatched task runs, 'ready' once persisted,
+	// 'failed' on terminal error. NULL means no summary was ever
+	// requested (manual API create with no linked email, or pre-#127
+	// rows). The frontend hides the card when status is NULL.
+	summary: text("summary"),
+	summary_status: text("summary_status"),
 });
 
 export const caseEmails = sqliteTable(

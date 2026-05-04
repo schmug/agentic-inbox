@@ -6,8 +6,10 @@ import {
 	ArrowLeftIcon,
 	BriefcaseIcon,
 	ShieldWarningIcon,
+	SparkleIcon,
+	WarningIcon,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import ScoreRing from "~/components/phishsoc/ScoreRing";
 import VerdictPill from "~/components/phishsoc/VerdictPill";
@@ -16,6 +18,7 @@ import { useFeedback } from "~/lib/feedback";
 
 interface CaseEmail { case_id: string; email_id: string; }
 interface CaseObservable { id: string; kind: string; value: string; }
+type SummaryStatus = "pending" | "ready" | "failed" | null;
 interface CaseRecord {
 	id: string;
 	created_at: string;
@@ -30,9 +33,26 @@ interface CaseRecord {
 	// pre-#126 rows) leave it null — render a muted "—" instead of the
 	// ring.
 	score: number | null;
+	// AI co-pilot summary (issue #127). `summary_status` lifecycle:
+	// 'pending' → 'ready' | 'failed'. NULL means no summary was
+	// requested for this case (manual API create with no linked email,
+	// or pre-#127 rows) — UI hides the card. Frontend polls while
+	// status is 'pending' and stops on any terminal value.
+	summary?: string | null;
+	summary_status?: SummaryStatus;
 	emails: CaseEmail[];
 	observables: CaseObservable[];
 }
+
+// Polling cadence for the co-pilot summary card while
+// `summary_status === 'pending'`. The summarizer is a single
+// Workers AI call against a small instruct model — typically
+// resolves in well under 30s. We cap at 60s to bound the
+// polling cost on cases that get orphaned in 'pending' (e.g.
+// the DO restarted between createCase and the waitUntil
+// dispatch finishing).
+const SUMMARY_POLL_INTERVAL_MS = 2500;
+const SUMMARY_POLL_MAX_MS = 60_000;
 
 const OBSERVABLE_TONE: Record<string, "danger" | "suspect" | "info" | "muted"> = {
 	domain: "suspect",
@@ -78,6 +98,28 @@ export default function CaseDetailRoute() {
 	}, [mailboxId, caseId]);
 
 	useEffect(() => { load(); }, [load]);
+
+	// Poll for the AI co-pilot summary (issue #127) while it's still
+	// generating. Stops on any terminal status ('ready' / 'failed') or
+	// when it's been pending past SUMMARY_POLL_MAX_MS (orphaned-row
+	// safeguard). Restarts when caseId changes.
+	const pollStartedAtRef = useRef<number | null>(null);
+	useEffect(() => {
+		pollStartedAtRef.current = null;
+	}, [caseId]);
+	useEffect(() => {
+		if (data?.summary_status !== "pending") {
+			pollStartedAtRef.current = null;
+			return;
+		}
+		if (pollStartedAtRef.current === null) {
+			pollStartedAtRef.current = Date.now();
+		}
+		const elapsed = Date.now() - pollStartedAtRef.current;
+		if (elapsed >= SUMMARY_POLL_MAX_MS) return;
+		const handle = setTimeout(load, SUMMARY_POLL_INTERVAL_MS);
+		return () => clearTimeout(handle);
+	}, [data?.summary_status, data?.updated_at, load]);
 
 	const updateStatus = async (status: string) => {
 		if (!mailboxId || !caseId) return;
@@ -225,10 +267,18 @@ export default function CaseDetailRoute() {
 						</div>
 					)}
 
-					{/* Co-pilot summary card intentionally omitted until AI
-					    summarization is wired to cases. A "Coming soon"
-					    placeholder read as a real product surface to operators
-					    — empty space is more honest. */}
+					{/* AI co-pilot summary (issue #127). Renders when
+					    summary_status is non-null (i.e. summary was requested
+					    for this case). Hidden when null/undefined to preserve
+					    the empty-state honesty: cases without a linked email
+					    don't get a placeholder card. */}
+					{data.summary_status && (
+						<CoPilotSummaryCard
+							status={data.summary_status}
+							summary={data.summary ?? null}
+							onRetry={load}
+						/>
+					)}
 				</div>
 
 				{/* Right column: observables / IOCs + status controls */}
@@ -300,6 +350,61 @@ export default function CaseDetailRoute() {
 					    fabricated. */}
 				</div>
 			</div>
+		</div>
+	);
+}
+
+interface CoPilotSummaryCardProps {
+	status: Exclude<SummaryStatus, null>;
+	summary: string | null;
+	onRetry: () => void;
+}
+
+function CoPilotSummaryCard({ status, summary, onRetry }: CoPilotSummaryCardProps) {
+	return (
+		<div className="pp-card p-5" data-testid="copilot-summary-card">
+			<div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">
+				<SparkleIcon size={12} weight="fill" />
+				<span>Co-pilot summary</span>
+			</div>
+			{status === "ready" && summary ? (
+				<div
+					className="text-[13px] text-ink-2 whitespace-pre-wrap leading-relaxed"
+					data-testid="copilot-summary-ready"
+				>
+					{summary}
+				</div>
+			) : status === "pending" ? (
+				<div
+					className="flex items-center gap-2 text-[12.5px] text-ink-3"
+					data-testid="copilot-summary-pending"
+					role="status"
+					aria-live="polite"
+				>
+					<span
+						className="inline-block h-2 w-2 rounded-full bg-ink-3 animate-pulse"
+						aria-hidden="true"
+					/>
+					<span>Generating summary…</span>
+				</div>
+			) : (
+				<div
+					className="space-y-2 text-[12.5px] text-ink-3"
+					data-testid="copilot-summary-failed"
+				>
+					<div className="flex items-start gap-1.5 text-danger">
+						<WarningIcon size={13} weight="fill" className="mt-[2px] shrink-0" />
+						<span>Couldn't generate a summary for this case.</span>
+					</div>
+					<button
+						type="button"
+						onClick={onRetry}
+						className="text-[12px] text-ink-2 underline underline-offset-2 hover:text-ink"
+					>
+						Refresh
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
