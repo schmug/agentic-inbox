@@ -1,16 +1,16 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 //
-// Regression test for #186 — "Ask co-pilot" no-op on org-level routes.
+// Coverage for the org-scope co-pilot wiring (#198), which replaces the
+// disabled-state fallback added in #186.
 //
-// The Shell topbar's "Ask co-pilot" button used to render unconditionally on
-// every page, but the agent panel only mounts inside `/mailbox/:mailboxId/*`
-// routes (mailbox.tsx is the only caller passing `rightPanel={<AgentSidebar
-// />}`). Clicking the button on `/`, `/settings`, `/mailboxes`, `/domains`,
-// or `/domains/:domain` toggled internal state but produced no visible change.
-//
-// Until an org-scope co-pilot ships, the trigger must be `disabled` (with a
-// tooltip explaining why) when the current route has no `mailboxId`. The
-// per-mailbox route still opens the panel.
+// Before #198: the Shell topbar's "Ask co-pilot" button was `disabled` on
+// every org-level route (`/`, `/settings`, `/mailboxes`, `/domains`,
+// `/domains/:domain`) because the panel only mounted inside
+// `/mailbox/:mailboxId/*` (mailbox.tsx was the only caller passing
+// `rightPanel`). #198 wires Shell to mount a sibling `OrgAgentPanel`
+// whenever no `rightPanel` is supplied AND there's no `mailboxId`, so the
+// button opens a working org-scope panel on those routes. The per-mailbox
+// route is unchanged.
 
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -42,11 +42,32 @@ vi.mock("~/queries/domains", () => ({
 	}),
 }));
 
+vi.mock("~/queries/org", () => ({
+	useOrgOverview: () => ({
+		data: {
+			now: "2026-05-03T00:00:00Z",
+			threatsBlocked24h: 12,
+			threatsBlocked7d: 84,
+			openCasesTotal: 3,
+			mailboxesCount: 4,
+			domainsCount: 2,
+			verdictMix: { safe: 100, suspicious: 5, phishing: 2, spam: 8, bec: 0 },
+			verdictMix7d: { safe: 700, suspicious: 30, phishing: 12, spam: 50, bec: 1 },
+			topThreats: [{ category: "phishing", count: 7 }],
+			pipelineHealth: { successRate24h: 0.99, p95Ms: 1200, runs24h: 250 },
+			hubContributions24h: 5,
+		},
+		isLoading: false,
+		isError: false,
+	}),
+}));
+
 import Shell from "~/components/phishsoc/Shell";
 import { useUIStore } from "~/hooks/useUIStore";
 import { renderWithProviders } from "./test-utils";
 
 const RIGHT_PANEL_TEST_ID = "agent-panel-content";
+const ORG_PANEL_TEST_ID = "org-agent-panel";
 
 function RightPanelStub() {
 	return <div data-testid={RIGHT_PANEL_TEST_ID}>agent panel content</div>;
@@ -54,7 +75,8 @@ function RightPanelStub() {
 
 // Renders Shell mounted at the route patterns the app actually uses, so
 // `useParams<{ mailboxId }>()` resolves the same way it does in production.
-// Org-level routes pass no `rightPanel`; mailbox-level routes do.
+// Org-level routes pass no `rightPanel` (Shell falls back to OrgAgentPanel);
+// mailbox-level routes pass the per-mailbox AgentSidebar stub.
 function renderAtRoute(initialEntry: string) {
 	return renderWithProviders(
 		<Routes>
@@ -99,6 +121,14 @@ function renderAtRoute(initialEntry: string) {
 				}
 			/>
 			<Route
+				path="/domains/:domain/settings"
+				element={
+					<Shell>
+						<div data-testid="main-content">main</div>
+					</Shell>
+				}
+			/>
+			<Route
 				path="/mailbox/:mailboxId/*"
 				element={
 					<Shell rightPanel={<RightPanelStub />}>
@@ -113,8 +143,10 @@ function renderAtRoute(initialEntry: string) {
 
 beforeEach(() => {
 	useUIStore.setState({ isAgentPanelOpen: false });
+	// xl+ in-flow render — keeps the slot a plain `<aside>` rather than a
+	// base-ui Dialog portal, which simplifies queries.
 	window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-		matches: false,
+		matches: query === "(min-width: 1280px)",
 		media: query,
 		onchange: null,
 		addListener: vi.fn(),
@@ -129,49 +161,65 @@ afterEach(() => {
 	useUIStore.setState({ isAgentPanelOpen: false });
 });
 
-describe("Shell 'Ask co-pilot' button — org-level routes (#186)", () => {
+describe("Shell 'Ask co-pilot' button — org-level routes (#198)", () => {
 	const orgRoutes: Array<[label: string, path: string]> = [
 		["org overview /", "/"],
 		["org settings /settings", "/settings"],
 		["mailboxes list /mailboxes", "/mailboxes"],
 		["domains list /domains", "/domains"],
 		["domain detail /domains/:domain", "/domains/example.com"],
+		[
+			"domain settings /domains/:domain/settings",
+			"/domains/example.com/settings",
+		],
 	];
 
 	for (const [label, path] of orgRoutes) {
-		it(`is disabled with a 'pick a mailbox' tooltip on ${label}`, () => {
+		it(`is enabled and advertises panel state on ${label}`, () => {
 			renderAtRoute(path);
 			const trigger = screen.getByRole("button", {
 				name: /ask co-?pilot/i,
 			});
-			expect(trigger).toBeDisabled();
-			expect(trigger).toHaveAttribute(
-				"title",
-				"Pick a mailbox to chat with the agent",
-			);
-			// Without a mailbox, aria-expanded shouldn't advertise an
-			// open/closed panel state — the panel can't open here at all.
-			expect(trigger).not.toHaveAttribute("aria-expanded");
+			expect(trigger).not.toBeDisabled();
+			expect(trigger).not.toHaveAttribute("title");
+			// Closed-but-enabled — aria-expanded should be advertised so AT
+			// announces the state once the panel can actually open.
+			expect(trigger).toHaveAttribute("aria-expanded", "false");
 		});
 
-		it(`clicking it on ${label} does not toggle the agent panel state`, async () => {
+		it(`clicking it on ${label} mounts the org-scope co-pilot`, async () => {
 			const user = userEvent.setup();
 			renderAtRoute(path);
 			const trigger = screen.getByRole("button", {
 				name: /ask co-?pilot/i,
 			});
 			expect(useUIStore.getState().isAgentPanelOpen).toBe(false);
-			// userEvent.click respects `disabled` and skips the click,
-			// so the store stays untouched — exactly the behavior we want.
+			expect(screen.queryByTestId(ORG_PANEL_TEST_ID)).not.toBeInTheDocument();
 			await user.click(trigger);
-			expect(useUIStore.getState().isAgentPanelOpen).toBe(false);
-			expect(screen.queryByTestId(RIGHT_PANEL_TEST_ID)).not.toBeInTheDocument();
+			expect(useUIStore.getState().isAgentPanelOpen).toBe(true);
+			expect(screen.getByTestId(ORG_PANEL_TEST_ID)).toBeInTheDocument();
+			// The per-mailbox panel must NOT be mounted on org routes.
+			expect(
+				screen.queryByTestId(RIGHT_PANEL_TEST_ID),
+			).not.toBeInTheDocument();
+			expect(trigger).toHaveAttribute("aria-expanded", "true");
 		});
 	}
+
+	it("the org-scope panel header is visibly distinct from the per-mailbox agent's", async () => {
+		const user = userEvent.setup();
+		renderAtRoute("/");
+		await user.click(screen.getByRole("button", { name: /ask co-?pilot/i }));
+		const panel = screen.getByTestId(ORG_PANEL_TEST_ID);
+		// Org badge + "Org Co-pilot" label, not the per-mailbox "AI" / "Email Agent".
+		expect(panel).toHaveTextContent(/Org/);
+		expect(panel).toHaveTextContent(/Org Co-pilot/);
+		expect(panel).not.toHaveTextContent(/Email Agent/);
+	});
 });
 
 describe("Shell 'Ask co-pilot' button — mailbox-level route still works", () => {
-	it("is enabled on /mailbox/:mailboxId/* and opens the panel on click", async () => {
+	it("is enabled on /mailbox/:mailboxId/* and opens the per-mailbox panel on click", async () => {
 		const user = userEvent.setup();
 		renderAtRoute("/mailbox/m1/dashboard");
 		const trigger = screen.getByRole("button", { name: /ask co-?pilot/i });
@@ -180,7 +228,9 @@ describe("Shell 'Ask co-pilot' button — mailbox-level route still works", () =
 		expect(trigger).toHaveAttribute("aria-expanded", "false");
 		await user.click(trigger);
 		expect(useUIStore.getState().isAgentPanelOpen).toBe(true);
+		// Per-mailbox stub mounts; org-scope panel does NOT.
 		expect(screen.getByTestId(RIGHT_PANEL_TEST_ID)).toBeInTheDocument();
+		expect(screen.queryByTestId(ORG_PANEL_TEST_ID)).not.toBeInTheDocument();
 		expect(trigger).toHaveAttribute("aria-expanded", "true");
 	});
 });
