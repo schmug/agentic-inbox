@@ -137,6 +137,32 @@ app.get("/api/v1/config", (c) => {
 	return c.json({ domains, emailAddresses });
 });
 
+// Authenticated-user identity (#204). The Cloudflare Access middleware in
+// `workers/app.ts` has already verified the JWT and admitted the request;
+// the `Cf-Access-Authenticated-User-Email` header is set by Access on the
+// admitted request, so reading it here is safe — no second `jwtVerify`
+// pass and no hand-rolled crypto. The Shell sidebar account menu consumes
+// `{ email }` to render the signed-in identity and the sign-out link.
+//
+// Dev mode: the auth middleware short-circuits when `import.meta.env.DEV`
+// is true (Vite dev server has no Access in front of it), so the header
+// is absent. Mirror that branch with a stable stub identity rather than
+// returning 401 — otherwise `npm run dev` shows a broken account menu.
+app.get("/api/v1/me", (c) => {
+	const headerEmail = c.req.header("cf-access-authenticated-user-email");
+	if (headerEmail) {
+		return c.json({ email: headerEmail });
+	}
+	if (import.meta.env.DEV) {
+		return c.json({ email: "dev@local" });
+	}
+	// In production the Access middleware would have already 403'd a
+	// request without a verified JWT; reaching this branch implies the
+	// request was admitted but Access didn't populate the header — treat
+	// as unauthenticated rather than guess.
+	return c.json({ error: "not authenticated" }, 401);
+});
+
 // Workers AI text-generation model list (#64). KV-cached read-through to
 // the Cloudflare API; falls back to the curated TEXT_MODELS constant when
 // CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID aren't configured or the

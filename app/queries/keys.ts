@@ -42,4 +42,5 @@ export const queryKeys = {
 	},
 	config: ["config"] as const,
 	textModels: ["ai", "text-models"] as const,
+	me: ["me"] as const,
 };
