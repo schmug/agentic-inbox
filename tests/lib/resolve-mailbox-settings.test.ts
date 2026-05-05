@@ -726,6 +726,31 @@ describe("stripDefaultEqual", () => {
 		expect((stripped.security as { enabled: boolean }).enabled).toBe(true);
 	});
 
+	it("still drops a security block at default after the #219 fields are added", () => {
+		// Issue #219 added confidence_aware_actions + min_confidence_for_quarantine
+		// to DEFAULT_SECURITY_SETTINGS. A fresh-defaults POST/PUT must continue
+		// to strip the whole security block — adding fields to the default
+		// object is sufficient because stripDefaultEqual deep-equals.
+		const stripped = stripDefaultEqual({ security: { ...DEFAULT_SECURITY_SETTINGS } });
+		expect((stripped as Record<string, unknown>).security).toBeUndefined();
+	});
+
+	it("keeps a security block when confidence_aware_actions is overridden to true", () => {
+		const stripped = stripDefaultEqual({
+			security: { ...DEFAULT_SECURITY_SETTINGS, confidence_aware_actions: true },
+		});
+		expect(stripped.security).toBeDefined();
+		expect((stripped.security as { confidence_aware_actions: boolean }).confidence_aware_actions).toBe(true);
+	});
+
+	it("keeps a security block when min_confidence_for_quarantine is overridden to a non-default value", () => {
+		const stripped = stripDefaultEqual({
+			security: { ...DEFAULT_SECURITY_SETTINGS, min_confidence_for_quarantine: 0.8 },
+		});
+		expect(stripped.security).toBeDefined();
+		expect((stripped.security as { min_confidence_for_quarantine: number }).min_confidence_for_quarantine).toBe(0.8);
+	});
+
 	it("preserves per-mailbox-only fields (fromName, signature) untouched", () => {
 		const stripped = stripDefaultEqual({
 			fromName: "Daisy",

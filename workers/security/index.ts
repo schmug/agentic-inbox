@@ -25,7 +25,7 @@ import { getMailboxStub } from "../lib/email-helpers";
 import { parseAuthResults, extractReceivedFromIp, scoreAuth } from "./auth";
 import { classifyEmail, scoreClassification } from "./classification";
 import { extractUrls, scoreUrls } from "./urls";
-import { aggregateVerdict, type FinalVerdict } from "./verdict";
+import { aggregateVerdict, applyConfidenceDemote, type FinalVerdict } from "./verdict";
 import { resolveMailboxSettings } from "../lib/mailbox-settings";
 import { checkUrlAgainstFeeds, type FeedMatch } from "../intel/feeds";
 import { evaluateTriage, type IntelMatchInfo } from "./triage";
@@ -290,6 +290,17 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 		if (settings.learning_mode && (v.action === "quarantine" || v.action === "block")) {
 			v = { ...v, action: "tag" };
 		}
+		// Confidence-aware action mapping (issue #219). Evaluated against the
+		// post-boost state so an intel/off-hours bump that pushed the score
+		// over the quarantine threshold can still be demoted when confidence
+		// is low. No-op when the toggle is off (default) or the verdict
+		// isn't a quarantine; learning_mode ran first so a capped verdict is
+		// already `tag` and falls through unchanged.
+		v = applyConfidenceDemote(
+			v,
+			settings.confidence_aware_actions,
+			settings.min_confidence_for_quarantine,
+		);
 		return v;
 	});
 	const intelBoost = intelMatch?.confirmed ? 20 : intelMatch ? 5 : 0;
