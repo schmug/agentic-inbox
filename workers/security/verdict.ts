@@ -151,6 +151,40 @@ export function aggregateVerdict(
 }
 
 /**
+ * Issue #219: confidence-aware action mapping. Demotes a post-aggregation
+ * `quarantine` verdict to `tag` when the aggregate confidence is strictly
+ * below `minConfidence`. Pure function — does NOT mutate `verdict`.
+ *
+ * Applies only to the `quarantine` action: `block`, `tag`, and `allow` are
+ * left untouched (the issue scopes this to the high-score-low-confidence
+ * demote case; the symmetric "low-score-high-confidence" path is already
+ * today's behaviour). Triage-tier short-circuit verdicts carry
+ * `confidence: 1` so the threshold check naturally exempts them — the
+ * pipeline also returns early on the short-circuit branch.
+ *
+ * The demote signal is appended to `signals` and the explanation is rebuilt
+ * from the first four signals, mirroring `applyBoost` in
+ * `workers/security/index.ts`.
+ */
+export function applyConfidenceDemote(
+	verdict: FinalVerdict,
+	enabled: boolean,
+	minConfidence: number,
+): FinalVerdict {
+	if (!enabled) return verdict;
+	if (verdict.action !== "quarantine") return verdict;
+	if (verdict.confidence >= minConfidence) return verdict;
+	const reason = `confidence-aware demote (${verdict.confidence} < ${minConfidence})`;
+	const signals = [...verdict.signals, reason];
+	return {
+		...verdict,
+		action: "tag",
+		signals,
+		explanation: signals.slice(0, 4).join("; "),
+	};
+}
+
+/**
  * Combine per-scorer confidences into a single value in [0,1].
  *
  * v1 (issue #105): score-weighted average using `|score_i|` as the weight.

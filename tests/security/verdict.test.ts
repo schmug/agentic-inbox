@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { aggregateVerdict, DEFAULT_THRESHOLDS } from "../../workers/security/verdict";
+import {
+	aggregateVerdict,
+	applyConfidenceDemote,
+	DEFAULT_THRESHOLDS,
+	type FinalVerdict,
+} from "../../workers/security/verdict";
 import { DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
 import type { AuthVerdict } from "../../workers/security/auth";
 import { scoreClassification, type ClassificationResult } from "../../workers/security/classification";
@@ -235,5 +240,76 @@ describe("aggregateVerdict", () => {
 		const lenient = aggregateVerdict(base, { tag: 90, quarantine: 95, block: 99 });
 		expect(strict.action).not.toBe("allow");
 		expect(lenient.action).toBe("allow");
+	});
+});
+
+describe("applyConfidenceDemote (issue #219)", () => {
+	const baseQuarantine: FinalVerdict = {
+		action: "quarantine",
+		score: 65,
+		confidence: 0.45,
+		explanation: "auth fail; suspicious url",
+		auth: { spf: "fail", dkim: "fail", dmarc: "fail" },
+		classification: { label: "suspicious", confidence: 0.4, reasoning: "" },
+		signals: ["auth fail", "suspicious url"],
+	};
+
+	it("is a no-op when the toggle is disabled", () => {
+		const out = applyConfidenceDemote(baseQuarantine, false, 0.6);
+		expect(out).toBe(baseQuarantine);
+	});
+
+	it("demotes quarantine to tag and surfaces a signal when confidence is below threshold", () => {
+		const out = applyConfidenceDemote(baseQuarantine, true, 0.6);
+		expect(out.action).toBe("tag");
+		expect(out.score).toBe(baseQuarantine.score); // score is unchanged
+		expect(out.signals).toEqual([
+			"auth fail",
+			"suspicious url",
+			"confidence-aware demote (0.45 < 0.6)",
+		]);
+		expect(out.explanation).toContain("confidence-aware demote (0.45 < 0.6)");
+	});
+
+	it("leaves quarantine alone when confidence meets the threshold (strict <)", () => {
+		const equalConf = { ...baseQuarantine, confidence: 0.6 };
+		const out = applyConfidenceDemote(equalConf, true, 0.6);
+		expect(out).toBe(equalConf);
+	});
+
+	it("leaves quarantine alone when confidence is above the threshold", () => {
+		const highConf = { ...baseQuarantine, confidence: 0.9 };
+		const out = applyConfidenceDemote(highConf, true, 0.6);
+		expect(out).toBe(highConf);
+	});
+
+	it("does not touch block, tag, or allow actions even with low confidence", () => {
+		for (const action of ["block", "tag", "allow"] as const) {
+			const v: FinalVerdict = { ...baseQuarantine, action, confidence: 0.1 };
+			const out = applyConfidenceDemote(v, true, 0.6);
+			expect(out.action).toBe(action);
+			expect(out).toBe(v);
+		}
+	});
+
+	it("does not mutate the input verdict (returns a fresh object)", () => {
+		const out = applyConfidenceDemote(baseQuarantine, true, 0.6);
+		expect(out).not.toBe(baseQuarantine);
+		expect(baseQuarantine.action).toBe("quarantine");
+		expect(baseQuarantine.signals).toEqual(["auth fail", "suspicious url"]);
+	});
+
+	it("rebuilds explanation from the first four signals (mirrors applyBoost)", () => {
+		const many: FinalVerdict = {
+			...baseQuarantine,
+			signals: ["s1", "s2", "s3", "s4", "s5"],
+			explanation: "s1; s2; s3; s4",
+		};
+		const out = applyConfidenceDemote(many, true, 0.6);
+		// Demote signal is appended to the end → falls outside the first 4
+		// in the explanation; original signals dominate (acceptable, mirrors
+		// existing applyBoost behaviour).
+		expect(out.explanation).toBe("s1; s2; s3; s4");
+		expect(out.signals).toContain("confidence-aware demote (0.45 < 0.6)");
 	});
 });

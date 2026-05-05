@@ -86,6 +86,20 @@ export interface MailboxSecuritySettings {
 	attachment_policy: AttachmentPolicy;
 	/** Classifier-stage settings (issue #28). */
 	classification: ClassificationSettings;
+	/**
+	 * Issue #219: when true, post-aggregation verdicts whose `action` is
+	 * `quarantine` but whose `confidence` is below
+	 * `min_confidence_for_quarantine` are demoted to `tag` so operators can
+	 * review them rather than seeing a hard quarantine on a shaky verdict.
+	 * Defaults to false — existing mailboxes keep today's behaviour.
+	 */
+	confidence_aware_actions: boolean;
+	/**
+	 * Threshold in [0,1] used by `confidence_aware_actions`. A
+	 * post-aggregation `quarantine` whose confidence is strictly less than
+	 * this value is demoted to `tag`. Default 0.6.
+	 */
+	min_confidence_for_quarantine: number;
 }
 
 /**
@@ -109,4 +123,6 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	intel_auto_block: true,
 	attachment_policy: DEFAULT_ATTACHMENT_POLICY,
 	classification: DEFAULT_CLASSIFICATION_SETTINGS,
+	confidence_aware_actions: false,
+	min_confidence_for_quarantine: 0.6,
 };
