@@ -121,6 +121,8 @@ export interface Email {
 export interface SecurityVerdict {
 	action: "allow" | "tag" | "quarantine" | "block";
 	score: number;
+	/** Aggregate confidence in [0,1]. Optional: absent on verdicts persisted before #105. */
+	confidence?: number;
 	explanation: string;
 	auth: {
 		spf: string;

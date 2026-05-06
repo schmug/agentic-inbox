@@ -53,6 +53,9 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 						</span>
 					)}
 					<span className="text-xs text-ink-3 ml-1">score {verdict.score}/100</span>
+					{verdict.confidence != null && (
+						<span className="text-xs text-ink-3">· confidence {Math.round(verdict.confidence * 100)}%</span>
+					)}
 					<span className="ml-auto text-ink-3">
 						{expanded ? <CaretUpIcon size={16} /> : <CaretDownIcon size={16} />}
 					</span>
