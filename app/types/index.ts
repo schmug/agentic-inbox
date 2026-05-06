@@ -121,6 +121,9 @@ export interface Email {
 export interface SecurityVerdict {
 	action: "allow" | "tag" | "quarantine" | "block";
 	score: number;
+	/** Aggregate pipeline confidence (0–1). Optional: pre-#105 persisted
+	 * verdicts do not carry this field. UI renders "—" when absent. */
+	confidence?: number;
 	explanation: string;
 	auth: {
 		spf: string;

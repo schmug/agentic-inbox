@@ -66,6 +66,9 @@ interface CaseRecord {
 	// pre-#126 rows) leave it null — render a muted "—" instead of the
 	// ring.
 	score: number | null;
+	// Aggregate pipeline confidence (issue #220). Optional: pre-#105
+	// persisted verdicts don't carry this field; render "—" instead of 0%.
+	confidence?: number | null;
 	// AI co-pilot summary (issue #127). `summary_status` lifecycle:
 	// 'pending' → 'ready' | 'failed'. NULL means no summary was
 	// requested for this case (manual API create with no linked email,
@@ -218,20 +221,28 @@ export default function CaseDetailRoute() {
 			    without score, or pre-#126 rows) we render a muted "—" in the
 			    same slot rather than fabricating a value. */}
 			<div className="pp-card p-5 flex items-start gap-5">
-				{data.score != null ? (
-					<div className="shrink-0">
+				<div className="shrink-0 flex flex-col items-center gap-1">
+					{data.score != null ? (
 						<ScoreRing score={data.score} />
-					</div>
-				) : (
-					<div
-						className="shrink-0 inline-flex items-center justify-center rounded-full border border-line text-ink-3 pp-serif"
-						style={{ width: 80, height: 80, fontSize: 28 }}
-						aria-label="No score"
-						data-testid="case-score-empty"
+					) : (
+						<div
+							className="inline-flex items-center justify-center rounded-full border border-line text-ink-3 pp-serif"
+							style={{ width: 80, height: 80, fontSize: 28 }}
+							aria-label="No score"
+							data-testid="case-score-empty"
+						>
+							—
+						</div>
+					)}
+					<span
+						className="text-[11px] text-ink-3 pp-mono"
+						data-testid="case-confidence"
 					>
-						—
-					</div>
-				)}
+						{data.confidence != null
+							? `${Math.round(data.confidence * 100)}% conf.`
+							: "— conf."}
+					</span>
+				</div>
 				<div className="flex-1 min-w-0">
 					<div className="flex items-center gap-2 mb-1.5">
 						<VerdictPill tone={tone}>{statusLabel(data.status)}</VerdictPill>
