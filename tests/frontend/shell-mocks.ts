@@ -87,6 +87,8 @@ export function shellDashboardMock(
 export interface ShellDomainsMockOverrides {
 	useDomainStats?: () => QueryStub<unknown>;
 	useDomains?: () => QueryStub<unknown[]>;
+	useAddDomain?: () => unknown;
+	useRemoveDomain?: () => unknown;
 	[key: string]: unknown;
 }
 
@@ -96,12 +98,18 @@ export interface ShellDomainsMockOverrides {
  * — it's a route-level concern (home + domains-list) — so it's omitted from
  * the defaults. Tests that need it should pass an override; tests that
  * don't shouldn't have to think about it.
+ *
+ * `useAddDomain` and `useRemoveDomain` are domain-onboarding mutations (#181).
+ * The defaults are no-op stubs so route tests that don't exercise the
+ * add/remove flow don't need to configure them.
  */
 export function shellDomainsMock(
 	overrides: ShellDomainsMockOverrides = {},
 ): Record<string, unknown> {
 	return {
 		useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
+		useAddDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
+		useRemoveDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		...overrides,
 	};
 }

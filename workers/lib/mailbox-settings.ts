@@ -440,6 +440,10 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 		case "intel":
 			// No default for intel — only strip when the override is an empty object.
 			return deepEqual(value, {});
+		case "domains":
+			// Empty domains array is the default; strip it so absent-key semantics
+			// are preserved and the blob doesn't accumulate `"domains": []` on every write.
+			return Array.isArray(value) && value.length === 0;
 		default:
 			return false;
 	}
