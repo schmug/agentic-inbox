@@ -420,4 +420,15 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_tlsrpt_records_sending_mta_ip ON tlsrpt_records(sending_mta_ip);
         `,
 	},
+	{
+		// Aggregate pipeline confidence on the case row (issue #224).
+		// Copied from FinalVerdict.confidence at case-creation time so the
+		// case-detail title bar can render the value without joining back to
+		// the originating email. Forward-only ALTER; pre-#224 rows get NULL
+		// and the frontend renders "—".
+		name: "18_cases_confidence",
+		sql: `
+            ALTER TABLE cases ADD COLUMN confidence REAL;
+        `,
+	},
 ];
