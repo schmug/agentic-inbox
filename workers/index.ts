@@ -24,7 +24,7 @@ import {
 	resolveMailboxSettings,
 	stripDefaultEqual,
 } from "./lib/mailbox-settings";
-import { getOrgSettings, putOrgSettings } from "./lib/org-settings";
+import { getOrgSettings, putOrgSettings, clearOrgSettingsCache, orgSettingsKey } from "./lib/org-settings";
 import { OrgSettings } from "../shared/org-settings";
 import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
@@ -135,11 +135,61 @@ app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/hub", hubUiRoutes);
 
-app.get("/api/v1/config", (c) => {
+// Rejects strings that aren't registrable domains (no protocol, path, @, single label).
+function isValidRegistrableDomain(d: string): boolean {
+	if (!d || d.length > 253) return false;
+	if (d.includes("://") || d.includes("/") || d.includes("@") || d.includes(" ")) return false;
+	const labels = d.split(".");
+	if (labels.length < 2) return false;
+	return labels.every((l) => l.length > 0 && /^[a-zA-Z0-9-]+$/.test(l));
+}
+
+app.get("/api/v1/config", async (c) => {
 	const domainsRaw = c.env.DOMAINS || "";
-	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
+	const seedList = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
+	const orgSettings = await getOrgSettings(c.env);
+	const orgList = (orgSettings.domains as string[] | undefined) ?? [];
+	const seen = new Set<string>();
+	const domains: string[] = [];
+	for (const d of [...seedList, ...orgList]) {
+		const key = d.toLowerCase();
+		if (!seen.has(key)) { seen.add(key); domains.push(d); }
+	}
 	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
 	return c.json({ domains, emailAddresses });
+});
+
+app.post("/api/v1/org/domains", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown };
+	const domain = typeof body.domain === "string" ? body.domain.trim().toLowerCase() : "";
+	if (!isValidRegistrableDomain(domain)) {
+		return c.json({ error: "Invalid domain" }, 400);
+	}
+	const current = await getOrgSettings(c.env);
+	const existing = (current.domains as string[] | undefined) ?? [];
+	if (existing.some((d) => d.toLowerCase() === domain)) {
+		return c.json({ error: "Domain already exists" }, 409);
+	}
+	const updated = { ...current, domains: [...existing, domain] };
+	const stripped = stripDefaultEqual(updated as Record<string, unknown>);
+	await c.env.BUCKET.put(orgSettingsKey(), JSON.stringify(stripped));
+	clearOrgSettingsCache();
+	return c.json({ domain, domains: (stripped.domains as string[] | undefined) ?? [] }, 201);
+});
+
+app.delete("/api/v1/org/domains/:domain", async (c) => {
+	const target = decodeURIComponent(c.req.param("domain")!).toLowerCase();
+	const current = await getOrgSettings(c.env);
+	const existing = (current.domains as string[] | undefined) ?? [];
+	const next = existing.filter((d) => d.toLowerCase() !== target);
+	if (next.length === existing.length) {
+		return c.json({ error: "Domain not found" }, 404);
+	}
+	const updated = { ...current, domains: next };
+	const stripped = stripDefaultEqual(updated as Record<string, unknown>);
+	await c.env.BUCKET.put(orgSettingsKey(), JSON.stringify(stripped));
+	clearOrgSettingsCache();
+	return c.json({ domains: (stripped.domains as string[] | undefined) ?? [] });
 });
 
 // Authenticated-user identity (#204). The Cloudflare Access middleware in
