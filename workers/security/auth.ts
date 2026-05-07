@@ -204,19 +204,48 @@ export function parseAuthResults(rawHeaders: unknown, options: ParseAuthOptions 
  *     `Authentication-Results` header before the authentic one).
  *   - 0.2 — no `Authentication-Results` headers found at all (verdict is
  *     all-`none`); whatever we contributed has very little to back it up.
+ *
+ * `contributions` (issue #100): structured per-rule breakdown for the
+ * mitigations layer. Each entry carries the raw weight before the 30-cap so
+ * mitigations can zero out individual rule contributions without needing to
+ * know about the cap. The cap case (dmarc_fail + spf_fail + dkim_fail → raw
+ * 40, capped 30) never triggers `dmarc_pass_compensates_method_fail` because
+ * that mitigation only fires when dmarc=pass — so the delta computed from
+ * uncapped contributions is always correct in practice.
  */
-export function scoreAuth(verdict: AuthVerdict): { score: number; reasons: string[]; confidence: number } {
+export function scoreAuth(verdict: AuthVerdict): {
+	score: number;
+	reasons: string[];
+	confidence: number;
+	contributions: Array<{ scorer: "auth"; rule: string; weight: number; reason: string }>;
+} {
 	const reasons: string[] = [];
+	const contributions: Array<{ scorer: "auth"; rule: string; weight: number; reason: string }> = [];
 	let score = 0;
-	if (verdict.dmarc === "fail") { score += 20; reasons.push("DMARC failed"); }
-	if (verdict.spf === "fail" || verdict.spf === "softfail") { score += 10; reasons.push("SPF failed"); }
-	if (verdict.dkim === "fail") { score += 10; reasons.push("DKIM failed"); }
+	if (verdict.dmarc === "fail") {
+		score += 20;
+		reasons.push("DMARC failed");
+		contributions.push({ scorer: "auth", rule: "dmarc_fail", weight: 20, reason: "DMARC failed" });
+	}
+	if (verdict.spf === "fail" || verdict.spf === "softfail") {
+		score += 10;
+		reasons.push("SPF failed");
+		contributions.push({ scorer: "auth", rule: "spf_fail", weight: 10, reason: "SPF failed" });
+	}
+	if (verdict.dkim === "fail") {
+		score += 10;
+		reasons.push("DKIM failed");
+		contributions.push({ scorer: "auth", rule: "dkim_fail", weight: 10, reason: "DKIM failed" });
+	}
 	if (score > 30) score = 30;
-	if (verdict.dmarc === "pass") score -= 10;
+	if (verdict.dmarc === "pass") {
+		score -= 10;
+		contributions.push({ scorer: "auth", rule: "dmarc_pass", weight: -10, reason: "DMARC passed" });
+	}
 	const allNone =
 		verdict.spf === "none" && verdict.dkim === "none" && verdict.dmarc === "none";
 	const confidence = verdict.trusted ? 0.9 : allNone ? 0.2 : 0.5;
-	return { score, reasons, confidence };
+	return { score, reasons, confidence, contributions };
 }
 
 /**

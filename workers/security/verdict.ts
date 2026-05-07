@@ -22,6 +22,82 @@ import { scoreUrls } from "./urls";
 import { scoreReputation } from "./reputation";
 import { scoreAttachments } from "./attachments";
 
+/**
+ * A single named rule contribution from one scorer. Used by the mitigations
+ * layer (issue #100) to identify and rewrite specific contributions without
+ * touching the scorer itself.
+ *
+ * `weight` is the raw per-rule value before any scorer-internal capping. The
+ * mitigations pass computes a delta from the rewritten contributions and
+ * applies it to the post-sum, pre-clamp score.
+ *
+ * v1 coverage: only `scoreAuth` emits structured contributions. The remaining
+ * scorers will add breakdowns in the follow-up for #100.
+ */
+export interface ScorerContribution {
+	scorer: "auth" | "classification" | "urls" | "reputation" | "attachments";
+	rule: string;    // stable id, e.g. "spf_fail", "dkim_fail"
+	weight: number;  // raw per-rule value (not capped)
+	reason: string;  // matches the reasons[] string
+}
+
+/**
+ * Declarative mitigation: inspects the full `VerdictInputs` plus per-scorer
+ * contributions and returns a rewritten contribution list. The aggregator
+ * computes the score delta from the before/after sums and applies it before
+ * clamping. Mitigation names appear in `FinalVerdict.signals` with the
+ * `mitigated:` prefix so operator explanations stay auditable.
+ */
+export interface Mitigation {
+	name: string;
+	applies(inputs: VerdictInputs, contribs: ScorerContribution[]): boolean;
+	apply(contribs: ScorerContribution[]): ScorerContribution[];
+}
+
+/**
+ * Per-mailbox mitigation toggles. Each field corresponds to one named
+ * mitigation; absent or `true` means the mitigation is active, `false`
+ * disables it. Mirrors the `VerdictThresholds` pattern: operator-configurable,
+ * with defaults in `DEFAULT_MITIGATION_CONFIG`.
+ */
+export interface MitigationConfig {
+	/**
+	 * When DMARC=pass, zero out the SPF and DKIM per-method fail contributions.
+	 * A passing DMARC is itself the compensating control — the spec says SPF OR
+	 * DKIM aligning is sufficient, so a failing method alongside a passing
+	 * aggregate verdict should not add suspicion. Default: true (on by default).
+	 */
+	dmarc_pass_compensates_method_fail: boolean;
+}
+
+export const DEFAULT_MITIGATION_CONFIG: MitigationConfig = {
+	dmarc_pass_compensates_method_fail: true,
+};
+
+/**
+ * v1 mitigation: when DMARC=pass, the per-method SPF/DKIM fail contributions
+ * are zeroed out. DMARC alignment already proves either SPF or DKIM validated
+ * the sending domain — penalising the other method's raw result double-counts
+ * the failure and produces false positives on mailing-list and forwarded mail.
+ *
+ * Applied by `aggregateVerdict` before the [0,100] clamp, so the delta can
+ * push the score below the auth subtotal (legitimate mail scoring -10 net
+ * instead of today's +10 net for spf=fail dkim=fail dmarc=pass).
+ */
+export const DMARC_PASS_COMPENSATES_METHOD_FAIL: Mitigation = {
+	name: "dmarc_pass_compensates_method_fail",
+	applies(inputs) {
+		return inputs.auth.dmarc === "pass";
+	},
+	apply(contribs) {
+		return contribs.map((c) =>
+			c.scorer === "auth" && (c.rule === "spf_fail" || c.rule === "dkim_fail")
+				? { ...c, weight: 0 }
+				: c,
+		);
+	},
+};
+
 export type VerdictAction = "allow" | "tag" | "quarantine" | "block";
 
 export interface FinalVerdict {
@@ -88,6 +164,7 @@ export const DEFAULT_THRESHOLDS: VerdictThresholds = {
 export function aggregateVerdict(
 	inputs: VerdictInputs,
 	thresholds: VerdictThresholds = DEFAULT_THRESHOLDS,
+	mitigations: MitigationConfig = DEFAULT_MITIGATION_CONFIG,
 ): FinalVerdict {
 	const signals: string[] = [];
 	let score = 0;
@@ -126,6 +203,25 @@ export function aggregateVerdict(
 		score += att.score;
 		signals.push(...att.reasons);
 		contributions.push({ score: att.score, confidence: att.confidence });
+	}
+
+	// ── Mitigations pass (issue #100) ─────────────────────────────────────────
+	// Collect structured contributions from scorers that emit them (v1: auth
+	// only; others added in the follow-up). Apply each enabled mitigation, sum
+	// the weight delta, and adjust `score` before the final clamp so the
+	// mitigation can push the auth subtotal negative on legitimate mail.
+	const mitigContribs: ScorerContribution[] = [...auth.contributions];
+	if (mitigations.dmarc_pass_compensates_method_fail) {
+		if (DMARC_PASS_COMPENSATES_METHOD_FAIL.applies(inputs, mitigContribs)) {
+			const modified = DMARC_PASS_COMPENSATES_METHOD_FAIL.apply(mitigContribs);
+			const origSum = mitigContribs.reduce((s, c) => s + c.weight, 0);
+			const newSum = modified.reduce((s, c) => s + c.weight, 0);
+			const delta = newSum - origSum;
+			if (delta !== 0) {
+				score += delta;
+				signals.push(`mitigated:${DMARC_PASS_COMPENSATES_METHOD_FAIL.name}`);
+			}
+		}
 	}
 
 	score = Math.max(0, Math.min(100, Math.round(score)));
