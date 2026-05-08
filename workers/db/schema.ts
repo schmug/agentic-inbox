@@ -239,3 +239,18 @@ export const tlsrptRecords = sqliteTable("tlsrpt_records", {
 	successful_session_count: integer("successful_session_count").notNull().default(0),
 	failed_session_count: integer("failed_session_count").notNull().default(0),
 });
+
+// DMARC RUF forensic-report records (issue #171). One row per received
+// forensic report. Ingested only when ruf_ingestion.enabled === true for
+// the mailbox. `original_headers` is NULL when retain_raw === false (default).
+export const dmarcRufRecords = sqliteTable("dmarc_ruf_records", {
+	id: text("id").primaryKey(),
+	received_at: text("received_at").notNull(),
+	original_mail_from: text("original_mail_from"),
+	source_ip: text("source_ip"),
+	failure_type: text("failure_type"),
+	reported_domain: text("reported_domain"),
+	feedback_type: text("feedback_type"),
+	auth_results: text("auth_results"),
+	original_headers: text("original_headers"),
+});

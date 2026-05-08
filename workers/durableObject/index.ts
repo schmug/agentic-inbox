@@ -114,7 +114,7 @@ export class MailboxDO extends DurableObject<Env> {
 		applyMigrations(this.ctx.storage.sql, mailboxMigrations, this.ctx.storage);
 	}
 
-	// ── Realtime event stream (WebSocket, hibernation API) ─────────
+	// ── Realtime event stream (WebSocket, hibernation API) ─────────────────
 	//
 	// Foreground "new mail" notifications. Clients open a WebSocket via
 	// `GET /api/v1/mailboxes/:id/events` (see workers/index.ts) and the
@@ -150,7 +150,7 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 	}
 
-	// ── Email CRUD (Drizzle) ───────────────────────────────────────
+	// ── Email CRUD (Drizzle) ────────────────────────────────────────
 
 	async getEmails(options: GetEmailsOptions = {}) {
 		const {
@@ -478,7 +478,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return row?.total ?? 0;
 	}
 
-	// ── Single email operations (Drizzle) ──────────────────────────
+	// ── Single email operations (Drizzle) ───────────────────────────
 
 	async getEmail(id: string) {
 		const email = this.db
@@ -614,7 +614,7 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
-	// ── Folders (Drizzle) ──────────────────────────────────────────
+	// ── Folders (Drizzle) ──────────────────────────────────────────────
 
 	async getFolders() {
 		const result = this.db
@@ -693,7 +693,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return true;
 	}
 
-	// ── Search (raw SQL — dynamic condition builder) ───────────────
+	// ── Search (raw SQL — dynamic condition builder) ───────────────────
 
 	/**
 	 * Build WHERE conditions and params for search queries.
@@ -781,7 +781,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return row?.total ?? 0;
 	}
 
-	// ── Threading helpers (raw SQL) ────────────────────────────────
+	// ── Threading helpers (raw SQL) ─────────────────────────────────
 
 	async findThreadBySubject(subject: string, senderAddress?: string): Promise<string | null> {
 		const normalized = subject
@@ -827,7 +827,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return null;
 	}
 
-	// ── Rate limiting (raw SQL) ────────────────────────────────────
+	// ── Rate limiting (raw SQL) ─────────────────────────────────────
 
 	/**
 	 * Check if the mailbox has exceeded the send rate limit.
@@ -860,7 +860,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return null;
 	}
 
-	// ── Email creation (Drizzle) ───────────────────────────────────
+	// ── Email creation (Drizzle) ─────────────────────────────────────
 
 	async createEmail(
 		folder: string,
@@ -1015,7 +1015,7 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
-	// ── Pipeline runs (real p95 latency) ───────────────────────────
+	// ── Pipeline runs (real p95 latency) ─────────────────────────────
 
 	async recordPipelineRunStart(input: {
 		runId: string;
@@ -1081,16 +1081,6 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Enumerate every attachment's R2 object key (`attachments/{email_id}/{id}/{filename}`)
 	 * so the mailbox-delete flow can reap R2 blobs before wiping this DO.
-	 *
-	 * Key construction happens HERE rather than at the caller so the caller
-	 * can't mishandle the `filename` field. Filenames are already sanitized
-	 * at receive time (`workers/index.ts` strips path separators and control
-	 * characters before ever storing to R2), so this mirrors that format.
-	 *
-	 * v1 returns everything in a single array. A long-lived mailbox can
-	 * hold thousands of attachments — still fine here because SQLite-in-DO
-	 * is local and the caller batches deletes downstream. If a mailbox
-	 * ever reaches hundreds of thousands of rows, add cursor-based paging.
 	 */
 	async listAllAttachmentKeys(): Promise<string[]> {
 		const rows = this.db
@@ -1106,15 +1096,6 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/**
 	 * Wipe ALL state for this mailbox DO. Used by the mailbox-delete flow.
-	 *
-	 * `ctx.storage.deleteAll()` clears SQLite *and* any KV-style storage
-	 * under this DO. The next inbound method call reconstructs the DO:
-	 * the constructor re-runs migrations on the empty DB, leaving a fresh
-	 * mailbox identical to one that never existed.
-	 *
-	 * Callers MUST have already drained external storage (R2 blobs) before
-	 * calling this, because the attachment table is the only place those
-	 * keys are enumerated.
 	 */
 	async reset(): Promise<void> {
 		await this.ctx.storage.deleteAll();
@@ -1128,11 +1109,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 	}
 
-	/**
-	 * Read the currently-stored verdict blob so a deep-scan can layer its
-	 * findings onto the synchronous verdict without losing the earlier
-	 * signals. Returns the verdict JSON and the numeric score as stored.
-	 */
 	async getStoredVerdict(emailId: string) {
 		const row = this.db
 			.select({
@@ -1165,7 +1141,6 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async upsertSenderReputation(sender: string, newScore: number) {
 		const now = new Date().toISOString();
-		// Rolling average, capped so an old sender can still be retrained.
 		const existing = this.db
 			.select()
 			.from(schema.senderReputation)
@@ -1245,7 +1220,7 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 	}
 
-	// ── DMARC ──────────────────────────────────────────────────────
+	// ── DMARC ───────────────────────────────────────────────────────
 
 	async insertDmarcReport(
 		report: {
@@ -1301,26 +1276,14 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 
-	// ── Cases (TheHive-lite) ───────────────────────────────────────
+	// ── Cases (TheHive-lite) ────────────────────────────────────────
 
 	async createCase(input: {
 		title: string;
 		notes?: string;
 		emailId?: string;
 		observables?: Array<{ kind: string; value: string }>;
-		/**
-		 * Per-case verdict score. Persisted onto the case row so the
-		 * case-detail page can render `<ScoreRing>` from real data
-		 * (issue #126). Null/undefined leaves the column NULL — the UI
-		 * renders a muted "—" in that case.
-		 */
 		score?: number | null;
-		/**
-		 * JSON-encoded `StageRecord[]` copied from the originating email
-		 * at case-creation time (issue #128). Powers the case-detail
-		 * pipeline-trace timeline. Null/undefined leaves the column NULL
-		 * — the UI hides the timeline card.
-		 */
 		stage_trace?: string | null;
 		/**
 		 * Aggregate pipeline confidence in [0,1] copied from
@@ -1331,11 +1294,6 @@ export class MailboxDO extends DurableObject<Env> {
 	}) {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
-		// AI co-pilot summary (issue #127): mark 'pending' at creation
-		// time when there's a linked email so the route handler can
-		// dispatch `generateCaseSummary` via `waitUntil` and the frontend
-		// can show a loading state. Without an emailId we leave both
-		// summary columns NULL — the UI hides the card.
 		const summaryStatus = input.emailId ? "pending" : null;
 		this.db
 			.insert(schema.cases)
@@ -1404,15 +1362,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.from(schema.caseObservables)
 			.where(eq(schema.caseObservables.case_id, id))
 			.all();
-		// Surface the per-stage trace as parsed JSON (issue #128). Storage
-		// is opaque TEXT; the case API exposes a typed array. Three cases:
-		//   - column NULL/empty → `stage_trace: null`, no error → card hidden.
-		//   - column has bytes, parse succeeds → typed array → card renders.
-		//   - column has bytes, parse fails → `stage_trace: null` AND
-		//     `stage_trace_error: "malformed"` → card renders an error
-		//     affordance ("Pipeline trace unavailable"). Without this
-		//     distinction a corrupted row would silently look like an
-		//     untraced case, hiding a real bug.
 		const rawTrace = row.stage_trace ?? null;
 		const stage_trace = parseStageTrace(rawTrace);
 		const stage_trace_error =
@@ -1463,17 +1412,6 @@ export class MailboxDO extends DurableObject<Env> {
 		return { id };
 	}
 
-	/**
-	 * Generate the AI co-pilot summary for a case (issue #127).
-	 *
-	 * Designed to be invoked from a route's `c.executionCtx.waitUntil`
-	 * after `createCase` returns, so the user-facing response stays
-	 * fast. Resolves the linked email (first one — multi-email cases
-	 * are summarized from the originating message), runs the AI
-	 * summarizer, and persists the result with a terminal
-	 * `summary_status` of `'ready'` or `'failed'`. If the case has
-	 * been deleted between dispatch and execution, this no-ops.
-	 */
 	async generateCaseSummary(caseId: string): Promise<void> {
 		const row = this.db
 			.select()
@@ -1528,8 +1466,6 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	async getDmarcSummary(domain: string) {
-		// Aggregate per-source-IP over the last 90 days. Raw SQL for the
-		// multi-column GROUP BY + derived rates.
 		const rows = [
 			...this.ctx.storage.sql.exec(
 				`SELECT
@@ -1560,22 +1496,6 @@ export class MailboxDO extends DurableObject<Env> {
 		return rows;
 	}
 
-	/**
-	 * Sum DMARC alignment outcomes for `domain` over `[sinceIso, now]`.
-	 *
-	 * Returns `{aligned, total}` where `aligned` counts records whose
-	 * `policy_evaluated` cells show DKIM-pass OR SPF-pass — that's the
-	 * RFC 7489 §6.6.2 alignment definition (either authenticated identifier
-	 * passing satisfies DMARC). The deep-scan path uses AND for "fully
-	 * authenticated"; we deliberately don't reuse it here because the
-	 * apex-domain dashboard wants the looser "DMARC-aligned" rate.
-	 *
-	 * Records with NULL dkim/spf results (older reports that didn't survive
-	 * a parser regression) are counted in `total` but never as `aligned` —
-	 * conservative, since we can't tell. Used by the per-domain stats
-	 * endpoint to compute alignment-rate across all mailboxes whose email
-	 * matches the apex (#138).
-	 */
 	async getDmarcAlignmentTotals(domain: string, sinceIso: string) {
 		const row = [
 			...this.ctx.storage.sql.exec(
@@ -1595,7 +1515,7 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
-	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────
+	// ── TLS-RPT (RFC 8460 inbound report ingestion) ───────────────────
 
 	async insertTlsRptReport(
 		report: {
@@ -1654,14 +1574,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 
-	/**
-	 * Sources rollup for `domain`: success/failure session counts grouped
-	 * by `(sending_mta_ip, receiving_mx_hostname)`. The NULL-IP bucket
-	 * carries the policy-summary rows from each report; per-failure-detail
-	 * rows populate the IP bucket with their result-type breakdown. The UI
-	 * surfaces both the per-MTA breakdown and the per-result-type rollup
-	 * via {@link getTlsRptFailureRollup}.
-	 */
 	async getTlsRptSummary(domain: string) {
 		return this.db
 			.select({
@@ -1690,7 +1602,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 
-	/** Per-`result_type` rollup for `domain`. Sums across all reports. */
 	async getTlsRptFailureRollup(domain: string) {
 		return this.db
 			.select({
@@ -1713,24 +1624,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 	}
 
-	/**
-	 * Record `(domain, selector)` pairs observed on inbound DKIM=pass / =fail
-	 * evaluations into the `dkim_selectors_observed` rollup. Idempotent:
-	 * re-observing an existing pair updates `last_seen_iso`; the unique key
-	 * keeps cardinality bounded by `(distinct selectors per domain)`.
-	 *
-	 * Lazy GC: every write also prunes rows whose `last_seen_iso` is older
-	 * than `nowIso - 30d`, so the table size never exceeds the active
-	 * 30-day observation set. Reads (`getDkimSelectorsObserved`) apply the
-	 * same horizon as a defence in depth — the GC pass is opportunistic
-	 * (only fires on writes), so a domain that hasn't sent mail in months
-	 * could still carry stale rows until the next observation lands.
-	 *
-	 * Empty input is a no-op — the security pipeline calls this on every
-	 * inbound message regardless of whether DKIM headers were present.
-	 *
-	 * Issue: #170.
-	 */
 	async recordDkimSelectorsObserved(
 		observations: ReadonlyArray<{ domain: string; selector: string }>,
 		opts: { now?: string } = {},
@@ -1763,12 +1656,6 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
-	/**
-	 * Read the `(selector)` set observed for `domain` over the last 30 days.
-	 * Lower-cased and de-duplicated on the way in, so the caller can
-	 * union across mailboxes without further normalisation. Returns an
-	 * empty array when no observations have landed in the window.
-	 */
 	async getDkimSelectorsObserved(
 		domain: string,
 		opts: { now?: string } = {},
@@ -1788,20 +1675,6 @@ export class MailboxDO extends DurableObject<Env> {
 		return rows.map((r) => r.selector);
 	}
 
-	/**
-	 * Aggregate the operations dashboard payload in one round-trip from the
-	 * UI. Each card lives in its own indexed query — see
-	 * `migrations.ts/11_dashboard_indexes` and `12_pipeline_runs` for the
-	 * supporting indexes.
-	 *
-	 * Pipeline-success is derived from `emails.deep_scan_status` (the deep-
-	 * scan stage runs out-of-band on a separate clock from the sync pipeline
-	 * tracked in `pipeline_runs`). p95 latency comes from `pipeline_runs`,
-	 * filtered to the `completed` status so skipped/failed invocations don't
-	 * skew the sample. Hub "contributions" is the local proxy
-	 * `cases.shared_to_hub`; real cross-org corroboration would require a
-	 * hub-side query and is tracked separately.
-	 */
 	async getDashboardSummary(opts: { now?: string } = {}) {
 		const nowIso = opts.now ?? new Date().toISOString();
 		const nowMs = new Date(nowIso).getTime();
@@ -1876,9 +1749,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.where(sql`${schema.emails.date} >= ${dayAgoIso}`)
 			.all();
 
-		// 7-day verdict mix (#103). Aggregated server-side here so the
-		// org-overview wire payload doesn't have to ship the raw 7d rows
-		// — only the five-key counts cross the boundary.
 		const verdictRows7d = this.db
 			.select({
 				date: schema.emails.date,
@@ -1889,10 +1759,6 @@ export class MailboxDO extends DurableObject<Env> {
 			.all();
 		const verdictMix7d = computeVerdictMix(verdictRows7d);
 
-		// Pre-aggregate representative samples per actioned classification
-		// label for the org overview's top-threats panel (#101). Capped at
-		// MAX_THREAT_SAMPLES_PER_LABEL most-recent rows per label; the org
-		// aggregator unions across mailboxes and slices again.
 		const MAX_THREAT_SAMPLES_PER_LABEL = 5;
 		const threatSampleSource = this.db
 			.select({
@@ -1970,5 +1836,50 @@ export class MailboxDO extends DurableObject<Env> {
 			topThreatSamples,
 			recentCases,
 		};
+	}
+
+	// ── DMARC RUF forensic-report methods (issue #171) ──────────────────────
+
+	async insertDmarcRufRecord(record: {
+		id: string;
+		received_at: string;
+		original_mail_from: string | null;
+		source_ip: string | null;
+		failure_type: string | null;
+		reported_domain: string | null;
+		feedback_type: string | null;
+		auth_results: string | null;
+		original_headers: string | null;
+	}): Promise<void> {
+		this.db.insert(schema.dmarcRufRecords).values(record).run();
+	}
+
+	/** Count RUF records received since `sinceIso` — used for rate-limit checks. */
+	async countDmarcRufRecordsSince(sinceIso: string): Promise<number> {
+		const rows = this.db
+			.select({ count: sql<number>`COUNT(*)`.mapWith(Number) })
+			.from(schema.dmarcRufRecords)
+			.where(sql`${schema.dmarcRufRecords.received_at} >= ${sinceIso}`)
+			.all();
+		return rows[0]?.count ?? 0;
+	}
+
+	/** List RUF records, optionally filtered by domain. Newest first, max 200. */
+	async listDmarcRufRecords(
+		options: { domain?: string; limit?: number; offset?: number } = {},
+	) {
+		const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+		const offset = Math.max(options.offset ?? 0, 0);
+		const conditions = options.domain
+			? [eq(schema.dmarcRufRecords.reported_domain, options.domain)]
+			: [];
+		return this.db
+			.select()
+			.from(schema.dmarcRufRecords)
+			.where(conditions.length > 0 ? and(...conditions) : undefined)
+			.orderBy(desc(schema.dmarcRufRecords.received_at))
+			.limit(limit)
+			.offset(offset)
+			.all();
 	}
 }

@@ -6,6 +6,7 @@ import type {
 	DashboardSummary,
 	DomainListEntry,
 	DomainStats,
+	DmarcRufRecord,
 	Email,
 	Folder,
 	HubContributionsResponse,
@@ -229,6 +230,11 @@ const api = {
 		post<{ domain: string; domains: string[] }>("/api/v1/org/domains", { domain }),
 	removeDomain: (domain: string) =>
 		del<{ domains: string[] }>(`/api/v1/org/domains/${encodeURIComponent(domain)}`),
+	getDomainRufRecords: (domain: string, opts?: { signal?: AbortSignal }) =>
+		get<{ enabled: boolean; records: DmarcRufRecord[] }>(
+			`/api/v1/domains/${encodeURIComponent(domain)}/ruf-records`,
+			{ signal: opts?.signal },
+		),
 
 	// Hub
 	getHubContributions: (mailboxId: string, opts?: { signal?: AbortSignal }) =>

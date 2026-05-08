@@ -431,4 +431,27 @@ export const mailboxMigrations: Migration[] = [
             ALTER TABLE cases ADD COLUMN confidence REAL;
         `,
 	},
+	{
+		// DMARC RUF forensic-report ingestion (issue #171). Opt-in per
+		// mailbox via ruf_ingestion.enabled. One row per received report.
+		// `original_headers` is only populated when retain_raw === true;
+		// NULL otherwise — the frontend renders "redacted" in that case.
+		name: "19_dmarc_ruf_records",
+		sql: `
+            CREATE TABLE IF NOT EXISTS dmarc_ruf_records (
+                id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL,
+                original_mail_from TEXT,
+                source_ip TEXT,
+                failure_type TEXT,
+                reported_domain TEXT,
+                feedback_type TEXT,
+                auth_results TEXT,
+                original_headers TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_dmarc_ruf_received_at ON dmarc_ruf_records(received_at);
+            CREATE INDEX IF NOT EXISTS idx_dmarc_ruf_reported_domain ON dmarc_ruf_records(reported_domain);
+            CREATE INDEX IF NOT EXISTS idx_dmarc_ruf_source_ip ON dmarc_ruf_records(source_ip);
+        `,
+	},
 ];
