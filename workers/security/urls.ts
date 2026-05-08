@@ -173,13 +173,29 @@ function pushUrl(out: ExtractedUrl[], seen: Set<string>, rawUrl: string, display
  *     signal (legit users do shorten links).
  *   - 1.0 — no URL signals fired; nothing to be uncertain about.
  */
-export function scoreUrls(urls: ExtractedUrl[]): { score: number; reasons: string[]; confidence: number } {
+export function scoreUrls(urls: ExtractedUrl[]): {
+	score: number;
+	reasons: string[];
+	confidence: number;
+	contributions: Array<{ scorer: "urls"; rule: string; weight: number; reason: string }>;
+} {
 	const reasons: string[] = [];
+	const contributions: Array<{ scorer: "urls"; rule: string; weight: number; reason: string }> = [];
 	let score = 0;
 	const homograph = urls.find((u) => u.is_homograph);
-	if (homograph) { score += 20; reasons.push(`homograph URL (${homograph.hostname})`); }
+	if (homograph) {
+		score += 20;
+		const reason = `homograph URL (${homograph.hostname})`;
+		reasons.push(reason);
+		contributions.push({ scorer: "urls", rule: "homograph_url", weight: 20, reason });
+	}
 	const shortener = urls.find((u) => u.is_shortener);
-	if (shortener) { score += 5; reasons.push(`link shortener (${shortener.hostname})`); }
+	if (shortener) {
+		score += 5;
+		const reason = `link shortener (${shortener.hostname})`;
+		reasons.push(reason);
+		contributions.push({ scorer: "urls", rule: "link_shortener", weight: 5, reason });
+	}
 	const confidence = homograph ? 0.9 : shortener ? 0.6 : 1.0;
-	return { score, reasons, confidence };
+	return { score, reasons, confidence, contributions };
 }

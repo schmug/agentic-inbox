@@ -55,32 +55,46 @@ export interface FirstTimeSenderPrior {
 export function scoreReputation(
 	rep: SenderReputation | null,
 	prior?: FirstTimeSenderPrior,
-): { score: number; reasons: string[]; confidence: number } {
+): {
+	score: number;
+	reasons: string[];
+	confidence: number;
+	contributions: Array<{ scorer: "reputation"; rule: string; weight: number; reason: string }>;
+} {
 	const reasons: string[] = [];
+	const contributions: Array<{ scorer: "reputation"; rule: string; weight: number; reason: string }> = [];
 	let score = 0;
 	if (!rep || rep.message_count === 0) {
 		if (prior) {
 			score += prior.score;
 			reasons.push(prior.reason);
-			return { score, reasons, confidence: 0.7 };
+			contributions.push({ scorer: "reputation", rule: "first_time_sender_cti", weight: prior.score, reason: prior.reason });
+			return { score, reasons, confidence: 0.7, contributions };
 		}
 		score += 5;
 		reasons.push("first-time sender");
-		return { score, reasons, confidence: 0.3 };
+		contributions.push({ scorer: "reputation", rule: "first_time_sender", weight: 5, reason: "first-time sender" });
+		return { score, reasons, confidence: 0.3, contributions };
 	}
-	if (rep.flagged) { score += 15; reasons.push("sender previously flagged"); }
+	if (rep.flagged) {
+		score += 15;
+		reasons.push("sender previously flagged");
+		contributions.push({ scorer: "reputation", rule: "flagged_sender", weight: 15, reason: "sender previously flagged" });
+	}
 	// Consistently-bad history adds suspicion. The score here is a small
 	// nudge rather than a hard signal — the `flagged` branch above is the
 	// deliberate-action path; this catches senders whose verdicts have been
 	// piling up without anyone flipping the flag.
 	if (rep.avg_score > 70) {
 		score += 10;
-		reasons.push(`bad sender history (avg ${rep.avg_score.toFixed(0)})`);
+		const reason = `bad sender history (avg ${rep.avg_score.toFixed(0)})`;
+		reasons.push(reason);
+		contributions.push({ scorer: "reputation", rule: "bad_sender_history", weight: 10, reason });
 	}
 	const confidence = rep.flagged
 		? 0.95
 		: Math.min(0.9, 0.3 + 0.06 * rep.message_count);
-	return { score, reasons, confidence };
+	return { score, reasons, confidence, contributions };
 }
 
 /**

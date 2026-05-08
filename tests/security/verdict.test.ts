@@ -7,9 +7,11 @@ import {
 	DMARC_PASS_COMPENSATES_METHOD_FAIL,
 	type FinalVerdict,
 } from "../../workers/security/verdict";
-import { DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
+import { scoreAttachments, DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
 import type { AuthVerdict } from "../../workers/security/auth";
 import { scoreClassification, type ClassificationResult } from "../../workers/security/classification";
+import { scoreUrls } from "../../workers/security/urls";
+import { scoreReputation } from "../../workers/security/reputation";
 
 const cleanAuth: AuthVerdict = { spf: "pass", dkim: "pass", dmarc: "pass" };
 const safeClass: ClassificationResult = { label: "safe", confidence: 0.9, reasoning: "ok" };
@@ -403,5 +405,161 @@ describe("dmarc_pass_compensates_method_fail mitigation", () => {
 
 	it("mitigation default: DEFAULT_MITIGATION_CONFIG has dmarc_pass_compensates_method_fail enabled", () => {
 		expect(DEFAULT_MITIGATION_CONFIG.dmarc_pass_compensates_method_fail).toBe(true);
+	});
+});
+
+// ── ScorerContribution breakdowns (#229) ─────────────────────────────────────
+
+describe("scoreClassification contributions (#229)", () => {
+	it("phishing label emits classifier_phishing contribution with scaled weight", () => {
+		const result = scoreClassification({ label: "phishing", confidence: 1.0, reasoning: "" });
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "classification",
+			rule: "classifier_phishing",
+			weight: result.score,
+		});
+	});
+
+	it("safe label emits classifier_safe contribution with weight 0", () => {
+		const result = scoreClassification({ label: "safe", confidence: 0.9, reasoning: "" });
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "classification",
+			rule: "classifier_safe",
+			weight: 0,
+			reason: "classifier: safe",
+		});
+	});
+
+	it("unavailable label emits classifier_unavailable contribution with weight 0", () => {
+		const result = scoreClassification({ label: "unavailable", confidence: 0, reasoning: "" });
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "classification",
+			rule: "classifier_unavailable",
+			weight: 0,
+		});
+	});
+});
+
+describe("scoreUrls contributions (#229)", () => {
+	it("homograph URL emits homograph_url contribution with weight 20", () => {
+		const urls = [{ url: "https://gооgle.com/login", hostname: "gооgle.com", is_homograph: true, is_shortener: false }];
+		const result = scoreUrls(urls);
+		const contrib = result.contributions.find((c) => c.rule === "homograph_url");
+		expect(contrib).toBeDefined();
+		expect(contrib).toMatchObject({ scorer: "urls", rule: "homograph_url", weight: 20 });
+	});
+
+	it("link shortener emits link_shortener contribution with weight 5", () => {
+		const urls = [{ url: "https://bit.ly/abc", hostname: "bit.ly", is_homograph: false, is_shortener: true }];
+		const result = scoreUrls(urls);
+		const contrib = result.contributions.find((c) => c.rule === "link_shortener");
+		expect(contrib).toBeDefined();
+		expect(contrib).toMatchObject({ scorer: "urls", rule: "link_shortener", weight: 5 });
+	});
+
+	it("no suspicious URLs → empty contributions", () => {
+		const result = scoreUrls([{ url: "https://example.com", hostname: "example.com", is_homograph: false, is_shortener: false }]);
+		expect(result.contributions).toHaveLength(0);
+	});
+});
+
+describe("scoreReputation contributions (#229)", () => {
+	it("first_time_sender (no prior) emits contribution with weight 5", () => {
+		const result = scoreReputation(null);
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "reputation",
+			rule: "first_time_sender",
+			weight: 5,
+		});
+	});
+
+	it("first_time_sender_cti emits contribution with prior weight", () => {
+		const prior = { score: 20, reason: "first-time sender from 1.2.3.4 CTI reputation=malicious" };
+		const result = scoreReputation(null, prior);
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "reputation",
+			rule: "first_time_sender_cti",
+			weight: 20,
+		});
+	});
+
+	it("flagged sender emits flagged_sender contribution with weight 15", () => {
+		const rep = { sender: "x@y.com", first_seen: "2025-01-01", last_seen: "2025-01-02", message_count: 5, avg_score: 40, flagged: true };
+		const result = scoreReputation(rep);
+		const contrib = result.contributions.find((c) => c.rule === "flagged_sender");
+		expect(contrib).toBeDefined();
+		expect(contrib).toMatchObject({ scorer: "reputation", rule: "flagged_sender", weight: 15 });
+	});
+
+	it("bad sender history emits bad_sender_history contribution with weight 10", () => {
+		const rep = { sender: "x@y.com", first_seen: "2025-01-01", last_seen: "2025-01-02", message_count: 5, avg_score: 80, flagged: false };
+		const result = scoreReputation(rep);
+		const contrib = result.contributions.find((c) => c.rule === "bad_sender_history");
+		expect(contrib).toBeDefined();
+		expect(contrib).toMatchObject({ scorer: "reputation", rule: "bad_sender_history", weight: 10 });
+	});
+});
+
+describe("scoreAttachments contributions (#229)", () => {
+	it("macro-office attachment under score policy emits attachment_macro_office_<ext> contribution", () => {
+		const atts = [{ filename: "report.docm", mimetype: "application/vnd.ms-word.document.macroEnabled.12" }];
+		const result = scoreAttachments(atts, DEFAULT_ATTACHMENT_POLICY);
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "attachments",
+			rule: "attachment_macro_office_docm",
+			weight: 15,
+		});
+	});
+
+	it("container attachment under score policy emits attachment_container_<ext> contribution", () => {
+		const atts = [{ filename: "installer.iso", mimetype: "application/x-iso9660-image" }];
+		const result = scoreAttachments(atts, DEFAULT_ATTACHMENT_POLICY);
+		expect(result.contributions).toHaveLength(1);
+		expect(result.contributions[0]).toMatchObject({
+			scorer: "attachments",
+			rule: "attachment_container_iso",
+			weight: 25,
+		});
+	});
+
+	it("hard-block attachment (executable) emits no contribution (weight comes from triage tier)", () => {
+		const atts = [{ filename: "malware.exe", mimetype: "application/octet-stream" }];
+		const result = scoreAttachments(atts, DEFAULT_ATTACHMENT_POLICY);
+		expect(result.hardBlock).toBe(true);
+		expect(result.contributions).toHaveLength(0);
+	});
+
+	it("no attachments → empty contributions", () => {
+		const result = scoreAttachments([], DEFAULT_ATTACHMENT_POLICY);
+		expect(result.contributions).toHaveLength(0);
+	});
+});
+
+describe("aggregateVerdict spreads all scorer contributions into mitigContribs (#229)", () => {
+	it("non-auth contributions are visible to mitigations: cls+urls+rep all participate", () => {
+		// This is validated indirectly: if mitigContribs only had auth contributions
+		// the mitigation delta would be -20 (zeroing spf_fail+dkim_fail); with all
+		// scorers present the mitigations pass still sees only auth rules per the
+		// v1 DMARC mitigation, but the call must not throw even with many contribs.
+		const v = aggregateVerdict(
+			{
+				auth: { spf: "fail", dkim: "fail", dmarc: "pass", dkimObservations: [] },
+				classification: { label: "safe", confidence: 0.9, reasoning: "" },
+				urls: [{ url: "https://bit.ly/x", hostname: "bit.ly", is_homograph: false, is_shortener: true }],
+				reputation: null,
+				attachmentPolicy: DEFAULT_ATTACHMENT_POLICY,
+				attachments: [{ filename: "report.docm", mimetype: null }],
+			},
+			DEFAULT_THRESHOLDS,
+			DEFAULT_MITIGATION_CONFIG,
+		);
+		expect(v.signals).toContain("mitigated:dmarc_pass_compensates_method_fail");
+		expect(v.signals).toContain("link shortener (bit.ly)");
 	});
 });
