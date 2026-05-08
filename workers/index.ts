@@ -31,7 +31,7 @@ import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
 import { runDeepScan } from "./intel/deep-scan";
-import { isDmarcReport, ingestDmarcReport } from "./dmarc/ingest";
+import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
 import { isTlsRptReport, ingestTlsRptReport } from "./tlsrpt/ingest";
 import { tlsrptRoutes } from "./routes/tlsrpt";
@@ -649,6 +649,46 @@ app.put("/api/v1/domains/:domain/settings", async (c) => {
 	return c.json({ domain, settings: written });
 });
 
+// DMARC RUF records for a domain (issue #171). Fans out to all mailboxes on
+// the domain that have ruf_ingestion.enabled === true and aggregates their
+// forensic-report records. Returns { enabled: boolean, records: DmarcRufRecord[] }.
+app.get("/api/v1/domains/:domain/ruf-records", async (c) => {
+	const raw = c.req.param("domain") ?? "";
+	const domain = decodeURIComponent(raw).toLowerCase();
+	if (!DOMAIN_REGEX.test(domain)) return c.json({ error: "Malformed domain" }, 400);
+
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const scoped = allMailboxes.filter((m) => domainOf(m.email) === domain);
+	if (scoped.length === 0) return c.json({ enabled: false, records: [] });
+
+	const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10) || 50, 200);
+
+	const perMailbox = await Promise.allSettled(
+		scoped.map(async (m) => {
+			const settings = (await resolveMailboxSettings(c.env, m.id)).security;
+			if (!settings.ruf_ingestion.enabled) return { enabled: false, records: [] as unknown[] };
+			const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(m.id));
+			const records = await stub.listDmarcRufRecords({ domain, limit });
+			return { enabled: true, records };
+		}),
+	);
+
+	let anyEnabled = false;
+	const allRecords: unknown[] = [];
+	for (const result of perMailbox) {
+		if (result.status !== "fulfilled") continue;
+		if (result.value.enabled) anyEnabled = true;
+		allRecords.push(...result.value.records);
+	}
+
+	// Sort merged records newest-first, cap at limit.
+	const sorted = (allRecords as Array<{ received_at: string }>)
+		.sort((a, b) => b.received_at.localeCompare(a.received_at))
+		.slice(0, limit);
+
+	return c.json({ enabled: anyEnabled, records: sorted });
+});
+
 app.post("/api/v1/mailboxes", async (c) => {
 	const { name, settings, email: rawEmail } = CreateMailboxBody.parse(await c.req.json());
 	const email = rawEmail.toLowerCase();
@@ -1159,6 +1199,28 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		} catch (e) {
 			console.error("tlsrpt ingest failed:", (e as Error).message);
 		}
+	}
+
+	// DMARC RUF forensic reports (RFC 6591) — opt-in per mailbox (issue #171).
+	// Always diverted out of the security pipeline; ingested only when the
+	// mailbox has `ruf_ingestion.enabled === true`. Otherwise the report is
+	// dropped (archived without classifying) — forensic reports must never
+	// be scored as if they were user-sent mail.
+	if (isDmarcRuf(parsedEmail)) {
+		try {
+			const rufSettings = (await resolveMailboxSettings(env, mailboxId)).security.ruf_ingestion;
+			if (rufSettings.enabled) {
+				const result = await ingestDmarcRuf(env, mailboxId, messageId, parsedEmail, rufSettings);
+				if (result.ingested) {
+					await stub.moveEmail(messageId, Folders.ARCHIVE);
+				} else {
+					console.log("dmarc ruf drop:", result.reason);
+				}
+			}
+		} catch (e) {
+			console.error("dmarc ruf ingest failed:", (e as Error).message);
+		}
+		return; // Never classify a forensic report through the security pipeline
 	}
 
 	// Security pipeline (opt-in per mailbox via settings.security.enabled).
