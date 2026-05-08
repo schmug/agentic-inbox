@@ -45,6 +45,14 @@ export const OrgSettings = z
     classifierModel: z.string().optional(),
     security: SecuritySettings.optional(),
     intel: IntelSettings.optional(),
+    /**
+     * UI-added receiving domains (#181). Unioned with the `DOMAINS` env-var
+     * seed at `GET /api/v1/config` so operators can attach new domains
+     * without redeploying. Absent (undefined) is the default — treated as
+     * an empty list. Written via `POST /api/v1/org/domains` and
+     * `DELETE /api/v1/org/domains/:domain`.
+     */
+    domains: z.array(z.string()).optional(),
   })
   .passthrough();
 

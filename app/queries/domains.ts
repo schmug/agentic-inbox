@@ -1,6 +1,6 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
 import type { DomainListEntry, DomainStats } from "~/types";
 import { queryKeys } from "./keys";
@@ -26,5 +26,26 @@ export function useDomainStats(domain: string | undefined) {
 			api.getDomainStats(domain!, { signal }) as Promise<DomainStats>,
 		enabled: !!domain,
 		staleTime: 30_000,
+	});
+}
+
+export function useAddDomain() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (domain: string) => api.addDomain(domain),
+		onSuccess: () => {
+			// Invalidate config so the New Mailbox dropdown picks up the new domain.
+			qc.invalidateQueries({ queryKey: queryKeys.config });
+		},
+	});
+}
+
+export function useRemoveDomain() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (domain: string) => api.removeDomain(domain),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.config });
+		},
 	});
 }

@@ -225,6 +225,10 @@ const api = {
 		get<DomainStats>(`/api/v1/domains/${encodeURIComponent(domain)}/stats`, {
 			signal: opts?.signal,
 		}),
+	addDomain: (domain: string) =>
+		post<{ domain: string; domains: string[] }>("/api/v1/org/domains", { domain }),
+	removeDomain: (domain: string) =>
+		del<{ domains: string[] }>(`/api/v1/org/domains/${encodeURIComponent(domain)}`),
 
 	// Hub
 	getHubContributions: (mailboxId: string, opts?: { signal?: AbortSignal }) =>
