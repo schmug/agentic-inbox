@@ -16,7 +16,7 @@ import type { Email } from "postal-mime";
 import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
 import { bufferToXmlText, gunzip, parseDmarcXml } from "./parser";
-import { isDmarcRuf, parseDmarcRuf } from "./ruf-parser";
+import { parseDmarcRuf } from "./ruf-parser";
 import type { RufIngestionSettings } from "../security/defaults";
 
 export { isDmarcRuf } from "./ruf-parser";
