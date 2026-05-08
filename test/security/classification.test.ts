@@ -158,6 +158,6 @@ describe("scoreClassification — unavailable contributes 0", () => {
 
 	it("safe verdict still contributes 0 with no reasons", () => {
 		const result: ClassificationResult = { label: "safe", confidence: 1, reasoning: "" };
-		expect(scoreClassification(result)).toEqual({ score: 0, reasons: [], confidence: 1 });
+		expect(scoreClassification(result)).toMatchObject({ score: 0, reasons: [], confidence: 1 });
 	});
 });

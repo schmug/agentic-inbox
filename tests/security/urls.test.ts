@@ -100,7 +100,7 @@ describe("scoreUrls", () => {
 		const urls: ExtractedUrl[] = [
 			{ url: "https://a.com", hostname: "a.com", is_homograph: false, is_shortener: false },
 		];
-		expect(scoreUrls(urls)).toEqual({ score: 0, reasons: [], confidence: 1.0 });
+		expect(scoreUrls(urls)).toMatchObject({ score: 0, reasons: [], confidence: 1.0, contributions: [] });
 	});
 
 	it("scores a homograph URL at +20", () => {

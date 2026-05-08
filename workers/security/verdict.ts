@@ -198,19 +198,24 @@ export function aggregateVerdict(
 	// contributions (container / macro-office under the defaults). If a
 	// policy set `executable_action: "score"`, its contribution also lands
 	// here rather than short-circuiting.
+	const mitigContribs: ScorerContribution[] = [
+		...auth.contributions,
+		...cls.contributions,
+		...urls.contributions,
+		...rep.contributions,
+	];
 	if (inputs.attachmentPolicy && inputs.attachments && inputs.attachments.length > 0) {
 		const att = scoreAttachments(inputs.attachments, inputs.attachmentPolicy);
 		score += att.score;
 		signals.push(...att.reasons);
 		contributions.push({ score: att.score, confidence: att.confidence });
+		mitigContribs.push(...att.contributions);
 	}
 
 	// ── Mitigations pass (issue #100) ─────────────────────────────────────────
-	// Collect structured contributions from scorers that emit them (v1: auth
-	// only; others added in the follow-up). Apply each enabled mitigation, sum
-	// the weight delta, and adjust `score` before the final clamp so the
-	// mitigation can push the auth subtotal negative on legitimate mail.
-	const mitigContribs: ScorerContribution[] = [...auth.contributions];
+	// Apply each enabled mitigation, sum the weight delta, and adjust `score`
+	// before the final clamp so the mitigation can push the auth subtotal
+	// negative on legitimate mail.
 	if (mitigations.dmarc_pass_compensates_method_fail) {
 		if (DMARC_PASS_COMPENSATES_METHOD_FAIL.applies(inputs, mitigContribs)) {
 			const modified = DMARC_PASS_COMPENSATES_METHOD_FAIL.apply(mitigContribs);

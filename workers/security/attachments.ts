@@ -75,6 +75,8 @@ export interface AttachmentScoreResult {
 	 * if/when added — would justify a lower value; not in v1.
 	 */
 	confidence: number;
+	/** Structured per-rule breakdown for the mitigations layer (issue #100/#229). */
+	contributions: Array<{ scorer: "attachments"; rule: string; weight: number; reason: string }>;
 }
 
 /**
@@ -133,7 +135,7 @@ export function scoreAttachments(
 	policy: AttachmentPolicy,
 ): AttachmentScoreResult {
 	if (!attachments || attachments.length === 0) {
-		return { score: 0, reasons: [], hardBlock: false, confidence: 1.0 };
+		return { score: 0, reasons: [], hardBlock: false, confidence: 1.0, contributions: [] };
 	}
 
 	// Normalise once — callers may pass user-supplied config, and duplicates
@@ -146,6 +148,7 @@ export function scoreAttachments(
 
 	let score = 0;
 	const reasons: string[] = [];
+	const contributions: Array<{ scorer: "attachments"; rule: string; weight: number; reason: string }> = [];
 	let hardBlock = false;
 	let hardBlockReason: string | undefined;
 
@@ -182,11 +185,13 @@ export function scoreAttachments(
 			: category === "macro_office" ? MACRO_OFFICE_SCORE_BOOST
 			: /* executable under "score" policy */ 40;
 		score += boost;
-		reasons.push(`attachment ${category} .${ext} (${name}) +${boost}`);
+		const reason = `attachment ${category} .${ext} (${name}) +${boost}`;
+		reasons.push(reason);
+		contributions.push({ scorer: "attachments", rule: `attachment_${category}_${ext}`, weight: boost, reason });
 	}
 
 	const fired = reasons.length > 0;
-	return { score, reasons, hardBlock, hardBlockReason, confidence: fired ? 0.95 : 1.0 };
+	return { score, reasons, hardBlock, hardBlockReason, confidence: fired ? 0.95 : 1.0, contributions };
 }
 
 // Hand-traced examples (kept in code so the intent is grep-able):
