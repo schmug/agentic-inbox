@@ -9,7 +9,12 @@
  * Without this split the import graph cycles.
  */
 
-import { DEFAULT_THRESHOLDS, type VerdictThresholds } from "./verdict";
+import {
+	DEFAULT_THRESHOLDS,
+	DEFAULT_MITIGATION_CONFIG,
+	type VerdictThresholds,
+	type MitigationConfig,
+} from "./verdict";
 import { DEFAULT_ATTACHMENT_POLICY, type AttachmentPolicy } from "./attachments";
 
 /**
@@ -100,7 +105,16 @@ export interface MailboxSecuritySettings {
 	 * this value is demoted to `tag`. Default 0.6.
 	 */
 	min_confidence_for_quarantine: number;
+	/**
+	 * Issue #100: per-mailbox compensating-control mitigations. Each field
+	 * enables or disables a named mitigation. Absent key = on by default
+	 * (matching the "absent-key-inherits" convention). See `MitigationConfig`
+	 * and `DEFAULT_MITIGATION_CONFIG` in `workers/security/verdict.ts`.
+	 */
+	mitigations: MitigationConfig;
 }
+
+export type { MitigationConfig };
 
 /**
  * Default for the new classification block. Skip-on-timeout is ON so the
@@ -125,4 +139,5 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	classification: DEFAULT_CLASSIFICATION_SETTINGS,
 	confidence_aware_actions: false,
 	min_confidence_for_quarantine: 0.6,
+	mitigations: DEFAULT_MITIGATION_CONFIG,
 };

@@ -272,6 +272,7 @@ export async function runSecurityPipeline(input: RunPipelineInput): Promise<Pipe
 				firstTimeSenderPrior,
 			},
 			settings.thresholds,
+			settings.mitigations,
 		);
 		// Intel-feed boost. Confirmed hit bumps score by 20; unconfirmed bloom-only
 		// hit bumps by 5 (low-signal — bloom FPR is configured at ~1%).

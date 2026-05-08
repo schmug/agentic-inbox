@@ -3,6 +3,8 @@ import {
 	aggregateVerdict,
 	applyConfidenceDemote,
 	DEFAULT_THRESHOLDS,
+	DEFAULT_MITIGATION_CONFIG,
+	DMARC_PASS_COMPENSATES_METHOD_FAIL,
 	type FinalVerdict,
 } from "../../workers/security/verdict";
 import { DEFAULT_ATTACHMENT_POLICY } from "../../workers/security/attachments";
@@ -311,5 +313,95 @@ describe("applyConfidenceDemote (issue #219)", () => {
 		// existing applyBoost behaviour).
 		expect(out.explanation).toBe("s1; s2; s3; s4");
 		expect(out.signals).toContain("confidence-aware demote (0.45 < 0.6)");
+	});
+});
+
+// ── Mitigations layer (issue #100) ──────────────────────────────────────────
+
+describe("dmarc_pass_compensates_method_fail mitigation", () => {
+	// Shared helpers
+	const safeClass: import("../../workers/security/classification").ClassificationResult = {
+		label: "safe",
+		confidence: 0.9,
+		reasoning: "ok",
+	};
+	// Auth where DMARC passes but both per-method checks fail — the textbook
+	// mailing-list / forwarded-mail shape that produces false positives today.
+	const dmarcPassMethodFail = {
+		spf: "fail" as const,
+		dkim: "fail" as const,
+		dmarc: "pass" as const,
+		dkimObservations: [],
+	};
+
+	it("mitigation applies: spf=fail dkim=fail dmarc=pass → auth contribution ≤ 0", () => {
+		// AC: "spf=fail dkim=fail dmarc=pass produces auth contribution ≤ 0
+		// (currently +10 net)." With only auth signals (no classifier/rep/url
+		// noise), the final score should be 0 (clamped from the negative delta).
+		const noMitigation = aggregateVerdict(
+			{ auth: dmarcPassMethodFail, classification: safeClass, urls: [], reputation: null },
+			DEFAULT_THRESHOLDS,
+			{ dmarc_pass_compensates_method_fail: false },
+		);
+		const withMitigation = aggregateVerdict(
+			{ auth: dmarcPassMethodFail, classification: safeClass, urls: [], reputation: null },
+			DEFAULT_THRESHOLDS,
+			DEFAULT_MITIGATION_CONFIG,
+		);
+		// Without mitigation: spf_fail(+10) + dkim_fail(+10) + dmarc_pass(−10)
+		// = +10; classify(safe)=0; rep(null/first-time)=+5 → net=15.
+		expect(noMitigation.score).toBeGreaterThan(0);
+		// With mitigation: spf_fail and dkim_fail zeroed → only dmarc_pass(−10)
+		// + rep(+5) remain on the negative side; clamped to 0.
+		expect(withMitigation.score).toBeLessThan(noMitigation.score);
+	});
+
+	it("mitigation fires → 'mitigated:dmarc_pass_compensates_method_fail' appears in signals", () => {
+		const v = aggregateVerdict(
+			{ auth: dmarcPassMethodFail, classification: safeClass, urls: [], reputation: null },
+			DEFAULT_THRESHOLDS,
+			DEFAULT_MITIGATION_CONFIG,
+		);
+		expect(v.signals).toContain("mitigated:dmarc_pass_compensates_method_fail");
+	});
+
+	it("mitigation disabled per-mailbox is a no-op (same score as baseline)", () => {
+		const inputs = { auth: dmarcPassMethodFail, classification: safeClass, urls: [], reputation: null };
+		const baseline = aggregateVerdict(inputs, DEFAULT_THRESHOLDS, { dmarc_pass_compensates_method_fail: false });
+		const noopDisabled = aggregateVerdict(inputs, DEFAULT_THRESHOLDS, { dmarc_pass_compensates_method_fail: false });
+		expect(noopDisabled.score).toBe(baseline.score);
+		expect(noopDisabled.signals).not.toContain("mitigated:dmarc_pass_compensates_method_fail");
+	});
+
+	it("mitigation enabled but inputs don't match (dmarc=fail) → no signal, score unchanged", () => {
+		// dmarc=fail: DMARC_PASS_COMPENSATES_METHOD_FAIL.applies() returns false.
+		const failAuth = {
+			spf: "fail" as const,
+			dkim: "fail" as const,
+			dmarc: "fail" as const,
+			dkimObservations: [],
+		};
+		const v = aggregateVerdict(
+			{ auth: failAuth, classification: safeClass, urls: [], reputation: null },
+			DEFAULT_THRESHOLDS,
+			DEFAULT_MITIGATION_CONFIG,
+		);
+		expect(v.signals).not.toContain("mitigated:dmarc_pass_compensates_method_fail");
+	});
+
+	it("DMARC_PASS_COMPENSATES_METHOD_FAIL.apply zeroes only spf_fail and dkim_fail", () => {
+		const contribs = [
+			{ scorer: "auth" as const, rule: "spf_fail", weight: 10, reason: "SPF failed" },
+			{ scorer: "auth" as const, rule: "dkim_fail", weight: 10, reason: "DKIM failed" },
+			{ scorer: "auth" as const, rule: "dmarc_pass", weight: -10, reason: "DMARC passed" },
+		];
+		const modified = DMARC_PASS_COMPENSATES_METHOD_FAIL.apply(contribs);
+		expect(modified.find((c) => c.rule === "spf_fail")?.weight).toBe(0);
+		expect(modified.find((c) => c.rule === "dkim_fail")?.weight).toBe(0);
+		expect(modified.find((c) => c.rule === "dmarc_pass")?.weight).toBe(-10); // untouched
+	});
+
+	it("mitigation default: DEFAULT_MITIGATION_CONFIG has dmarc_pass_compensates_method_fail enabled", () => {
+		expect(DEFAULT_MITIGATION_CONFIG.dmarc_pass_compensates_method_fail).toBe(true);
 	});
 });
