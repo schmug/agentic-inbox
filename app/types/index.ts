@@ -54,6 +54,11 @@ export interface IntelSettings {
 	hub?: HubConfigSettings;
 }
 
+export interface RufIngestionSettings {
+	enabled?: boolean;
+	retain_raw?: boolean;
+}
+
 export interface SecuritySettings {
 	enabled?: boolean;
 	learning_mode?: boolean;
@@ -67,6 +72,19 @@ export interface SecuritySettings {
 	business_hours?: BusinessHoursSettings;
 	attachment_policy?: AttachmentPolicySettings;
 	folder_policies?: Record<string, FolderPolicySettings>;
+	ruf_ingestion?: RufIngestionSettings;
+}
+
+export interface DmarcRufRecord {
+	id: string;
+	received_at: string;
+	original_mail_from: string | null;
+	source_ip: string | null;
+	failure_type: string | null;
+	reported_domain: string | null;
+	feedback_type: string | null;
+	auth_results: string | null;
+	original_headers: string | null;
 }
 
 export interface MailboxSettings {
