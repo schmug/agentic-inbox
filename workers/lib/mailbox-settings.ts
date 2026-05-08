@@ -249,6 +249,10 @@ function mergeSecurityWithDefault(value: unknown): MailboxSecuritySettings {
 			...DEFAULT_SECURITY_SETTINGS.classification,
 			...(partial.classification ?? {}),
 		},
+		ruf_ingestion: {
+			...DEFAULT_SECURITY_SETTINGS.ruf_ingestion,
+			...(partial.ruf_ingestion ?? {}),
+		},
 	};
 }
 

@@ -3,17 +3,23 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 /**
- * DMARC aggregate-report ingestion.
+ * DMARC aggregate-report ingestion (RUA) and forensic-report ingestion (RUF).
  *
- * DMARC reports arrive as email with a gzipped XML attachment. We divert
- * them out of the normal security pipeline (no sense classifying machine
- * reports as phish) and feed them into the per-mailbox dashboard DB.
+ * RUA reports arrive as email with a gzipped XML attachment. We divert them
+ * out of the normal security pipeline and feed them into the per-mailbox DB.
+ *
+ * RUF reports (RFC 6591) are privacy-gated and opt-in per mailbox. They only
+ * ingest when `ruf_ingestion.enabled === true` in the mailbox security settings.
  */
 
 import type { Email } from "postal-mime";
 import type { Env } from "../types";
 import { getMailboxStub } from "../lib/email-helpers";
 import { bufferToXmlText, gunzip, parseDmarcXml } from "./parser";
+import { isDmarcRuf, parseDmarcRuf } from "./ruf-parser";
+import type { RufIngestionSettings } from "../security/defaults";
+
+export { isDmarcRuf } from "./ruf-parser";
 
 /** Heuristic: does this parsed email look like a DMARC aggregate report? */
 export function isDmarcReport(parsed: Email): boolean {
@@ -99,4 +105,62 @@ function normalizeContent(content: unknown): ArrayBuffer | null {
 		return new TextEncoder().encode(content).buffer as ArrayBuffer;
 	}
 	return null;
+}
+
+/** Rate-limit: max RUF reports accepted per mailbox per minute (issue #171). */
+const RUF_RATE_LIMIT_PER_MINUTE = 100;
+
+/**
+ * Ingest a DMARC RUF forensic report (RFC 6591) into the per-mailbox DB.
+ *
+ * Returns early with `{ ingested: false, reason }` when:
+ * - `settings.enabled` is false (opt-out path — report silently dropped)
+ * - The report exceeds the 5 MB payload cap
+ * - The mailbox has hit the 100-reports/minute rate limit
+ * - The `message/feedback-report` part is missing or undecodable
+ */
+export async function ingestDmarcRuf(
+	env: Env,
+	mailboxId: string,
+	messageId: string,
+	parsed: Email,
+	settings: RufIngestionSettings,
+): Promise<{ ingested: boolean; reason?: string }> {
+	if (!settings.enabled) {
+		return { ingested: false, reason: "ruf_ingestion disabled for this mailbox" };
+	}
+
+	const stub = getMailboxStub(env, mailboxId);
+
+	// Rate-limit: count reports received in the last 60 seconds.
+	const rateLimitWindowStart = new Date(Date.now() - 60_000).toISOString();
+	const recentCount = await stub.countDmarcRufRecordsSince(rateLimitWindowStart);
+	if (recentCount >= RUF_RATE_LIMIT_PER_MINUTE) {
+		return { ingested: false, reason: `rate limit exceeded (${recentCount} reports in the last 60s)` };
+	}
+
+	let record;
+	try {
+		record = parseDmarcRuf(parsed, settings.retain_raw);
+	} catch (e) {
+		return { ingested: false, reason: (e as Error).message };
+	}
+
+	if (!record) {
+		return { ingested: false, reason: "no message/feedback-report part found" };
+	}
+
+	await stub.insertDmarcRufRecord({
+		id: messageId,
+		received_at: new Date().toISOString(),
+		original_mail_from: record.original_mail_from,
+		source_ip: record.source_ip,
+		failure_type: record.failure_type,
+		reported_domain: record.reported_domain,
+		feedback_type: record.feedback_type,
+		auth_results: record.auth_results,
+		original_headers: record.original_headers,
+	});
+
+	return { ingested: true };
 }

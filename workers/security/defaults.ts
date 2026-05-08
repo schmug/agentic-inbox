@@ -112,6 +112,29 @@ export interface MailboxSecuritySettings {
 	 * and `DEFAULT_MITIGATION_CONFIG` in `workers/security/verdict.ts`.
 	 */
 	mitigations: MitigationConfig;
+	/**
+	 * Issue #171: DMARC RUF (forensic report) ingestion. Default-off because
+	 * forensic reports can contain PII for legitimate users experiencing
+	 * transient SPF/DKIM glitches. Both fields default false so a fresh
+	 * mailbox never silently ingests forensic reports.
+	 */
+	ruf_ingestion: RufIngestionSettings;
+}
+
+/**
+ * Per-mailbox DMARC RUF forensic-report ingestion controls (issue #171).
+ * Both default false — opt-in per mailbox.
+ */
+export interface RufIngestionSettings {
+	/** When true, incoming `message/feedback-report` mail is parsed and stored. */
+	enabled: boolean;
+	/**
+	 * When true, the original message body is stored alongside the failure
+	 * record. **Privacy warning:** bodies may contain PII. Disabled by
+	 * default; operators must acknowledge the privacy implications before
+	 * enabling.
+	 */
+	retain_raw: boolean;
 }
 
 export type { MitigationConfig };
@@ -123,6 +146,11 @@ export type { MitigationConfig };
  */
 export const DEFAULT_CLASSIFICATION_SETTINGS: ClassificationSettings = {
 	skip_on_timeout: true,
+};
+
+export const DEFAULT_RUF_INGESTION_SETTINGS: RufIngestionSettings = {
+	enabled: false,
+	retain_raw: false,
 };
 
 export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
@@ -140,4 +168,5 @@ export const DEFAULT_SECURITY_SETTINGS: MailboxSecuritySettings = {
 	confidence_aware_actions: false,
 	min_confidence_for_quarantine: 0.6,
 	mitigations: DEFAULT_MITIGATION_CONFIG,
+	ruf_ingestion: DEFAULT_RUF_INGESTION_SETTINGS,
 };
