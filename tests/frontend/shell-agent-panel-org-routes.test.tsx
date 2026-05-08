@@ -42,6 +42,23 @@ vi.mock("~/queries/domains", () => ({
 	}),
 }));
 
+// Mock the agent SDK hooks so OrgAgentPanel (v2) doesn't attempt real
+// WebSocket/HTTP connections to an agent server that doesn't exist in the
+// test environment.
+vi.mock("agents/react", () => ({
+	useAgent: () => ({}),
+}));
+
+vi.mock("@cloudflare/ai-chat/react", () => ({
+	useAgentChat: () => ({
+		messages: [],
+		sendMessage: vi.fn(),
+		status: "idle" as const,
+		setMessages: vi.fn(),
+		stop: vi.fn(),
+	}),
+}));
+
 vi.mock("~/queries/org", () => ({
 	useOrgOverview: () => ({
 		data: {
