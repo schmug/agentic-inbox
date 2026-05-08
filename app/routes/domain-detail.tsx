@@ -9,8 +9,9 @@ import {
 } from "@phosphor-icons/react";
 import { Link as RouterLink, useParams } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
-import { useDomainStats } from "~/queries/domains";
+import { useDomainStats, useRufRecords } from "~/queries/domains";
 import type {
+	DmarcRufRecord,
 	DomainStats,
 	OrgVerdictMix,
 } from "~/types";
@@ -22,6 +23,7 @@ export function meta({ params }: { params: { domain?: string } }) {
 export default function DomainDetailRoute() {
 	const { domain } = useParams<{ domain: string }>();
 	const { data, isLoading, isError, refetch } = useDomainStats(domain);
+	const rufQuery = useRufRecords(domain);
 
 	return (
 		<Shell>
@@ -35,7 +37,7 @@ export default function DomainDetailRoute() {
 				) : isError ? (
 					<DomainError onRetry={() => refetch()} />
 				) : data ? (
-					<DomainBody data={data} />
+					<DomainBody data={data} rufData={rufQuery.data} />
 				) : null}
 			</div>
 		</Shell>
@@ -89,7 +91,7 @@ function DomainError({ onRetry }: { onRetry: () => void }) {
 	);
 }
 
-function DomainBody({ data }: { data: DomainStats }) {
+function DomainBody({ data, rufData }: { data: DomainStats; rufData: import("~/queries/domains").RufRecordsResponse | undefined }) {
 	return (
 		<>
 			<KpiGrid data={data} />
@@ -108,6 +110,9 @@ function DomainBody({ data }: { data: DomainStats }) {
 			</div>
 			<MailboxList mailboxes={data.mailboxes} />
 			{data.recentCases.length > 0 && <RecentCasesList cases={data.recentCases} />}
+			{rufData?.enabled && rufData.records.length > 0 && (
+				<RufFailuresTable records={rufData.records} />
+			)}
 		</>
 	);
 }
@@ -463,6 +468,58 @@ function DkimPostureCard({
 					))}
 				</dl>
 			)}
+		</div>
+	);
+}
+
+function RufFailuresTable({ records }: { records: DmarcRufRecord[] }) {
+	return (
+		<div className="pp-card p-5">
+			<div className="text-[10.5px] uppercase tracking-[0.06em] text-ink-3 mb-3 flex items-center gap-1.5">
+				<ShieldCheckIcon size={12} />
+				DMARC RUF failures · recent
+			</div>
+			<div className="overflow-x-auto">
+				<table className="w-full text-[12px] text-ink-2">
+					<thead>
+						<tr className="text-left text-[10.5px] uppercase tracking-[0.06em] text-ink-3 border-b border-line">
+							<th className="pb-2 pr-4 font-normal">Received</th>
+							<th className="pb-2 pr-4 font-normal">Source IP</th>
+							<th className="pb-2 pr-4 font-normal">Reported domain</th>
+							<th className="pb-2 pr-4 font-normal">Failure type</th>
+							<th className="pb-2 font-normal">Auth results</th>
+						</tr>
+					</thead>
+					<tbody className="divide-y divide-line">
+						{records.map((r) => (
+							<tr key={r.id} className="align-top">
+								<td className="py-2 pr-4 pp-mono tabular-nums text-ink-3 whitespace-nowrap">
+									{r.received_at
+										? new Date(r.received_at).toLocaleString(undefined, {
+												month: "short",
+												day: "numeric",
+												hour: "2-digit",
+												minute: "2-digit",
+											})
+										: "—"}
+								</td>
+								<td className="py-2 pr-4 pp-mono text-ink-2">
+									{r.source_ip ?? "—"}
+								</td>
+								<td className="py-2 pr-4 text-ink-2">
+									{r.reported_domain ?? "—"}
+								</td>
+								<td className="py-2 pr-4 text-ink-2">
+									{r.failure_type ?? "—"}
+								</td>
+								<td className="py-2 text-ink-3 max-w-xs truncate">
+									{r.auth_results ?? "—"}
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
 		</div>
 	);
 }

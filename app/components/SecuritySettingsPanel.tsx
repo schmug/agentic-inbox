@@ -225,6 +225,39 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 				</div>
 			</div>
 
+			{/* DMARC RUF ingestion */}
+			<div className="border-t border-line pt-5">
+				<div className="text-xs font-medium text-ink mb-2">DMARC forensic report ingestion (RUF)</div>
+				<p className="text-xs text-ink-3 mb-3">
+					Opt-in ingestion of DMARC RUF forensic failure reports (RFC 6591). When enabled,
+					reports delivered to this mailbox are parsed and stored for investigation on the
+					domain detail page. Disabled by default — enabling this retains per-message
+					authentication metadata, so only enable on mailboxes you control and review.
+				</p>
+				<div className="space-y-3">
+					<Switch
+						label="Enable RUF forensic report ingestion"
+						checked={!!(s.ruf_ingestion?.enabled)}
+						onCheckedChange={(v) => patch({ ruf_ingestion: { ...s.ruf_ingestion, enabled: v, retain_raw: s.ruf_ingestion?.retain_raw ?? false } })}
+						disabled={!s.enabled}
+					/>
+					<Switch
+						label="Retain original message headers (privacy-sensitive)"
+						checked={!!(s.ruf_ingestion?.retain_raw)}
+						onCheckedChange={(v) => patch({ ruf_ingestion: { ...s.ruf_ingestion, enabled: s.ruf_ingestion?.enabled ?? false, retain_raw: v } })}
+						disabled={!s.enabled || !s.ruf_ingestion?.enabled}
+					/>
+					<p className="text-xs text-ink-3 -mt-2">
+						When on, the header block of the original failing message is stored with
+						<code className="text-ink"> To</code>,{" "}
+						<code className="text-ink">Cc</code>,{" "}
+						<code className="text-ink">Bcc</code>, and{" "}
+						<code className="text-ink">Subject</code> redacted. When off, only the
+						machine-readable ARF fields (IP, domain, failure type) are stored.
+					</p>
+				</div>
+			</div>
+
 			{/* Business hours */}
 			<div className="border-t border-line pt-5">
 				<div className="text-xs font-medium text-ink mb-2">Business hours</div>
