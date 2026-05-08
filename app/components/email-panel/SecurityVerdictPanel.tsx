@@ -53,6 +53,7 @@ export default function SecurityVerdictPanel({ email }: { email: Email }) {
 						</span>
 					)}
 					<span className="text-xs text-ink-3 ml-1">score {verdict.score}/100</span>
+					<ConfidenceChip confidence={verdict.confidence} />
 					<span className="ml-auto text-ink-3">
 						{expanded ? <CaretUpIcon size={16} /> : <CaretDownIcon size={16} />}
 					</span>
@@ -128,6 +129,24 @@ function AuthChip({ label, value }: { label: string; value: string }) {
 		<span className="text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3">
 			<span className="text-ink-3">{label} </span>
 			<span className={`font-medium ${color}`}>{value}</span>
+		</span>
+	);
+}
+
+/** Aggregate pipeline confidence chip. Renders "—" when confidence is absent
+ * (pre-#105 persisted verdicts) so operators can distinguish "unknown" from
+ * "genuinely zero confidence". */
+function ConfidenceChip({ confidence }: { confidence?: number }) {
+	return (
+		<span
+			className="text-xs rounded border border-line px-1.5 py-0.5 bg-paper-3"
+			title="Aggregate pipeline confidence"
+			data-testid="verdict-confidence-chip"
+		>
+			<span className="text-ink-3">confidence </span>
+			<span className="font-medium text-ink">
+				{confidence != null ? `${Math.round(confidence * 100)}%` : "—"}
+			</span>
 		</span>
 	);
 }

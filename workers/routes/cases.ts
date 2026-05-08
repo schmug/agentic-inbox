@@ -74,7 +74,27 @@ caseRoutes.post("/", async (c) => {
 caseRoutes.get("/:caseId", async (c) => {
 	const caseData = await c.var.mailboxStub.getCase(c.req.param("caseId"));
 	if (!caseData) return c.json({ error: "Not found" }, 404);
-	return c.json({ case: caseData });
+
+	// Expose aggregate confidence alongside score (issue #220). Confidence
+	// is not a dedicated column — it lives in the persisted verdict JSON on
+	// the originating email. Pull it from the first linked email's
+	// security_verdict at read time so pre-#105 rows (no `confidence` field)
+	// naturally fall back to null without any migration.
+	let confidence: number | null = null;
+	const firstEmailRef = caseData.emails?.[0];
+	if (firstEmailRef) {
+		const email = await c.var.mailboxStub.getEmail(firstEmailRef.email_id);
+		if (email?.security_verdict) {
+			try {
+				const verdict = JSON.parse(email.security_verdict as string) as { confidence?: number };
+				confidence = typeof verdict.confidence === "number" ? verdict.confidence : null;
+			} catch {
+				// malformed verdict JSON — confidence stays null
+			}
+		}
+	}
+
+	return c.json({ case: { ...caseData, confidence } });
 });
 
 caseRoutes.patch("/:caseId", async (c) => {

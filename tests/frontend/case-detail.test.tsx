@@ -21,6 +21,8 @@ const baseCase = {
 	shared_to_hub: 0,
 	hub_event_uuid: null,
 	score: null as number | null,
+	// Aggregate confidence (issue #220). Null for pre-#105 cases, 0–1 otherwise.
+	confidence: null as number | null,
 	summary: null as string | null,
 	summary_status: null as "pending" | "ready" | "failed" | null,
 	stage_trace: null as
@@ -372,5 +374,55 @@ describe("CaseDetailRoute — pipeline trace timeline (#128)", () => {
 		expect(screen.getByTestId("pipeline-trace-error")).toHaveTextContent(
 			/Pipeline trace unavailable/i,
 		);
+	});
+});
+
+// ── Verdict confidence indicator in title bar (issue #220) ────────────
+//
+// The title bar shows a small confidence label below the ScoreRing (or the
+// muted-dash placeholder). When `confidence` is null (pre-#105 cases) the
+// label renders "— conf." so operators can distinguish "unknown" from 0%.
+describe("CaseDetailRoute — confidence indicator in title bar (#220)", () => {
+	beforeEach(() => { vi.unstubAllGlobals(); });
+	afterEach(() => { vi.unstubAllGlobals(); });
+
+	it("renders the confidence percentage when data.confidence is present", async () => {
+		mockFetchOnce({ case: { ...baseCase, score: 85, confidence: 0.85 } });
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
+
+		const indicator = screen.getByTestId("case-confidence");
+		expect(indicator).toBeInTheDocument();
+		expect(indicator).toHaveTextContent("85% conf.");
+	});
+
+	it("renders '— conf.' when data.confidence is null (pre-#105 row)", async () => {
+		mockFetchOnce({ case: { ...baseCase, score: 75, confidence: null } });
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
+
+		const indicator = screen.getByTestId("case-confidence");
+		expect(indicator).toHaveTextContent("— conf.");
+		expect(indicator).not.toHaveTextContent("0%");
+	});
+
+	it("renders '— conf.' when data.confidence is undefined (missing from API response)", async () => {
+		// API response omits the field entirely (pre-#220 API version)
+		const { confidence: _omit, ...baseCaseNoConfidence } = { ...baseCase, confidence: undefined };
+		mockFetchOnce({ case: baseCaseNoConfidence });
+		renderCaseDetail();
+
+		expect(
+			await screen.findByText(/Suspicious wire-transfer request/i),
+		).toBeInTheDocument();
+
+		const indicator = screen.getByTestId("case-confidence");
+		expect(indicator).toHaveTextContent("— conf.");
 	});
 });
