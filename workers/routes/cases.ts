@@ -146,6 +146,21 @@ caseRoutes.post("/report-phish", async (c) => {
 		typeof (email as { stage_trace?: string | null }).stage_trace === "string"
 			? (email as { stage_trace?: string | null }).stage_trace!
 			: null;
+	// Aggregate pipeline confidence (issue #224). Stored in the
+	// security_verdict JSON as FinalVerdict.confidence; extract it here
+	// so the case row carries the value without a join at render time.
+	const verdictJson = (email as { security_verdict?: string | null }).security_verdict;
+	let verdictConfidence: number | null = null;
+	if (typeof verdictJson === "string") {
+		try {
+			const parsed = JSON.parse(verdictJson) as { confidence?: unknown };
+			if (typeof parsed?.confidence === "number") {
+				verdictConfidence = parsed.confidence;
+			}
+		} catch {
+			// malformed JSON — leave confidence null
+		}
+	}
 	const { id } = await c.var.mailboxStub.createCase({
 		title: `Reported phish: ${email.subject || "(no subject)"}`,
 		notes: `Reported from email ${emailId}. Sender: ${email.sender}.`,
@@ -153,6 +168,7 @@ caseRoutes.post("/report-phish", async (c) => {
 		observables,
 		score: verdictScore,
 		stage_trace: stageTrace,
+		confidence: verdictConfidence,
 	});
 
 	// Async AI co-pilot summary generation (issue #127). createCase

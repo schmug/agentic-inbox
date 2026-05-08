@@ -1322,6 +1322,12 @@ export class MailboxDO extends DurableObject<Env> {
 		 * — the UI hides the timeline card.
 		 */
 		stage_trace?: string | null;
+		/**
+		 * Aggregate pipeline confidence in [0,1] copied from
+		 * FinalVerdict.confidence at case-creation time (issue #224).
+		 * Null/undefined leaves the column NULL — the UI renders "—".
+		 */
+		confidence?: number | null;
 	}) {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -1346,6 +1352,7 @@ export class MailboxDO extends DurableObject<Env> {
 				summary: null,
 				summary_status: summaryStatus,
 				stage_trace: input.stage_trace ?? null,
+				confidence: input.confidence ?? null,
 			})
 			.run();
 		if (input.emailId) {
@@ -1412,7 +1419,14 @@ export class MailboxDO extends DurableObject<Env> {
 			stage_trace === null && typeof rawTrace === "string" && rawTrace.length > 0
 				? "malformed"
 				: null;
-		return { ...row, stage_trace, stage_trace_error, emails, observables };
+		return {
+			...row,
+			stage_trace,
+			stage_trace_error,
+			confidence: typeof row.confidence === "number" ? row.confidence : null,
+			emails,
+			observables,
+		};
 	}
 
 	async updateCase(

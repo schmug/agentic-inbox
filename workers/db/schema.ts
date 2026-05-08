@@ -177,6 +177,10 @@ export const cases = sqliteTable("cases", {
 	// email, or pre-#128 rows). The frontend hides the timeline card
 	// when this is NULL/empty.
 	stage_trace: text("stage_trace"),
+	// Aggregate pipeline confidence copied from FinalVerdict.confidence at
+	// case-creation time (issue #224). NULL for old rows and manual API
+	// creates; the frontend renders "—" in that case.
+	confidence: real("confidence"),
 });
 
 export const caseEmails = sqliteTable(
