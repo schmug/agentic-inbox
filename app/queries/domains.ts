@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "~/services/api";
-import type { DomainListEntry, DomainStats } from "~/types";
+import type { DomainListEntry, DomainStats, DmarcRufRecord } from "~/types";
 import { queryKeys } from "./keys";
 
 /**
@@ -47,5 +47,20 @@ export function useRemoveDomain() {
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.config });
 		},
+	});
+}
+
+export interface RufRecordsResponse {
+	enabled: boolean;
+	records: DmarcRufRecord[];
+}
+
+export function useRufRecords(domain: string | undefined) {
+	return useQuery<RufRecordsResponse>({
+		queryKey: domain ? ["domains", domain, "ruf-records"] : ["domains", "_disabled", "ruf-records"],
+		queryFn: ({ signal }) =>
+			api.getDomainRufRecords(domain!, { signal }) as Promise<RufRecordsResponse>,
+		enabled: !!domain,
+		staleTime: 60_000,
 	});
 }

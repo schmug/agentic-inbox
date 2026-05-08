@@ -89,15 +89,16 @@ export interface ShellDomainsMockOverrides {
 	useDomains?: () => QueryStub<unknown[]>;
 	useAddDomain?: () => unknown;
 	useRemoveDomain?: () => unknown;
+	useRufRecords?: () => QueryStub<unknown>;
 	[key: string]: unknown;
 }
 
 /**
  * Factory for `~/queries/domains`. Defaults cover the Shell-consumed
- * `useDomainStats` hook. `useDomains` is **not** consumed by Shell directly
- * — it's a route-level concern (home + domains-list) — so it's omitted from
- * the defaults. Tests that need it should pass an override; tests that
- * don't shouldn't have to think about it.
+ * `useDomainStats` hook. `useDomains` and `useRufRecords` are **not**
+ * consumed by Shell directly — they're route-level concerns (home + domains-
+ * list) — so they're omitted from the defaults. Tests that need them should
+ * pass an override; tests that don't shouldn't have to think about them.
  *
  * `useAddDomain` and `useRemoveDomain` are domain-onboarding mutations (#181).
  * The defaults are no-op stubs so route tests that don't exercise the
@@ -110,6 +111,7 @@ export function shellDomainsMock(
 		useDomainStats: () => ({ data: undefined, isLoading: false, isError: false }),
 		useAddDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
 		useRemoveDomain: () => ({ mutateAsync: vi.fn(), isPending: false }),
+		useRufRecords: () => ({ data: undefined, isLoading: false, isError: false }),
 		...overrides,
 	};
 }
