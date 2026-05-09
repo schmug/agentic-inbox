@@ -17,6 +17,30 @@ export const aclMemberRoutes = new Hono<MailboxContext>();
 
 aclMemberRoutes.use("*", requireMailbox);
 
+/**
+ * Lock down an unscoped (pre-#27) mailbox by creating its first ACL with the
+ * caller as owner (#241). Returns 201 on success, 409 if an ACL already exists,
+ * 400 when CF Access email is absent (dev mode).
+ */
+aclMemberRoutes.post("/", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+	if (!callerEmail) {
+		return c.json({ error: "CF Access email required to lock down a mailbox" }, 400);
+	}
+
+	const existing = await readMailboxAcl(c.env, mailboxId);
+	if (existing) {
+		return c.json({ error: "Mailbox is already scoped" }, 409);
+	}
+
+	const acl = { owner: callerEmail, members: [callerEmail] };
+	await writeMailboxAcl(c.env, mailboxId, acl);
+	return c.json({ owner: acl.owner, members: acl.members }, 201);
+});
+
 /** Add a member to the mailbox ACL. Idempotent if the email is already present. */
 aclMemberRoutes.post("/members", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;

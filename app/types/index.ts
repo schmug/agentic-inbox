@@ -111,6 +111,7 @@ export interface Mailbox {
 	email: string;
 	name: string;
 	settings?: MailboxSettings;
+	acl_status?: "scoped" | "unscoped";
 }
 
 export interface Email {
