@@ -210,6 +210,23 @@ describe("fetchTlsRptPosture", () => {
 		expect(r).toEqual({ configured: false, endpoints: [] });
 	});
 
+	it("treats DNS NXDOMAIN (Status 3, no Answer field) as the unavailable sentinel", async () => {
+		// Real NXDOMAIN from Cloudflare DoH returns Status:3 with no Answer key.
+		// This is distinct from Status:0 + empty Answer (NOERROR / no records),
+		// which we map to the durable-negative { configured: false }. NXDOMAIN
+		// signals the label itself doesn't exist — we treat that as transient
+		// unavailability rather than caching "no record" for an hour.
+		const fetchImpl = async (url: string) => {
+			expect(new URL(url).hostname).toBe("cloudflare-dns.com");
+			return new Response(
+				JSON.stringify({ Status: 3, TC: false, RD: true, RA: true }),
+				{ status: 200, headers: { "content-type": "application/dns-json" } },
+			);
+		};
+		const r = await fetchTlsRptPosture("acme.com", { fetchImpl });
+		expect(r).toEqual(emptyTlsRptPosture()); // configured: null
+	});
+
 	it("treats a TXT label with non-TLSRPT entries as 'no record'", async () => {
 		const fetchImpl = async () =>
 			dohTxtResponse(['"some other txt"', '"google-site-verification=abc"']);
