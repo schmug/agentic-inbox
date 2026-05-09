@@ -69,6 +69,15 @@ export interface SecuritySettings {
 	trusted_auto_allow?: boolean;
 	trusted_auto_allow_min_messages?: number;
 	intel_auto_block?: boolean;
+	/**
+	 * Issue #105: when true, post-aggregation verdicts whose action is
+	 * `quarantine` but whose aggregate confidence is below
+	 * `min_confidence_for_quarantine` are demoted to `tag`.
+	 * Default false — existing mailboxes keep today's behaviour.
+	 */
+	confidence_aware_actions?: boolean;
+	/** Threshold in [0,1] for the confidence-aware demote. Default 0.6. */
+	min_confidence_for_quarantine?: number;
 	business_hours?: BusinessHoursSettings;
 	attachment_policy?: AttachmentPolicySettings;
 	folder_policies?: Record<string, FolderPolicySettings>;

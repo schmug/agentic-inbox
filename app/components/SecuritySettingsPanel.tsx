@@ -222,6 +222,34 @@ export function SecuritySettingsPanel({ value, onChange }: SecuritySettingsPanel
 						Senders with at least this many prior messages and an average score &lt; 20 auto-allow when DMARC passes.
 						Set to 0 to require an explicit allowlist entry.
 					</p>
+
+					<Switch
+						label="Confidence-aware quarantine (demote low-confidence verdicts to tag)"
+						checked={!!s.confidence_aware_actions}
+						onCheckedChange={(v) => patch({ confidence_aware_actions: v })}
+						disabled={!s.enabled}
+					/>
+					<p className="text-xs text-ink-3 -mt-2">
+						When on, a verdict that would quarantine but whose aggregate pipeline confidence
+						is below the threshold is demoted to "tag" instead — routing it for review
+						rather than hard quarantine. Useful when the LLM timed out or only one signal
+						fired. Off by default; existing mailboxes are unaffected until you enable this.
+					</p>
+					<Input
+						label="Min confidence for quarantine (0–1)"
+						type="number"
+						min={0}
+						max={1}
+						step={0.05}
+						value={String(s.min_confidence_for_quarantine ?? 0.6)}
+						onChange={(e) => patch({ min_confidence_for_quarantine: clampConfidence(e.target.value, 0.6) })}
+						disabled={!s.enabled || !s.confidence_aware_actions}
+					/>
+					<p className="text-xs text-ink-3 -mt-2">
+						Quarantine verdicts with confidence strictly below this value are demoted to tag.
+						Default 0.6. Raise to catch more uncertain verdicts; lower to only rescue
+						extremely shaky ones.
+					</p>
 				</div>
 			</div>
 
@@ -602,6 +630,12 @@ function parseExtensionList(raw: string): string[] {
 
 function clampScore(raw: string, fallback: number): number {
 	return clampInt(raw, fallback, 0, 100);
+}
+
+function clampConfidence(raw: string, fallback: number): number {
+	const n = parseFloat(raw);
+	if (!Number.isFinite(n)) return fallback;
+	return Math.max(0, Math.min(1, Math.round(n * 100) / 100));
 }
 
 function clampInt(raw: string, fallback: number, min: number, max: number): number {
