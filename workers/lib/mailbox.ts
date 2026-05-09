@@ -10,6 +10,7 @@
 import { createMiddleware } from "hono/factory";
 import type { MailboxDO } from "../durableObject";
 import type { Env } from "../types";
+import { readMailboxAcl, callerInAcl } from "./mailbox-acl";
 
 export type MailboxContext = {
 	Bindings: Env;
@@ -23,19 +24,22 @@ export const requireMailbox = createMiddleware<MailboxContext>(async (c, next) =
 	if (!rawId) return c.json({ error: "Mailbox ID required" }, 400);
 	const mailboxId = decodeURIComponent(rawId);
 
-	// Verify mailbox exists
+	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
 	const key = `mailboxes/${mailboxId}.json`;
-	const obj = await c.env.BUCKET.head(key);
-	if (!obj) {
-		return c.json({ error: "Not found" }, 404);
-	}
 
-	// Instantiate DO stub
+	// Parallel: existence check + ACL read (#27)
+	const [obj, acl] = await Promise.all([
+		c.env.BUCKET.head(key),
+		readMailboxAcl(c.env, mailboxId),
+	]);
+
+	if (!obj) return c.json({ error: "Not found" }, 404);
+	if (!callerInAcl(acl, callerEmail)) return c.json({ error: "Forbidden" }, 403);
+
 	const ns = c.env.MAILBOX;
 	const id = ns.idFromName(mailboxId);
 	const stub = ns.get(id);
 
 	c.set("mailboxStub", stub);
-	
 	await next();
 });
