@@ -75,9 +75,7 @@ const populated: DomainStats = {
 		id: null,
 	},
 	bimiPosture: {
-		configured: null,
-		hasLogo: null,
-		hasVmc: null,
+		configured: false as const,
 	},
 	spfPosture: {
 		record: null,

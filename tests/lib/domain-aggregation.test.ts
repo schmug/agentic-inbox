@@ -328,7 +328,7 @@ describe("aggregateDomainStats", () => {
 		});
 	});
 
-	it("falls back to the all-null BIMI posture when the handler doesn't supply one (#166)", () => {
+	it("falls back to the not-configured BIMI sentinel when the handler doesn't supply one (#245)", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",
 			mailboxes: [
@@ -337,14 +337,10 @@ describe("aggregateDomainStats", () => {
 			summaries: [domainSummary()],
 			now: NOW.toISOString(),
 		});
-		expect(result!.bimiPosture).toEqual({
-			configured: null,
-			hasLogo: null,
-			hasVmc: null,
-		});
+		expect(result!.bimiPosture).toEqual({ configured: false });
 	});
 
-	it("threads a real BIMI posture through unchanged when supplied (#166)", () => {
+	it("threads a real BIMI posture through unchanged when supplied (#245)", () => {
 		const result = aggregateDomainStats({
 			domain: "acme.com",
 			mailboxes: [
@@ -354,13 +350,11 @@ describe("aggregateDomainStats", () => {
 			now: NOW.toISOString(),
 			bimiPosture: {
 				configured: true,
-				hasLogo: true,
 				hasVmc: true,
 			},
 		});
 		expect(result!.bimiPosture).toEqual({
 			configured: true,
-			hasLogo: true,
 			hasVmc: true,
 		});
 	});

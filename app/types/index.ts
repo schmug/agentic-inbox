@@ -289,14 +289,13 @@ export interface MtaStsPosture {
 	id: string | null;
 }
 
-/** BIMI posture (#166). All fields nullable; `configured: true` + null
- * `hasLogo`/`hasVmc` is impossible (the resolver always sets all three when
- * a record exists). `configured: false` is "no `v=BIMI1` record published". */
-export interface BimiPosture {
-	configured: boolean | null;
-	hasLogo: boolean | null;
-	hasVmc: boolean | null;
-}
+/** BIMI posture (#245, part of #156).
+ * `{ configured: false }` — lookup unavailable or no `v=BIMI1` record found.
+ * `{ configured: true, hasVmc: boolean }` — record found; hasVmc indicates
+ * whether the `a=` tag carries a non-empty Verified Mark Certificate URL. */
+export type BimiPosture =
+	| { configured: false }
+	| { configured: true; hasVmc: boolean };
 
 /** SPF posture (#167). All-null fields render the "unavailable" affordance.
  * `exceedsLimit: true` means the record fails permerror per RFC 7208 §4.6.4. */
