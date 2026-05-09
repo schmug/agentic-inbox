@@ -13,6 +13,7 @@ import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
 export { EmailAgent } from "./agent";
+export { OrgAgent } from "./agent/org";
 export { EmailMCP } from "./mcp";
 
 declare module "react-router" {

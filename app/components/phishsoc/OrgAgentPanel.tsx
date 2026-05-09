@@ -1,252 +1,85 @@
 // Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
 //
-// Org-scope co-pilot (#198). Sibling to `~/components/AgentPanel.tsx`. The
-// per-mailbox agent is a real durable-object backed chat with tools that
-// operate on a single mailbox's emails; this panel is intentionally a much
-// thinner thing — a chat-shaped UI that synthesizes answers client-side
-// from data already loaded by `useOrgOverview`. v1 has no backing agent,
-// no streaming, no tools. The badge/header is deliberately distinct so
-// users know they're in cross-mailbox context.
+// Org-scope co-pilot — v2 (#212). Backed by a real `OrgAgent` durable-object
+// with cross-mailbox tools (`get_org_overview`, `list_top_threats`,
+// `search_cases_across_mailboxes`). Streaming via `useAgentChat` from
+// `@cloudflare/ai-chat/react`, same as the per-mailbox `AgentPanel`.
 //
-// v2 (out of scope here, tracked separately): a real org-scope DO with
-// cross-mailbox tools, once the per-mailbox `EmailAgent` story stabilizes.
+// The header badge ("Org") and icon (BuildingsIcon) are intentionally distinct
+// from AgentPanel's "AI" badge and RobotIcon so users know they're in the
+// cross-mailbox context and per-mailbox actions aren't available here.
 
-import { Badge, Button, Tooltip } from "@cloudflare/kumo";
+import { Badge, Button, Loader, Tooltip } from "@cloudflare/kumo";
 import {
 	ArrowUpIcon,
 	BuildingsIcon,
+	MagnifyingGlassIcon,
+	ChartBarIcon,
+	ShieldWarningIcon,
 	TrashIcon,
 	UserIcon,
+	WrenchIcon,
+	CheckCircleIcon,
+	StopIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { useOrgOverview } from "~/queries/org";
-import type { OrgOverview } from "~/types";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { useFeedback } from "~/lib/feedback";
+import type { UIMessage } from "ai";
 
-interface ChatMessage {
-	id: string;
-	role: "user" | "assistant";
-	text: string;
-}
+const ORG_TOOL_LABELS: Record<string, { label: string; icon: React.ReactNode }> = {
+	get_org_overview: {
+		label: "Fetching org overview",
+		icon: <ChartBarIcon size={14} weight="bold" />,
+	},
+	list_top_threats: {
+		label: "Loading top threats",
+		icon: <ShieldWarningIcon size={14} weight="bold" />,
+	},
+	search_cases_across_mailboxes: {
+		label: "Searching cases",
+		icon: <MagnifyingGlassIcon size={14} weight="bold" />,
+	},
+};
 
 const SUGGESTED_PROMPTS = [
-	"How is the pipeline doing?",
-	"What's the verdict mix today?",
-	"What are the top threats?",
-	"How many threats blocked in the last 24h?",
+	"What's the verdict mix in the last 24 hours?",
+	"Show me the top threat categories this week",
+	"How is the pipeline performing?",
+	"Search for recent phishing cases",
 ] as const;
 
-// Format a verdict-mix object as a short summary line. Zero totals get a
-// dedicated "no traffic" answer rather than rendering "0 safe, 0 phishing…".
-function formatVerdictMix(label: string, mix: OrgOverview["verdictMix"]): string {
-	const total = mix.safe + mix.suspicious + mix.phishing + mix.spam + mix.bec;
-	if (total === 0) return `${label}: no traffic recorded.`;
-	const parts: string[] = [];
-	if (mix.safe) parts.push(`${mix.safe} safe`);
-	if (mix.suspicious) parts.push(`${mix.suspicious} suspicious`);
-	if (mix.phishing) parts.push(`${mix.phishing} phishing`);
-	if (mix.spam) parts.push(`${mix.spam} spam`);
-	if (mix.bec) parts.push(`${mix.bec} BEC`);
-	return `${label} (${total} total): ${parts.join(", ")}.`;
-}
-
-function formatPipeline(health: OrgOverview["pipelineHealth"]): string {
-	if (health.runs24h === 0) return "Pipeline: no runs in the last 24h.";
-	const successPct = health.successRate24h == null
-		? "unknown success rate"
-		: `${Math.round(health.successRate24h * 100)}% success`;
-	const p95 = health.p95Ms == null ? "p95 unavailable" : `${health.p95Ms}ms p95`;
-	return `Pipeline (24h): ${health.runs24h} runs, ${successPct}, ${p95}.`;
-}
-
-function formatTopThreats(threats: OrgOverview["topThreats"]): string {
-	if (threats.length === 0) return "No threat categories recorded yet.";
-	const top = threats.slice(0, 5);
-	const lines = top.map((t) => `• ${t.category} — ${t.count}`);
-	return `Top threats:\n${lines.join("\n")}`;
-}
-
-// Tiny deterministic router. Maps the user's prompt to a pre-formatted answer
-// over `useOrgOverview` data. No LLM, no fetch — by design. v2 swaps this
-// out for a real backing agent.
-function answerForPrompt(prompt: string, data: OrgOverview | undefined): string {
-	if (!data) {
-		return "I don't have the org overview loaded yet. Try again in a moment.";
-	}
-	const q = prompt.toLowerCase();
-	if (q.includes("pipeline") || q.includes("health") || q.includes("latency")) {
-		return formatPipeline(data.pipelineHealth);
-	}
-	if (q.includes("verdict") || q.includes("mix")) {
-		const today = formatVerdictMix("Verdict mix (24h)", data.verdictMix);
-		const week = formatVerdictMix("Verdict mix (7d)", data.verdictMix7d);
-		return `${today}\n\n${week}`;
-	}
-	if (q.includes("threat") || q.includes("phishing") || q.includes("attack")) {
-		const blocked = `Threats blocked: ${data.threatsBlocked24h} (24h), ${data.threatsBlocked7d} (7d).`;
-		return `${blocked}\n\n${formatTopThreats(data.topThreats)}`;
-	}
-	if (q.includes("blocked")) {
-		return `Threats blocked: ${data.threatsBlocked24h} in the last 24h, ${data.threatsBlocked7d} in the last 7 days.`;
-	}
-	if (q.includes("case")) {
-		return `Open cases across the org: ${data.openCasesTotal}.`;
-	}
-	if (q.includes("mailbox") || q.includes("domain")) {
-		return `${data.mailboxesCount} mailbox${data.mailboxesCount === 1 ? "" : "es"} across ${data.domainsCount} domain${data.domainsCount === 1 ? "" : "s"}.`;
-	}
-	if (q.includes("hub") || q.includes("contribution")) {
-		return `Hub contributions in the last 24h: ${data.hubContributions24h}.`;
-	}
-	// Fallback: render an at-a-glance summary so the user still gets something
-	// grounded rather than a "I don't know" message.
-	return [
-		`Here's what I can see across the org:`,
-		`• ${data.mailboxesCount} mailbox${data.mailboxesCount === 1 ? "" : "es"} across ${data.domainsCount} domain${data.domainsCount === 1 ? "" : "s"}`,
-		`• ${data.threatsBlocked24h} threats blocked in the last 24h`,
-		`• ${data.openCasesTotal} open case${data.openCasesTotal === 1 ? "" : "s"}`,
-		"",
-		`Try asking about pipeline health, verdict mix, or top threats.`,
-	].join("\n");
-}
-
-let nextId = 0;
-function makeId(prefix: string): string {
-	nextId += 1;
-	return `${prefix}-${nextId}`;
-}
-
-export default function OrgAgentPanel() {
-	const { data } = useOrgOverview();
-	const [messages, setMessages] = useState<ChatMessage[]>([]);
-	const [input, setInput] = useState("");
-	const scrollRef = useRef<HTMLDivElement>(null);
-
-	useEffect(() => {
-		// Pin the scroll to the bottom whenever a new message arrives — same
-		// behavior as the per-mailbox AgentPanel.
-		if (scrollRef.current) {
-			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-		}
-	}, [messages.length]);
-
-	function ask(prompt: string) {
-		const trimmed = prompt.trim();
-		if (!trimmed) return;
-		const userMsg: ChatMessage = { id: makeId("u"), role: "user", text: trimmed };
-		const reply: ChatMessage = {
-			id: makeId("a"),
-			role: "assistant",
-			text: answerForPrompt(trimmed, data),
-		};
-		setMessages((prev) => [...prev, userMsg, reply]);
-		setInput("");
-	}
-
-	function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-		e.preventDefault();
-		ask(input);
-	}
-
+function ToolCallBadge({ toolName, state }: { toolName: string; state: string }) {
+	const info = ORG_TOOL_LABELS[toolName] ?? {
+		label: toolName,
+		icon: <WrenchIcon size={14} weight="bold" />,
+	};
+	const isDone =
+		state === "output-available" || state === "result" || state === "output-error";
 	return (
-		<div data-testid="org-agent-panel" className="flex flex-col h-full">
-			{/* Header — deliberately distinct from AgentPanel's "AI · Email Agent"
-			    badge so users know this is org-scope (cross-mailbox) and there
-			    are no per-mailbox tools available here. */}
-			<div className="flex items-center justify-between px-3 py-1.5 border-b border-line shrink-0">
-				<div className="flex items-center gap-2">
-					<Badge variant="primary">Org</Badge>
-					<span className="text-xs text-ink-3">Org Co-pilot</span>
-				</div>
-				<div className="flex items-center gap-1">
-					{messages.length > 0 && (
-						<Tooltip content="Clear chat" asChild>
-							<Button
-								variant="ghost"
-								shape="square"
-								size="sm"
-								icon={<TrashIcon size={14} />}
-								onClick={() => setMessages([])}
-								aria-label="Clear chat"
-							/>
-						</Tooltip>
-					)}
-				</div>
-			</div>
-
-			{/* Messages */}
-			<div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4">
-				{messages.length === 0 ? (
-					<div className="flex flex-col items-center justify-center h-full gap-4">
-						<div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10">
-							<BuildingsIcon
-								size={24}
-								weight="duotone"
-								className="text-accent"
-							/>
-						</div>
-						<p className="text-xs text-ink-3 text-center leading-relaxed px-4">
-							I answer org-wide questions from data already loaded on
-							this page — verdict mix, top threats, pipeline health.
-							Per-mailbox actions live in the mailbox co-pilot.
-						</p>
-						<div className="flex flex-col gap-1.5 w-full">
-							{SUGGESTED_PROMPTS.map((prompt) => (
-								<button
-									key={prompt}
-									type="button"
-									onClick={() => ask(prompt)}
-									className="text-left px-3 py-2 rounded-lg border border-line text-xs text-ink hover:bg-paper-2 hover:border-line-strong transition-colors cursor-pointer bg-transparent"
-								>
-									{prompt}
-								</button>
-							))}
-						</div>
-					</div>
-				) : (
-					<div className="flex flex-col gap-3">
-						{messages.map((msg) => (
-							<MessageBubble key={msg.id} message={msg} />
-						))}
-					</div>
-				)}
-			</div>
-
-			{/* Composer */}
-			<div className="border-t border-line p-3 shrink-0">
-				<form onSubmit={handleSubmit} className="flex items-end gap-2">
-					<textarea
-						value={input}
-						onChange={(e) => setInput(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								ask(input);
-							}
-						}}
-						placeholder="Ask about pipeline, verdicts, threats…"
-						rows={1}
-						aria-label="Ask the org co-pilot"
-						className="flex-1 resize-none rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent min-h-[36px] max-h-[100px]"
-					/>
-					<Button
-						type="submit"
-						variant="primary"
-						size="sm"
-						shape="square"
-						icon={<ArrowUpIcon size={14} weight="bold" />}
-						disabled={!input.trim()}
-						aria-label="Send"
-					/>
-				</form>
-			</div>
+		<div className="flex items-center gap-1.5 py-1 px-2 rounded bg-paper-3/50 text-xs">
+			<span className="text-accent">{info.icon}</span>
+			<span className="text-ink">{info.label}</span>
+			{isDone ? (
+				<CheckCircleIcon size={12} weight="fill" className="text-safe ml-auto" />
+			) : (
+				<Loader size="sm" className="ml-auto" />
+			)}
 		</div>
 	);
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function getToolNameFromPart(part: UIMessage["parts"][number]): string | null {
+	if (part.type === "dynamic-tool") return (part as any).toolName ?? null;
+	if (part.type.startsWith("tool-")) return part.type.replace("tool-", "");
+	return null;
+}
+
+function MessageBubble({ message, isStreaming }: { message: UIMessage; isStreaming: boolean }) {
 	const isUser = message.role === "user";
 	return (
-		<div className={`flex gap-2 ${isUser ? "flex-row-reverse" : ""}`}>
+		<div className={`flex gap-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
 			<div
 				className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
 					isUser ? "bg-accent text-paper" : "bg-paper-3 text-ink"
@@ -259,14 +92,257 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 				)}
 			</div>
 			<div
-				className={`flex-1 min-w-0 rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
-					isUser
-						? "bg-accent/10 text-ink"
-						: "bg-paper-2 text-ink"
+				className={`flex flex-col gap-1 max-w-[85%] min-w-0 ${
+					isUser ? "items-end" : "items-start"
 				}`}
 			>
-				{message.text}
+				{message.parts.map((part, i) => {
+					const key = `${message.id}-part-${i}`;
+					if (part.type === "text" && part.text.trim()) {
+						return (
+							<div
+								key={key}
+								className={`rounded-lg px-3 py-2 text-[13px] leading-relaxed break-words overflow-wrap-anywhere ${
+									isUser
+										? "bg-accent text-paper rounded-br-sm"
+										: "bg-paper-3 text-ink border border-line rounded-bl-sm overflow-hidden"
+								}`}
+							>
+								{isUser ? (
+									part.text
+								) : (
+									<Markdown remarkPlugins={[remarkGfm]}>
+										{part.text}
+									</Markdown>
+								)}
+							</div>
+						);
+					}
+					const toolName = getToolNameFromPart(part);
+					if (toolName) {
+						return (
+							<ToolCallBadge
+								key={key}
+								toolName={toolName}
+								state={(part as any).state ?? "running"}
+							/>
+						);
+					}
+					return null;
+				})}
 			</div>
 		</div>
 	);
+}
+
+// ── Connected panel (lazy-loaded hooks injected) ─────────────────────────────
+
+function OrgAgentConnected({
+	useAgent,
+	useAgentChat,
+}: {
+	useAgent: typeof import("agents/react").useAgent;
+	useAgentChat: typeof import("@cloudflare/ai-chat/react").useAgentChat;
+}) {
+	const scrollRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
+	const [inputValue, setInputValue] = useState("");
+	const feedback = useFeedback();
+
+	// Single fixed-name instance — one OrgAgent per deployment.
+	const agent = useAgent({ agent: "OrgAgent", name: "default" });
+	const { messages, sendMessage, status, setMessages, stop } = useAgentChat({
+		agent,
+		onError: (error) => {
+			console.error("org agent chat error:", error);
+			feedback.error("Org agent request failed. Try again.");
+		},
+	});
+	const isStreaming = status === "streaming" || status === "submitted";
+
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (el) el.scrollTop = el.scrollHeight;
+	}, [messages]);
+
+	useEffect(() => {
+		inputRef.current?.focus();
+	}, []);
+
+	const handleSend = () => {
+		const text = inputValue.trim();
+		if (!text || isStreaming) return;
+		setInputValue("");
+		sendMessage({ text });
+		if (inputRef.current) inputRef.current.style.height = "auto";
+	};
+
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			handleSend();
+		}
+	};
+
+	return (
+		<div data-testid="org-agent-panel" className="flex flex-col h-full">
+			{/* Header — Org badge keeps it distinct from the per-mailbox AgentPanel */}
+			<div className="flex items-center justify-between px-3 py-1.5 border-b border-line shrink-0">
+				<div className="flex items-center gap-2">
+					<Badge variant="primary">Org</Badge>
+					<span className="text-xs text-ink-3">Org Co-pilot</span>
+				</div>
+				<div className="flex items-center gap-1">
+					{isStreaming && <Loader size="sm" />}
+					{messages.length > 0 && (
+						<Tooltip content="Clear chat" asChild>
+							<Button
+								variant="ghost"
+								shape="square"
+								size="sm"
+								icon={<TrashIcon size={14} />}
+								onClick={() => {
+									if (window.confirm("Clear org chat history?")) {
+										setMessages([]);
+									}
+								}}
+								aria-label="Clear chat"
+							/>
+						</Tooltip>
+					)}
+				</div>
+			</div>
+
+			{/* Messages */}
+			<div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-4">
+				{messages.length === 0 ? (
+					<div className="flex flex-col items-center justify-center h-full gap-4">
+						<div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10">
+							<BuildingsIcon size={24} weight="duotone" className="text-accent" />
+						</div>
+						<p className="text-xs text-ink-3 text-center leading-relaxed px-4">
+							I answer cross-mailbox questions using live data — verdict
+							mix, top threats, pipeline health, and case search.
+						</p>
+						<div className="flex flex-col gap-1.5 w-full">
+							{SUGGESTED_PROMPTS.map((prompt) => (
+								<button
+									key={prompt}
+									type="button"
+									onClick={() => sendMessage({ text: prompt })}
+									className="text-left px-3 py-2 rounded-lg border border-line text-xs text-ink hover:bg-paper-2 hover:border-line-strong transition-colors cursor-pointer bg-transparent"
+								>
+									{prompt}
+								</button>
+							))}
+						</div>
+					</div>
+				) : (
+					<div className="flex flex-col gap-3">
+						{messages.map((msg) => (
+							<MessageBubble key={msg.id} message={msg} isStreaming={isStreaming} />
+						))}
+						{isStreaming && (
+							<div className="flex gap-2">
+								<div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-paper-3 text-ink">
+									<BuildingsIcon size={12} weight="bold" />
+								</div>
+								<div className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-paper-3 border border-line rounded-bl-sm">
+									<Loader size="sm" />
+									<span className="text-xs text-ink-3">Thinking…</span>
+								</div>
+							</div>
+						)}
+					</div>
+				)}
+			</div>
+
+			{/* Input */}
+			<div className="shrink-0 border-t border-line px-3 py-2">
+				{isStreaming ? (
+					<div className="flex justify-center">
+						<Button
+							variant="secondary"
+							size="sm"
+							icon={<StopIcon size={14} weight="fill" />}
+							onClick={() => stop()}
+						>
+							Stop generating
+						</Button>
+					</div>
+				) : (
+					<div className="flex items-end gap-1.5">
+						<textarea
+							ref={inputRef}
+							value={inputValue}
+							onChange={(e) => setInputValue(e.target.value)}
+							onKeyDown={handleKeyDown}
+							placeholder="Ask about pipeline, verdicts, top threats…"
+							rows={1}
+							aria-label="Ask the org co-pilot"
+							className="flex-1 resize-none rounded-lg border border-line bg-paper-2 px-3 py-2 text-xs text-ink placeholder:text-ink-3 focus:outline-none focus:ring-1 focus:ring-accent min-h-[36px] max-h-[100px]"
+							style={{ height: "auto", overflow: "hidden" }}
+							onInput={(e) => {
+								const t = e.target as HTMLTextAreaElement;
+								t.style.height = "auto";
+								t.style.height = `${Math.min(t.scrollHeight, 100)}px`;
+								t.style.overflow = t.scrollHeight > 100 ? "auto" : "hidden";
+							}}
+						/>
+						<Button
+							type="submit"
+							variant="primary"
+							shape="square"
+							size="sm"
+							disabled={!inputValue.trim()}
+							icon={<ArrowUpIcon size={14} weight="bold" />}
+							onClick={handleSend}
+							aria-label="Send"
+						/>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
+// ── Default export: lazy-loads agent hooks ───────────────────────────────────
+
+export default function OrgAgentPanel() {
+	const [hooks, setHooks] = useState<{
+		useAgent: typeof import("agents/react").useAgent;
+		useAgentChat: typeof import("@cloudflare/ai-chat/react").useAgentChat;
+	} | null>(null);
+	const [loadError, setLoadError] = useState<string | null>(null);
+
+	useEffect(() => {
+		Promise.all([import("agents/react"), import("@cloudflare/ai-chat/react")])
+			.then(([a, c]) => setHooks({ useAgent: a.useAgent, useAgentChat: c.useAgentChat }))
+			.catch((err) => {
+				console.error("Failed to load org agent modules:", err);
+				setLoadError("Failed to connect to org agent. Reload to retry.");
+			});
+	}, []);
+
+	if (loadError) {
+		return (
+			<div className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center">
+				<span className="text-xs text-danger">{loadError}</span>
+			</div>
+		);
+	}
+
+	if (!hooks) {
+		return (
+			<div
+				data-testid="org-agent-panel"
+				className="flex flex-col items-center justify-center h-full gap-2"
+			>
+				<Loader size="base" />
+				<span className="text-xs text-ink-3">Connecting…</span>
+			</div>
+		);
+	}
+
+	return <OrgAgentConnected useAgent={hooks.useAgent} useAgentChat={hooks.useAgentChat} />;
 }
