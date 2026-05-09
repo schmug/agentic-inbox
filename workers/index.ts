@@ -66,6 +66,7 @@ import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
 import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
 import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl } from "./lib/mailbox-acl";
+import { aclMemberRoutes } from "./routes/acl-members";
 
 type AppContext = Context<MailboxContext>;
 
@@ -131,6 +132,7 @@ app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
 // -- Config ---------------------------------------------------------
 
+app.route("/api/v1/mailboxes/:mailboxId/acl", aclMemberRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
