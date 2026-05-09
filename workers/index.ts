@@ -245,15 +245,27 @@ app.get("/api/v1/mailboxes", async (c) => {
 	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 
+	// Read ACLs for all mailboxes — needed for acl_status (#241) in both branches.
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+
 	// In dev mode or on pre-#27 single-user deploys (no callerEmail) show all.
 	if (!callerEmail) {
-		return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+		return c.json(allMailboxes.map((m, i) => ({
+			...m,
+			name: m.id,
+			acl_status: acls[i] ? "scoped" : "unscoped",
+		})));
 	}
 
 	// Filter to mailboxes the caller is allowed to see (#27).
-	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
-	const visible = allMailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail));
-	return c.json(visible.map((m) => ({ ...m, name: m.id })));
+	const visible = allMailboxes
+		.map((m, i) => ({ mailbox: m, acl: acls[i] }))
+		.filter(({ acl }) => callerInAcl(acl, callerEmail));
+	return c.json(visible.map(({ mailbox, acl }) => ({
+		...mailbox,
+		name: mailbox.id,
+		acl_status: acl ? "scoped" : "unscoped",
+	})));
 });
 
 // -- Org overview ---------------------------------------------------

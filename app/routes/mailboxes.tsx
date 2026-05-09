@@ -12,7 +12,7 @@ import {
 } from "@cloudflare/kumo";
 import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type MouseEvent, useEffect, useState } from "react";
 import { Link as RouterLink } from "react-router";
 import Shell from "~/components/phishsoc/Shell";
 import { useAutoProvisionMailboxes } from "~/hooks/useAutoProvisionMailboxes";
@@ -21,6 +21,7 @@ import api from "~/services/api";
 import {
 	useCreateMailbox,
 	useDeleteMailbox,
+	useLockDownMailbox,
 	useMailboxes,
 } from "~/queries/mailboxes";
 import { queryKeys } from "~/queries/keys";
@@ -34,6 +35,7 @@ export default function MailboxesRoute() {
 	const { data: mailboxes = [] } = useMailboxes();
 	const createMailbox = useCreateMailbox();
 	const deleteMailbox = useDeleteMailbox();
+	const lockDownMailbox = useLockDownMailbox();
 
 	useAutoProvisionMailboxes();
 
@@ -113,6 +115,19 @@ export default function MailboxesRoute() {
 			}))
 		: mailboxes;
 
+	const mailboxAclStatusMap = new Map(mailboxes.map((m) => [m.id, m.acl_status]));
+
+	const handleLockDown = async (mailboxId: string, e: MouseEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		try {
+			await lockDownMailbox.mutateAsync(mailboxId);
+			feedback.success("Mailbox locked down successfully");
+		} catch {
+			feedback.error("Failed to lock down mailbox");
+		}
+	};
+
 	const isLoading = !configData;
 
 	return (
@@ -163,6 +178,24 @@ export default function MailboxesRoute() {
 										{account.email}
 									</div>
 								</div>
+								{mailboxAclStatusMap.get(account.id) === "unscoped" && (
+									<>
+										<span className="shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10.5px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+											Unscoped
+										</span>
+										<Button
+											variant="ghost"
+											size="sm"
+											loading={
+												lockDownMailbox.isPending &&
+												lockDownMailbox.variables === account.id
+											}
+											onClick={(e) => handleLockDown(account.id, e)}
+										>
+											Lock down
+										</Button>
+									</>
+								)}
 								{!isConfigured && (
 									<Button
 										variant="ghost"

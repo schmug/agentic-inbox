@@ -128,6 +128,8 @@ const api = {
 		put<Mailbox>(`/api/v1/mailboxes/${mailboxId}`, { settings }),
 	deleteMailbox: (mailboxId: string) =>
 		del<void>(`/api/v1/mailboxes/${mailboxId}`),
+	lockDownMailbox: (mailboxId: string) =>
+		post<{ owner: string; members: string[] }>(`/api/v1/mailboxes/${mailboxId}/acl`),
 	// Org-level settings (#106). Backed by R2 key org/settings.json behind a
 	// module-scope ETag cache; the GET returns the raw blob (or {} if missing),
 	// PUT validates through the OrgSettings Zod schema worker-side.

@@ -59,3 +59,13 @@ export function useDeleteMailbox() {
 		},
 	});
 }
+
+export function useLockDownMailbox() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (mailboxId: string) => api.lockDownMailbox(mailboxId),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+		},
+	});
+}
