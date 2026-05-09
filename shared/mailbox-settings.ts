@@ -123,16 +123,20 @@ export const AutoDraftSettings = z
  * the inheritance hierarchy can't distinguish from an intentional one.
  *
  * Three security-critical model fields (`injectionScannerModel`,
- * `draftVerifierModel`, `classifierModel` from #67) are intentionally NOT in
- * MailboxSettings — they live only in OrgSettings. Per-mailbox overrides
- * for these are tracked as a separate feature (see follow-up: per-mailbox
- * model overrides with user choice / local models / own API keys) so the
- * UI can surface the security trade-off explicitly when shipped.
+ * `draftVerifierModel`, `classifierModel`) are declared here as optional
+ * strings (#151 PR A). The resolver chain is `mailbox > org > default` —
+ * domain tier is intentionally excluded (per-domain override carries the
+ * same risk as per-mailbox without UI guardrails). The UI surfaces a
+ * confirmation modal and a curated dropdown so the security trade-off is
+ * explicit.
  */
 export const MailboxSettings = z.object({
   agentSystemPrompt: z.string().optional(),
   autoDraft: AutoDraftSettings.optional(),
   agentModel: z.string().optional(),
+  injectionScannerModel: z.string().optional(),
+  draftVerifierModel: z.string().optional(),
+  classifierModel: z.string().optional(),
   security: SecuritySettings.optional(),
   intel: IntelSettings.optional(),
 }).passthrough();
@@ -174,3 +178,15 @@ export const DEFAULT_INJECTION_SCANNER_MODEL =
 export const DEFAULT_DRAFT_VERIFIER_MODEL =
   "@cf/meta/llama-4-scout-17b-16e-instruct";
 export const DEFAULT_CLASSIFIER_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+
+/**
+ * Pre-vetted model list for the three security-critical model dropdowns
+ * (#151 PR A). Only these models are offered in the per-mailbox UI — no
+ * free-form string entry. The first entry is the system default for
+ * `injectionScannerModel` and `classifierModel`; the second is the default
+ * for `draftVerifierModel`. BYO-key and local-model support land in PR B/C.
+ */
+export const SECURITY_MODELS = [
+  "@cf/meta/llama-3.1-8b-instruct-fast",
+  "@cf/meta/llama-4-scout-17b-16e-instruct",
+] as const;

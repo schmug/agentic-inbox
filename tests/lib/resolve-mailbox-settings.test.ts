@@ -1012,6 +1012,92 @@ describe("stripDefaultEqual — symmetric across mailbox / domain / org tiers", 
 	});
 });
 
+describe("resolveMailboxSettings — security model fields (#151 PR A)", () => {
+	it("(a) per-mailbox override wins over org — injectionScannerModel", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { injectionScannerModel: "@cf/org/scanner" },
+			[MAILBOX_KEY]: { injectionScannerModel: "@cf/mailbox/scanner" },
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.injectionScannerModel).toBe("@cf/mailbox/scanner");
+	});
+
+	it("(a) per-mailbox override wins over org — draftVerifierModel", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { draftVerifierModel: "@cf/org/verifier" },
+			[MAILBOX_KEY]: { draftVerifierModel: "@cf/mailbox/verifier" },
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.draftVerifierModel).toBe("@cf/mailbox/verifier");
+	});
+
+	it("(a) per-mailbox override wins over org — classifierModel", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": { classifierModel: "@cf/org/classifier" },
+			[MAILBOX_KEY]: { classifierModel: "@cf/mailbox/classifier" },
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.classifierModel).toBe("@cf/mailbox/classifier");
+	});
+
+	it("(b) mailbox absent → org value wins (all three fields)", async () => {
+		const bucket = makeFakeBucket({
+			"org/settings.json": {
+				injectionScannerModel: "@cf/org/scanner",
+				draftVerifierModel: "@cf/org/verifier",
+				classifierModel: "@cf/org/classifier",
+			},
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.injectionScannerModel).toBe("@cf/org/scanner");
+		expect(resolved.draftVerifierModel).toBe("@cf/org/verifier");
+		expect(resolved.classifierModel).toBe("@cf/org/classifier");
+	});
+
+	it("(c) both mailbox and org absent → system default", async () => {
+		const bucket = makeFakeBucket({ [MAILBOX_KEY]: {} });
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.injectionScannerModel).toBe(DEFAULT_MAILBOX_SETTINGS.injectionScannerModel);
+		expect(resolved.draftVerifierModel).toBe(DEFAULT_MAILBOX_SETTINGS.draftVerifierModel);
+		expect(resolved.classifierModel).toBe(DEFAULT_MAILBOX_SETTINGS.classifierModel);
+	});
+
+	it("domain tier is still excluded — org wins when mailbox is absent", async () => {
+		// Domain tier is intentionally NOT in the chain for these fields.
+		// Per the #151 issue, per-domain override carries the same risk as
+		// per-mailbox without UI guardrails. Org wins when mailbox is absent.
+		const bucket = makeFakeBucket({
+			"org/settings.json": { injectionScannerModel: "@cf/org/scanner" },
+			[DOMAIN_KEY]: { injectionScannerModel: "@cf/domain/should-be-ignored" },
+			[MAILBOX_KEY]: {},
+		});
+		const resolved = await resolveMailboxSettings(makeEnv(bucket), MAILBOX_ID);
+		expect(resolved.injectionScannerModel).toBe("@cf/org/scanner");
+	});
+
+	it("stripDefaultEqual strips injectionScannerModel when equal to system default", () => {
+		const stripped = stripDefaultEqual({
+			injectionScannerModel: DEFAULT_MAILBOX_SETTINGS.injectionScannerModel,
+		});
+		expect((stripped as Record<string, unknown>).injectionScannerModel).toBeUndefined();
+	});
+
+	it("stripDefaultEqual keeps injectionScannerModel when set to a non-default value", () => {
+		const stripped = stripDefaultEqual({ injectionScannerModel: "@cf/custom/scanner" });
+		expect((stripped as Record<string, unknown>).injectionScannerModel).toBe("@cf/custom/scanner");
+	});
+
+	it("stripDefaultEqual strips draftVerifierModel and classifierModel at default", () => {
+		const stripped = stripDefaultEqual({
+			draftVerifierModel: DEFAULT_MAILBOX_SETTINGS.draftVerifierModel,
+			classifierModel: DEFAULT_MAILBOX_SETTINGS.classifierModel,
+		});
+		expect((stripped as Record<string, unknown>).draftVerifierModel).toBeUndefined();
+		expect((stripped as Record<string, unknown>).classifierModel).toBeUndefined();
+	});
+});
+
 describe("domainFromMailboxId / domainSettingsKey", () => {
 	it("extracts the domain part of an email-style mailboxId", () => {
 		expect(domainFromMailboxId("user@example.com")).toBe("example.com");
