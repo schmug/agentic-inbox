@@ -65,6 +65,7 @@ import { listTextModels } from "./lib/text-models";
 import { fetchHubCorroborationCount } from "./intel/hub-corroboration";
 import { loadHubCredentials } from "./lib/hub-config";
 import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
+import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl } from "./lib/mailbox-acl";
 
 type AppContext = Context<MailboxContext>;
 
@@ -239,8 +240,18 @@ app.get("/api/v1/ai/text-models", async (c) => {
 // -- Mailboxes ------------------------------------------------------
 
 app.get("/api/v1/mailboxes", async (c) => {
+	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
-	return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+
+	// In dev mode or on pre-#27 single-user deploys (no callerEmail) show all.
+	if (!callerEmail) {
+		return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+	}
+
+	// Filter to mailboxes the caller is allowed to see (#27).
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+	const visible = allMailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail));
+	return c.json(visible.map((m) => ({ ...m, name: m.id })));
 });
 
 // -- Org overview ---------------------------------------------------
@@ -709,6 +720,16 @@ app.post("/api/v1/mailboxes", async (c) => {
 	const cleanedSettings = stripDefaultEqual((settings ?? {}) as MailboxSettings);
 	const finalSettings = { ...defaultSettings, ...cleanedSettings };
 	await c.env.BUCKET.put(key, JSON.stringify(finalSettings));
+
+	// Bootstrap owner ACL (#27). Skipped when callerEmail is absent (dev
+	// mode / no Access) — those deploys get the backwards-compat "anyone
+	// past Access can see all mailboxes" behaviour.
+	const creatorEmail = c.req.header("cf-access-authenticated-user-email");
+	if (creatorEmail) {
+		const owner = creatorEmail.toLowerCase();
+		await writeMailboxAcl(c.env, email, { owner, members: [owner] });
+	}
+
 	const stub = c.env.MAILBOX.get(c.env.MAILBOX.idFromName(email));
 	await stub.getFolders();
 	return c.json({ id: email, email, name, settings: finalSettings }, 201);
@@ -877,6 +898,13 @@ async function reapMailbox(env: Env, mailboxId: string): Promise<void> {
 	);
 	await (agentStub as any).reset().catch(
 		(e: Error) => console.error(`reapMailbox(${mailboxId}): agent DO reset failed:`, e.message),
+	);
+
+	// 4. Delete ACL blob (#27). Best-effort — an orphaned ACL is harmless
+	//    because the settings JSON is already gone, so the mailbox can never
+	//    be found via list/get again.
+	await deleteMailboxAcl(env, mailboxId).catch(
+		(e: Error) => console.error(`reapMailbox(${mailboxId}): ACL delete failed:`, e.message),
 	);
 }
 

@@ -22,6 +22,7 @@ import {
 } from "../lib/tools";
 import { Folders, FOLDER_TOOL_DESCRIPTION, MOVE_FOLDER_TOOL_DESCRIPTION } from "../../shared/folders";
 import type { Env } from "../types";
+import { readMailboxAcl, callerInAcl } from "../lib/mailbox-acl";
 
 /** Wrap a plain result object into MCP content format. */
 function mcpText(result: unknown) {
@@ -67,17 +68,33 @@ export class EmailMCP extends McpAgent<Env> {
 		version: "1.0.0",
 	});
 
+	// Caller email from the CF Access header on the initial connection
+	// request. Each McpAgent DO instance handles exactly one session so
+	// this instance field is safe to use across tool calls (#27).
+	#callerEmail: string | null = null;
+
+	async fetch(request: Request): Promise<Response> {
+		this.#callerEmail = request.headers.get("cf-access-authenticated-user-email");
+		return super.fetch(request);
+	}
+
 	async init() {
 		const env = this.env;
 
 		/**
-		 * Verify a mailbox exists in R2 before operating on it.
-		 * Returns an MCP error response if the mailbox is not found, or null if valid.
+		 * Verify a mailbox exists and the caller is permitted to access it (#27).
+		 * Returns an MCP error response on not-found or forbidden, null if valid.
 		 */
 		const verifyMailbox = async (mailboxId: string) => {
-			const obj = await env.BUCKET.head(`mailboxes/${mailboxId}.json`);
+			const [obj, acl] = await Promise.all([
+				env.BUCKET.head(`mailboxes/${mailboxId}.json`),
+				readMailboxAcl(env, mailboxId),
+			]);
 			if (!obj) {
 				return mcpError(`Mailbox "${mailboxId}" not found. Use list_mailboxes to see available mailboxes.`);
+			}
+			if (!callerInAcl(acl, this.#callerEmail)) {
+				return mcpError(`Access denied for mailbox "${mailboxId}".`);
 			}
 			return null;
 		};
@@ -85,11 +102,19 @@ export class EmailMCP extends McpAgent<Env> {
 		// ── list_mailboxes ─────────────────────────────────────────
 		this.server.tool(
 			"list_mailboxes",
-			"List all available mailboxes",
+			"List available mailboxes",
 			{},
 			async () => {
-				const result = await toolListMailboxes(env);
-				return mcpText(result);
+				const all = await toolListMailboxes(env);
+				const callerEmail = this.#callerEmail;
+				if (!callerEmail) return mcpText(all);
+				const acls = await Promise.all(
+					(all as Array<{ id: string }>).map((m) => readMailboxAcl(env, m.id)),
+				);
+				const filtered = (all as Array<{ id: string }>).filter((_, i) =>
+					callerInAcl(acls[i], callerEmail),
+				);
+				return mcpText(filtered);
 			},
 		);
 
