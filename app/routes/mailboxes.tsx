@@ -10,7 +10,7 @@ import {
 	Select,
 	Text,
 } from "@cloudflare/kumo";
-import { EnvelopeIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { EnvelopeIcon, LockSimpleIcon, PlusIcon, TrashIcon, WarningIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { Link as RouterLink } from "react-router";
@@ -21,6 +21,7 @@ import api from "~/services/api";
 import {
 	useCreateMailbox,
 	useDeleteMailbox,
+	useLockDownMailbox,
 	useMailboxes,
 } from "~/queries/mailboxes";
 import { queryKeys } from "~/queries/keys";
@@ -34,6 +35,7 @@ export default function MailboxesRoute() {
 	const { data: mailboxes = [] } = useMailboxes();
 	const createMailbox = useCreateMailbox();
 	const deleteMailbox = useDeleteMailbox();
+	const lockDownMailbox = useLockDownMailbox();
 
 	useAutoProvisionMailboxes();
 
@@ -104,6 +106,17 @@ export default function MailboxesRoute() {
 		}
 	};
 
+	const handleLockDown = async (e: React.MouseEvent, mailboxId: string) => {
+		e.preventDefault();
+		e.stopPropagation();
+		try {
+			await lockDownMailbox.mutateAsync(mailboxId);
+			feedback.success("Mailbox locked down — ACL is now enforced");
+		} catch {
+			feedback.error("Failed to lock down mailbox");
+		}
+	};
+
 	const isConfigured = emailAddresses.length > 0;
 	const accounts = isConfigured
 		? emailAddresses.map((addr) => ({
@@ -144,45 +157,71 @@ export default function MailboxesRoute() {
 					</div>
 				) : accounts.length > 0 ? (
 					<div className="pp-card overflow-hidden">
-						{accounts.map((account, idx) => (
-							<RouterLink
-								key={account.id}
-								to={`/mailbox/${account.id}`}
-								className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
-									idx > 0 ? "border-t border-line" : ""
-								}`}
-							>
-								<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
-									{account.name.charAt(0).toUpperCase()}
-								</div>
-								<div className="min-w-0 flex-1">
-									<div className="text-sm font-medium text-ink truncate">
-										{account.name}
-									</div>
-									<div className="text-sm text-ink-3">
-										{account.email}
-									</div>
-								</div>
-								{!isConfigured && (
-									<Button
-										variant="ghost"
-										size="sm"
-										shape="square"
-										icon={<TrashIcon size={16} />}
-										aria-label={`Delete mailbox ${account.email}`}
-										onClick={(e) => {
-											e.preventDefault();
-											e.stopPropagation();
-											setMailboxToDelete({
-												id: account.id,
-												email: account.email,
-											});
-											setIsDeleteOpen(true);
-										}}
-									/>
-								)}
-							</RouterLink>
-						))}
+						{accounts.map((account, idx) => {
+								const aclStatus = "acl_status" in account ? account.acl_status : undefined;
+								const isUnscoped = aclStatus === "unscoped";
+								return (
+									<RouterLink
+										key={account.id}
+										to={`/mailbox/${account.id}`}
+										className={`group flex items-center gap-4 px-5 py-4 no-underline transition-colors hover:bg-paper-2 ${
+											idx > 0 ? "border-t border-line" : ""
+										}`}
+									>
+										<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-paper-3 text-sm font-bold text-ink">
+											{account.name.charAt(0).toUpperCase()}
+										</div>
+										<div className="min-w-0 flex-1">
+											<div className="flex items-center gap-2">
+												<div className="text-sm font-medium text-ink truncate">
+													{account.name}
+												</div>
+												{isUnscoped && (
+													<span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+														<WarningIcon size={10} weight="bold" />
+														Unscoped
+													</span>
+												)}
+											</div>
+											<div className="text-sm text-ink-3">
+												{account.email}
+											</div>
+										</div>
+										{!isConfigured && (
+											<div className="flex items-center gap-1">
+												{isUnscoped && (
+													<Button
+														variant="secondary"
+														size="sm"
+														icon={<LockSimpleIcon size={14} />}
+														aria-label={`Lock down mailbox ${account.email}`}
+														loading={lockDownMailbox.isPending && lockDownMailbox.variables === account.id}
+														onClick={(e) => handleLockDown(e, account.id)}
+													>
+														Lock down
+													</Button>
+												)}
+												<Button
+													variant="ghost"
+													size="sm"
+													shape="square"
+													icon={<TrashIcon size={16} />}
+													aria-label={`Delete mailbox ${account.email}`}
+													onClick={(e) => {
+														e.preventDefault();
+														e.stopPropagation();
+														setMailboxToDelete({
+															id: account.id,
+															email: account.email,
+														});
+														setIsDeleteOpen(true);
+													}}
+												/>
+											</div>
+										)}
+									</RouterLink>
+								);
+							})}
 					</div>
 				) : (
 					<div className="pp-card py-16 px-6">

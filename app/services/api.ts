@@ -128,6 +128,13 @@ const api = {
 		put<Mailbox>(`/api/v1/mailboxes/${mailboxId}`, { settings }),
 	deleteMailbox: (mailboxId: string) =>
 		del<void>(`/api/v1/mailboxes/${mailboxId}`),
+	// Lock-down endpoint (#241). Writes an ACL with the caller as owner for
+	// mailboxes that have no ACL blob (pre-#27 / unscoped). Returns 201 on
+	// first call and 200 when already scoped (idempotent).
+	lockDownMailbox: (mailboxId: string) =>
+		post<{ owner: string; members: string[]; acl_status: "scoped" }>(
+			`/api/v1/mailboxes/${mailboxId}/acl`,
+		),
 	// Org-level settings (#106). Backed by R2 key org/settings.json behind a
 	// module-scope ETag cache; the GET returns the raw blob (or {} if missing),
 	// PUT validates through the OrgSettings Zod schema worker-side.

@@ -59,3 +59,16 @@ export function useDeleteMailbox() {
 		},
 	});
 }
+
+/** Lock down an unscoped mailbox (#241). Calls POST /api/v1/mailboxes/:id/acl
+ *  which writes an ACL with the caller as owner. Invalidates the mailbox list
+ *  so `acl_status` updates to "scoped" immediately after the action. */
+export function useLockDownMailbox() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (mailboxId: string) => api.lockDownMailbox(mailboxId),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+		},
+	});
+}

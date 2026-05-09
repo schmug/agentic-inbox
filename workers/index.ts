@@ -133,6 +133,28 @@ app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 // -- Config ---------------------------------------------------------
 
 app.route("/api/v1/mailboxes/:mailboxId/acl", aclMemberRoutes);
+
+// Lock-down endpoint (#241). Writes an ACL with the caller as owner for
+// mailboxes that have no ACL blob (pre-#27 / unscoped). Idempotent: if an
+// ACL already exists, the existing ACL is left untouched and 200 is returned.
+// The route sits under requireMailbox so the mailbox settings blob must exist.
+app.post("/api/v1/mailboxes/:mailboxId/acl", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail = c.req.header("cf-access-authenticated-user-email");
+	if (!callerEmail) {
+		return c.json({ error: "CF Access identity required to lock down mailbox" }, 403);
+	}
+	const existing = await readMailboxAcl(c.env, mailboxId);
+	if (existing !== null) {
+		// Already scoped — return the existing ACL as 200 (idempotent).
+		return c.json({ owner: existing.owner, members: existing.members, acl_status: "scoped" });
+	}
+	const owner = callerEmail.toLowerCase();
+	const acl = { owner, members: [owner] };
+	await writeMailboxAcl(c.env, mailboxId, acl);
+	return c.json({ owner: acl.owner, members: acl.members, acl_status: "scoped" }, 201);
+});
+
 app.route("/api/v1/mailboxes/:mailboxId/dmarc", dmarcRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/tlsrpt", tlsrptRoutes);
 app.route("/api/v1/mailboxes/:mailboxId/cases", caseRoutes);
@@ -245,15 +267,27 @@ app.get("/api/v1/mailboxes", async (c) => {
 	const callerEmail = c.req.header("cf-access-authenticated-user-email") ?? null;
 	const allMailboxes = await listMailboxes(c.env.BUCKET);
 
+	// Read ACLs for all mailboxes — used for both visibility filtering (#27)
+	// and the acl_status field (#241).
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+
 	// In dev mode or on pre-#27 single-user deploys (no callerEmail) show all.
 	if (!callerEmail) {
-		return c.json(allMailboxes.map((m) => ({ ...m, name: m.id })));
+		return c.json(allMailboxes.map((m, i) => ({
+			...m,
+			name: m.id,
+			acl_status: acls[i] !== null ? "scoped" : "unscoped",
+		})));
 	}
 
 	// Filter to mailboxes the caller is allowed to see (#27).
-	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
 	const visible = allMailboxes.filter((_, i) => callerInAcl(acls[i], callerEmail));
-	return c.json(visible.map((m) => ({ ...m, name: m.id })));
+	const visibleAcls = acls.filter((_, i) => callerInAcl(acls[i], callerEmail));
+	return c.json(visible.map((m, i) => ({
+		...m,
+		name: m.id,
+		acl_status: visibleAcls[i] !== null ? "scoped" : "unscoped",
+	})));
 });
 
 // -- Org overview ---------------------------------------------------

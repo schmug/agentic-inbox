@@ -111,6 +111,9 @@ export interface Mailbox {
 	email: string;
 	name: string;
 	settings?: MailboxSettings;
+	/** ACL status from #241: "scoped" means an ACL blob exists; "unscoped" means
+	 *  no ACL blob exists (pre-#27 mailbox or single-user deploy without Access). */
+	acl_status?: "scoped" | "unscoped";
 }
 
 export interface Email {
