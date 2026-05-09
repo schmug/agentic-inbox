@@ -433,14 +433,17 @@ export interface MtaStsPostureView {
 	id: string | null;
 }
 
-/** BIMI posture (#166). `configured=null` is "lookup unavailable",
- * `configured=false` is "no `v=BIMI1` record exists". `hasLogo`/`hasVmc`
- * track whether the `l=` / `a=` tags carry non-empty URLs. */
-export interface BimiPostureView {
-	configured: boolean | null;
-	hasLogo: boolean | null;
-	hasVmc: boolean | null;
-}
+/** BIMI posture (#245, part of #156).
+ *
+ * `{ configured: false }` — either lookup unavailable (timeout, network
+ * error, non-200) or no `v=BIMI1` record published. Both states surface as
+ * "not configured" in the UI — the empty-sentinel pattern from `txt.ts`.
+ *
+ * `{ configured: true, hasVmc: boolean }` — a valid `v=BIMI1` record was
+ * found. `hasVmc` is true when the `a=` tag carries a non-empty VMC URL. */
+export type BimiPostureView =
+	| { configured: false }
+	| { configured: true; hasVmc: boolean };
 
 /** SPF posture (#167) — apex `<domain>` TXT plus the bounded include-chain
  * resolution count. `exceedsLimit: true` means the record fails permerror
@@ -568,10 +571,10 @@ export function emptyMtaStsPostureView(): MtaStsPostureView {
 	return { mode: null, mx: null, maxAge: null, id: null };
 }
 
-/** Empty BIMI posture sentinel — `configured=null` distinguishes "lookup
- * unavailable" from a `configured=false` "no record published" result. */
+/** Empty BIMI posture sentinel — `configured: false` surfaces the same
+ * "not configured" affordance whether the lookup failed or found no record. */
 export function emptyBimiPostureView(): BimiPostureView {
-	return { configured: null, hasLogo: null, hasVmc: null };
+	return { configured: false };
 }
 
 /** Empty SPF posture sentinel — every field null, rendered as "unavailable". */

@@ -57,7 +57,7 @@ import {
 } from "./lib/dashboard-aggregation";
 import { emptyDmarcTxtPosture, fetchDmarcTxtPosture } from "./dmarc/txt";
 import { emptyMtaStsPosture, fetchMtaStsPosture } from "./mta-sts/posture";
-import { emptyBimiPosture, fetchBimiPosture } from "./bimi/posture";
+import { emptyBimiPosture, fetchBimiPosture } from "./dmarc/bimi";
 import { emptySpfPosture, fetchSpfPosture } from "./spf/posture";
 import { emptyTlsRptPosture, fetchTlsRptPosture } from "./tlsrpt/posture";
 import { emptyDkimPosture, fetchDkimPosture } from "./dkim/posture";
