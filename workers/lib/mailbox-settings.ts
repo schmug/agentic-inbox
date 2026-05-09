@@ -194,16 +194,15 @@ export async function resolveMailboxSettings(
 		agentModel:
 			mailbox.agentModel ?? domain.agentModel ?? org.agentModel ?? DEFAULT_MAILBOX_SETTINGS.agentModel,
 		autoDraft: resolveAutoDraft(mailbox.autoDraft, domain.autoDraft, org.autoDraft),
-		// The three security-critical model fields stay org-only by design
-		// (#106 audit Q7). Domain tier intentionally NOT consulted here —
-		// per-domain override is the same foot-gun as per-mailbox without
-		// the UI guardrails. Tracked as #151 if/when we want to allow it.
+		// Security-critical model fields: mailbox > org > default (#151 PR A).
+		// Domain tier is intentionally excluded — per-domain override carries
+		// the same risk as per-mailbox without the UI guardrails shipped here.
 		injectionScannerModel:
-			org.injectionScannerModel ?? DEFAULT_MAILBOX_SETTINGS.injectionScannerModel,
+			mailbox.injectionScannerModel ?? org.injectionScannerModel ?? DEFAULT_MAILBOX_SETTINGS.injectionScannerModel,
 		draftVerifierModel:
-			org.draftVerifierModel ?? DEFAULT_MAILBOX_SETTINGS.draftVerifierModel,
+			mailbox.draftVerifierModel ?? org.draftVerifierModel ?? DEFAULT_MAILBOX_SETTINGS.draftVerifierModel,
 		classifierModel:
-			org.classifierModel ?? DEFAULT_MAILBOX_SETTINGS.classifierModel,
+			mailbox.classifierModel ?? org.classifierModel ?? DEFAULT_MAILBOX_SETTINGS.classifierModel,
 		security: normalizeSecurity(security),
 		intel: {
 			hub: intelRaw.hub,
@@ -435,6 +434,12 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 	switch (key) {
 		case "agentModel":
 			return value === DEFAULT_MAILBOX_SETTINGS.agentModel;
+		case "injectionScannerModel":
+			return value === DEFAULT_MAILBOX_SETTINGS.injectionScannerModel;
+		case "draftVerifierModel":
+			return value === DEFAULT_MAILBOX_SETTINGS.draftVerifierModel;
+		case "classifierModel":
+			return value === DEFAULT_MAILBOX_SETTINGS.classifierModel;
 		case "autoDraft":
 			return deepEqual(value, DEFAULT_MAILBOX_SETTINGS.autoDraft);
 		case "agentSystemPrompt":

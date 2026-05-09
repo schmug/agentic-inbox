@@ -31,32 +31,30 @@ describe("MailboxSettings", () => {
     expect(parsed.agentSystemPrompt).toBe("Hi");
   });
 
-  // Post-#106: the three security-critical model fields
-  // (injectionScannerModel, draftVerifierModel, classifierModel) have been
-  // moved off MailboxSettings entirely. They live on OrgSettings only, with
-  // per-mailbox overrides forbidden in v1 — the wrong choice can let
-  // prompt-injection through. A future feature (per-mailbox model overrides
-  // with user choice / local models / own API keys) will reintroduce them
-  // with explicit UI guardrails. Until then the schema's `.passthrough()`
-  // means stale fields in existing mailbox JSON ride through harmlessly,
-  // but they are NOT typed as MailboxSettings keys.
-  it("does not declare security-model fields on MailboxSettings (now org-only)", () => {
-    const parsed = MailboxSettings.parse({});
-    expect((parsed as Record<string, unknown>).injectionScannerModel).toBeUndefined();
-    expect((parsed as Record<string, unknown>).draftVerifierModel).toBeUndefined();
-    expect((parsed as Record<string, unknown>).classifierModel).toBeUndefined();
+  // #151 PR A: the three security-critical model fields are back on
+  // MailboxSettings as per-mailbox overrides, with UI guardrails (curated
+  // dropdown + confirmation modal). The resolver chain is mailbox > org >
+  // default; domain tier is excluded (same risk without guardrails).
+  it("declares injectionScannerModel / draftVerifierModel / classifierModel as optional strings", () => {
+    // Fields round-trip as typed strings when set.
+    const parsed = MailboxSettings.parse({
+      injectionScannerModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+      draftVerifierModel: "@cf/meta/llama-4-scout-17b-16e-instruct",
+      classifierModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+    });
+    expect(parsed.injectionScannerModel).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
+    expect(parsed.draftVerifierModel).toBe("@cf/meta/llama-4-scout-17b-16e-instruct");
+    expect(parsed.classifierModel).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
+    // Absent = inherit (not defaulted at schema layer — resolver fills in defaults).
+    const empty = MailboxSettings.parse({});
+    expect(empty.injectionScannerModel).toBeUndefined();
+    expect(empty.draftVerifierModel).toBeUndefined();
+    expect(empty.classifierModel).toBeUndefined();
   });
 
-  it("ignores stale per-mailbox security-model fields on read (passthrough only)", () => {
-    // Existing R2 mailbox JSON written before #106 may still carry these
-    // fields. They survive the parse via passthrough but the worker call
-    // sites no longer read them — see workers/agent/index.ts and
-    // workers/security/index.ts which now source classifier/verifier/scanner
-    // models from the org tier.
-    const parsed = MailboxSettings.parse({
-      injectionScannerModel: "@cf/custom/injection",
-    });
-    expect((parsed as Record<string, unknown>).injectionScannerModel).toBe("@cf/custom/injection");
+  it("rejects a non-string injectionScannerModel", () => {
+    const result = MailboxSettings.safeParse({ injectionScannerModel: 42 });
+    expect(result.success).toBe(false);
   });
 
   // The security sub-shape is opt-in: an undefined `security` block must

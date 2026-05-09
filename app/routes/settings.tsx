@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Input, Loader } from "@cloudflare/kumo";
+import { Badge, Button, Dialog, Input, Loader } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
@@ -19,7 +19,13 @@ import {
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
 import type { HubConfigSettings, SecuritySettings } from "~/types";
-import { TEXT_MODELS } from "shared/mailbox-settings";
+import {
+	TEXT_MODELS,
+	SECURITY_MODELS,
+	DEFAULT_INJECTION_SCANNER_MODEL,
+	DEFAULT_DRAFT_VERIFIER_MODEL,
+	DEFAULT_CLASSIFIER_MODEL,
+} from "shared/mailbox-settings";
 
 // Placeholder shown in the textarea when no custom prompt is set.
 // The authoritative default prompt lives in workers/agent/index.ts (DEFAULT_SYSTEM_PROMPT).
@@ -29,6 +35,9 @@ interface OrgSettingsShape {
 	agentSystemPrompt?: string;
 	agentModel?: string;
 	autoDraft?: { enabled?: boolean };
+	injectionScannerModel?: string;
+	draftVerifierModel?: string;
+	classifierModel?: string;
 	security?: SecuritySettings;
 	intel?: { hub?: HubConfigSettings };
 }
@@ -119,6 +128,19 @@ export default function SettingsRoute() {
 	const [modelChoice, setModelChoice] = useState<string>(TEXT_MODELS[0]);
 	const [customModel, setCustomModel] = useState("");
 
+	const [injectionScannerOverride, setInjectionScannerOverride] = useState(false);
+	const [injectionScannerModelChoice, setInjectionScannerModelChoice] = useState<string>(SECURITY_MODELS[0]);
+	const [draftVerifierOverride, setDraftVerifierOverride] = useState(false);
+	const [draftVerifierModelChoice, setDraftVerifierModelChoice] = useState<string>(SECURITY_MODELS[0]);
+	const [classifierOverride, setClassifierOverride] = useState(false);
+	const [classifierModelChoice, setClassifierModelChoice] = useState<string>(SECURITY_MODELS[0]);
+
+	const [pendingSecurityModel, setPendingSecurityModel] = useState<{
+		field: "injectionScannerModel" | "draftVerifierModel" | "classifierModel";
+		from: string;
+		to: string;
+	} | null>(null);
+
 	const [securityOverride, setSecurityOverride] = useState(false);
 	const [security, setSecurity] = useState<SecuritySettings | undefined>(undefined);
 
@@ -202,6 +224,41 @@ export default function SettingsRoute() {
 			}
 		}
 
+		// security model overrides (#151 PR A): mailbox > org > default.
+		// Domain tier intentionally excluded — same risk without UI guardrails.
+		const rawSettings = mailbox.settings as Record<string, unknown> | undefined;
+		const mailboxISM = rawSettings?.injectionScannerModel as string | undefined;
+		const mailboxDVM = rawSettings?.draftVerifierModel as string | undefined;
+		const mailboxCM = rawSettings?.classifierModel as string | undefined;
+
+		if (mailboxISM) {
+			setInjectionScannerOverride(true);
+			setInjectionScannerModelChoice(mailboxISM);
+		} else {
+			setInjectionScannerOverride(false);
+			setInjectionScannerModelChoice(
+				orgSettings.injectionScannerModel ?? DEFAULT_INJECTION_SCANNER_MODEL,
+			);
+		}
+		if (mailboxDVM) {
+			setDraftVerifierOverride(true);
+			setDraftVerifierModelChoice(mailboxDVM);
+		} else {
+			setDraftVerifierOverride(false);
+			setDraftVerifierModelChoice(
+				orgSettings.draftVerifierModel ?? DEFAULT_DRAFT_VERIFIER_MODEL,
+			);
+		}
+		if (mailboxCM) {
+			setClassifierOverride(true);
+			setClassifierModelChoice(mailboxCM);
+		} else {
+			setClassifierOverride(false);
+			setClassifierModelChoice(
+				orgSettings.classifierModel ?? DEFAULT_CLASSIFIER_MODEL,
+			);
+		}
+
 		// security: domain block wins over org block when the mailbox doesn't
 		// override. Whole-object semantics — never deep-merged.
 		if (mailbox.settings?.security) {
@@ -275,6 +332,9 @@ export default function SettingsRoute() {
 			agentSystemPrompt: promptOverride ? agentPrompt.trim() || undefined : undefined,
 			autoDraft: autoDraftOverride ? { enabled: autoDraftEnabled } : undefined,
 			agentModel: modelOverride ? resolvedModel || undefined : undefined,
+			injectionScannerModel: injectionScannerOverride ? injectionScannerModelChoice : undefined,
+			draftVerifierModel: draftVerifierOverride ? draftVerifierModelChoice : undefined,
+			classifierModel: classifierOverride ? classifierModelChoice : undefined,
 			security: securityOverride ? security : undefined,
 			intel: nextIntel,
 		};
@@ -323,6 +383,23 @@ export default function SettingsRoute() {
 		setHubOverride(false);
 		setHub(domainSettings.intel?.hub ?? orgSettings.intel?.hub);
 		setHubErrors(undefined);
+	};
+
+	const resetInjectionScannerModel = () => {
+		setInjectionScannerOverride(false);
+		setInjectionScannerModelChoice(
+			orgSettings.injectionScannerModel ?? DEFAULT_INJECTION_SCANNER_MODEL,
+		);
+	};
+	const resetDraftVerifierModel = () => {
+		setDraftVerifierOverride(false);
+		setDraftVerifierModelChoice(
+			orgSettings.draftVerifierModel ?? DEFAULT_DRAFT_VERIFIER_MODEL,
+		);
+	};
+	const resetClassifierModel = () => {
+		setClassifierOverride(false);
+		setClassifierModelChoice(orgSettings.classifierModel ?? DEFAULT_CLASSIFIER_MODEL);
 	};
 
 	// Gate on every tier query — the init useEffect uses all of mailbox,
@@ -509,6 +586,122 @@ export default function SettingsRoute() {
 					</div>
 				</div>
 
+				{/* Detection models — per-mailbox override for the three security
+				    AI surfaces (#151 PR A). Chain is mailbox > org > default;
+				    domain tier excluded (same risk without UI guardrails). */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-2">Detection models</div>
+					<p className="text-xs text-ink-3 mb-4">
+						Override the AI models the security pipeline uses for this mailbox.
+						Inherits from the org when not set. Only pre-vetted models are
+						offered — switching to an untested model can significantly degrade
+						detection accuracy. A confirmation is required for every override.
+					</p>
+					<SecurityModelDropdown
+						label="Prompt-injection scanner"
+						description="Checks incoming mail for prompt-injection attempts before routing to the agent."
+						fieldName="injectionScannerModel"
+						override={injectionScannerOverride}
+						value={injectionScannerModelChoice}
+						orgValue={orgSettings.injectionScannerModel ?? DEFAULT_INJECTION_SCANNER_MODEL}
+						onChange={(to) => {
+							const from = injectionScannerOverride
+								? injectionScannerModelChoice
+								: (orgSettings.injectionScannerModel ?? DEFAULT_INJECTION_SCANNER_MODEL);
+							if (to !== from) setPendingSecurityModel({ field: "injectionScannerModel", from, to });
+						}}
+						onReset={resetInjectionScannerModel}
+					/>
+					<SecurityModelDropdown
+						label="Draft verifier"
+						description="Reviews auto-drafted replies for accuracy and safety before surfacing them."
+						fieldName="draftVerifierModel"
+						override={draftVerifierOverride}
+						value={draftVerifierModelChoice}
+						orgValue={orgSettings.draftVerifierModel ?? DEFAULT_DRAFT_VERIFIER_MODEL}
+						onChange={(to) => {
+							const from = draftVerifierOverride
+								? draftVerifierModelChoice
+								: (orgSettings.draftVerifierModel ?? DEFAULT_DRAFT_VERIFIER_MODEL);
+							if (to !== from) setPendingSecurityModel({ field: "draftVerifierModel", from, to });
+						}}
+						onReset={resetDraftVerifierModel}
+					/>
+					<SecurityModelDropdown
+						label="Classifier"
+						description="Classifies incoming mail as safe / spam / phishing / BEC / suspicious."
+						fieldName="classifierModel"
+						override={classifierOverride}
+						value={classifierModelChoice}
+						orgValue={orgSettings.classifierModel ?? DEFAULT_CLASSIFIER_MODEL}
+						onChange={(to) => {
+							const from = classifierOverride
+								? classifierModelChoice
+								: (orgSettings.classifierModel ?? DEFAULT_CLASSIFIER_MODEL);
+							if (to !== from) setPendingSecurityModel({ field: "classifierModel", from, to });
+						}}
+						onReset={resetClassifierModel}
+					/>
+				</div>
+
+				{/* Confirmation dialog for security model overrides */}
+				<Dialog.Root
+					open={pendingSecurityModel !== null}
+					onOpenChange={(open) => { if (!open) setPendingSecurityModel(null); }}
+				>
+					<Dialog size="sm" className="p-6">
+						<Dialog.Title className="text-base font-semibold mb-2">
+							Override detection model?
+						</Dialog.Title>
+						{pendingSecurityModel && (
+							<Dialog.Description className="text-sm text-ink-3 mb-4 space-y-2">
+								<p>
+									Switching from{" "}
+									<code className="text-ink">{pendingSecurityModel.from}</code> to{" "}
+									<code className="text-ink">{pendingSecurityModel.to}</code> for this mailbox.
+									This affects detection.
+								</p>
+								{pendingSecurityModel.field === "injectionScannerModel" && (
+									<p className="font-medium text-amber-700 dark:text-amber-400">
+										This is a security-critical model. Operators have downgraded detection
+										by 60%+ when overriding without testing.
+									</p>
+								)}
+							</Dialog.Description>
+						)}
+						<div className="flex justify-end gap-2">
+							<Dialog.Close
+								render={(props) => (
+									<Button {...props} variant="secondary" size="sm" type="button">
+										Cancel
+									</Button>
+								)}
+							/>
+							<Button
+								variant="primary"
+								size="sm"
+								onClick={() => {
+									if (!pendingSecurityModel) return;
+									const { field, to } = pendingSecurityModel;
+									if (field === "injectionScannerModel") {
+										setInjectionScannerModelChoice(to);
+										setInjectionScannerOverride(true);
+									} else if (field === "draftVerifierModel") {
+										setDraftVerifierModelChoice(to);
+										setDraftVerifierOverride(true);
+									} else {
+										setClassifierModelChoice(to);
+										setClassifierOverride(true);
+									}
+									setPendingSecurityModel(null);
+								}}
+							>
+								Override
+							</Button>
+						</div>
+					</Dialog>
+				</Dialog.Root>
+
 				{/* Security — block-level inheritance. Override carries the WHOLE
 				    security object (incl. allowlists). v1 has no extend-merge for
 				    arrays; tracked as #149. */}
@@ -600,6 +793,71 @@ export default function SettingsRoute() {
 					</Button>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+interface SecurityModelDropdownProps {
+	label: string;
+	description: string;
+	fieldName: string;
+	override: boolean;
+	value: string;
+	orgValue: string;
+	onChange: (to: string) => void;
+	onReset: () => void;
+}
+
+function SecurityModelDropdown({
+	label,
+	description,
+	fieldName,
+	override,
+	value,
+	orgValue,
+	onChange,
+	onReset,
+}: SecurityModelDropdownProps) {
+	const displayValue = override ? value : orgValue;
+	return (
+		<div className="mb-4">
+			<div className="flex items-center justify-between mb-1">
+				<label htmlFor={`${fieldName}-select`} className="text-sm text-ink">
+					<span className="inline-flex items-center gap-2">
+						{label}
+						{override ? (
+							<span data-testid={`override-badge-${fieldName}`}>
+								<Badge variant="primary">Override</Badge>
+							</span>
+						) : (
+							<span data-testid={`inherited-badge-${fieldName}`}>
+								<Badge variant="secondary">Inherited from org</Badge>
+							</span>
+						)}
+					</span>
+				</label>
+				{override && (
+					<button
+						type="button"
+						onClick={onReset}
+						className="text-xs text-ink-3 underline hover:text-ink"
+						data-testid={`reset-${fieldName}`}
+					>
+						Reset to inherited
+					</button>
+				)}
+			</div>
+			<p className="text-xs text-ink-3 mb-2">{description}</p>
+			<select
+				id={`${fieldName}-select`}
+				value={displayValue}
+				onChange={(e) => onChange(e.target.value)}
+				className="w-full rounded-md border border-line bg-paper-2 px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+			>
+				{SECURITY_MODELS.map((m) => (
+					<option key={m} value={m}>{m}</option>
+				))}
+			</select>
 		</div>
 	);
 }
