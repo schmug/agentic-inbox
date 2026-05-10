@@ -454,4 +454,19 @@ export const mailboxMigrations: Migration[] = [
             CREATE INDEX IF NOT EXISTS idx_dmarc_ruf_source_ip ON dmarc_ruf_records(source_ip);
         `,
 	},
+	{
+		// Async yaramail sidecar scan results (issue #256). One row per email
+		// submitted to the sidecar. `results` is a JSON array of YaraMatchResult
+		// objects returned by the callback; `scanned_at` is a Unix epoch integer
+		// so range queries stay index-friendly. The callback route and DO methods
+		// that populate this table are wired in the follow-up issue.
+		name: "20_yaramail_scan_results",
+		sql: `
+            CREATE TABLE IF NOT EXISTS yaramail_scan_results (
+                email_id TEXT PRIMARY KEY,
+                results JSON NOT NULL,
+                scanned_at INTEGER NOT NULL
+            );
+        `,
+	},
 ];

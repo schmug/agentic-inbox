@@ -113,6 +113,22 @@ export const AutoDraftSettings = z
   .passthrough();
 
 /**
+ * Per-mailbox opt-in configuration for the yaramail async attachment-scanning
+ * sidecar (issue #256). Off by default — a fresh mailbox never contacts the
+ * sidecar unless the operator explicitly sets `enabled: true` and supplies
+ * `endpoint_url`. The sidecar runs as an operator-supplied Docker container;
+ * no Python code ships inside the Worker runtime.
+ */
+export const YaraMailScannerSettings = z
+  .object({
+    enabled: z.boolean().optional(),
+    endpoint_url: z.string().optional(),
+  })
+  .passthrough();
+
+export type YaraMailScannerSettings = z.infer<typeof YaraMailScannerSettings>;
+
+/**
  * Per-mailbox settings stored at R2 key `mailboxes/<mailboxId>.json`.
  *
  * Semantic shift introduced by #106: **field absence = inherit**. Defaults
@@ -139,6 +155,7 @@ export const MailboxSettings = z.object({
   classifierModel: z.string().optional(),
   security: SecuritySettings.optional(),
   intel: IntelSettings.optional(),
+  yaramail_scanner: YaraMailScannerSettings.optional(),
 }).passthrough();
 
 export type MailboxSettings = z.infer<typeof MailboxSettings>;
