@@ -326,11 +326,14 @@ export class EmailAgent extends AIChatAgent<any> {
 		threadId: string;
 		securityVerdict?: { action: string; score: number; explanation: string } | null;
 	}) {
-		// Respect the security pipeline: if the email was quarantined/blocked,
-		// skip the auto-draft and log why. See workers/security/index.ts.
-		if (emailData.securityVerdict && (emailData.securityVerdict.action === "quarantine" || emailData.securityVerdict.action === "block")) {
+		// Respect the security pipeline: if the email was quarantined, blocked, or
+		// tagged as suspicious, skip the auto-draft and log why.
+		// "tag" = suspicious verdict; "quarantine"/"block" = higher severity.
+		// See workers/security/verdict.ts for VerdictAction definitions.
+		if (emailData.securityVerdict && (emailData.securityVerdict.action === "quarantine" || emailData.securityVerdict.action === "block" || emailData.securityVerdict.action === "tag")) {
 			const v = emailData.securityVerdict;
-			const note = `🛡️ Security pipeline ${v.action === "block" ? "blocked" : "quarantined"} this email (score ${v.score}). ${v.explanation}`;
+			const actionLabel = v.action === "block" ? "blocked" : v.action === "quarantine" ? "quarantined" : "tagged as suspicious";
+			const note = `🛡️ Security pipeline ${actionLabel} this email (score ${v.score}). ${v.explanation} — auto-draft suspended, review required.`;
 			const newMessages = [
 				{
 					id: crypto.randomUUID(),
