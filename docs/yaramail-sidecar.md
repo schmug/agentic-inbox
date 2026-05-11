@@ -103,8 +103,8 @@ interface YaraMatchResult {
 
 If `score` is omitted, PhishSOC looks up `rule_name` in the default score table
 (see [YARA Rule Score Mapping](#yara-rule-score-mapping) below). If the rule name
-is not in the table and no inline `score` is provided, the match contributes 0
-points.
+is not in the table and no inline `score` is provided, the match contributes **+5
+points** (the unknown-rule default, from `workers/security/yaramail-signal.ts`).
 
 ### Authentication: HMAC-SHA256 Signature
 
