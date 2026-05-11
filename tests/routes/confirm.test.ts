@@ -47,7 +47,6 @@ vi.mock("jose", async (importOriginal) => {
 });
 
 import { confirmRoute } from "../../workers/routes/confirm";
-import { signConfirmationToken } from "../../workers/lib/confirm-token";
 
 const SECRET = "test-secret-at-least-32-chars-long-for-hs256!!";
 const TEAM_DOMAIN = "https://example.cloudflareaccess.com";
