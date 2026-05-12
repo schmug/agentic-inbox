@@ -13,6 +13,28 @@ export type ConfirmationTokenPayload = {
 
 const JTI_KV_PREFIX = "confirm-jti:";
 
+export async function computePayloadHash(
+	to: string | string[],
+	subject: string,
+	body: string,
+	attachmentIds: string[],
+): Promise<string> {
+	const toArr = (Array.isArray(to) ? [...to] : [to]).sort();
+	const canonical = JSON.stringify({
+		to: toArr,
+		subject,
+		body,
+		attachmentIds: [...attachmentIds].sort(),
+	});
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(canonical),
+	);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+}
+
 function confirmKey(secret: string): Uint8Array {
 	return new TextEncoder().encode(secret);
 }

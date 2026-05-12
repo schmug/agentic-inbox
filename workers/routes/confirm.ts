@@ -5,7 +5,7 @@
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
 import { z } from "zod";
-import { signConfirmationToken } from "../lib/confirm-token";
+import { signConfirmationToken, computePayloadHash } from "../lib/confirm-token";
 import type { Env } from "../types";
 
 // Mirrors getAccessUrls in workers/app.ts — needed here for step-up JWKS resolution.
@@ -19,27 +19,6 @@ function getAccessUrls(teamDomain: string) {
 	return { issuer, certsUrl };
 }
 
-async function computePayloadHash(
-	to: string | string[],
-	subject: string,
-	body: string,
-	attachmentIds: string[],
-): Promise<string> {
-	const toArr = (Array.isArray(to) ? [...to] : [to]).sort();
-	const canonical = JSON.stringify({
-		to: toArr,
-		subject,
-		body,
-		attachmentIds: [...attachmentIds].sort(),
-	});
-	const digest = await crypto.subtle.digest(
-		"SHA-256",
-		new TextEncoder().encode(canonical),
-	);
-	return Array.from(new Uint8Array(digest))
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-}
 
 const ConfirmBodySchema = z.object({
 	tier: z.number().int().min(0).max(2),
