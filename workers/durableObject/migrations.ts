@@ -469,4 +469,14 @@ export const mailboxMigrations: Migration[] = [
             );
         `,
 	},
+	{
+		// Provenance flag for outbound drafts (issue #266, slice 6 of #15).
+		// 'user' for human-authored sends (default); 'agent' when the row
+		// was written by the agent's draft_reply / draft_email tools. Read
+		// by the send-risk classifier to bump tier on agent-authored
+		// external sends. Forward-only ALTER; pre-#266 rows get the
+		// 'user' default which preserves existing behavior.
+		name: "21_emails_created_by",
+		sql: `ALTER TABLE emails ADD COLUMN created_by TEXT DEFAULT 'user';`,
+	},
 ];

@@ -41,6 +41,7 @@ export const emails = sqliteTable("emails", {
 	// migration, or pipeline threw before persistence).
 	stage_trace: text("stage_trace"),
 	deep_scan_status: text("deep_scan_status").default("pending"),
+	created_by: text("created_by").default("user"),
 });
 
 export const attachments = sqliteTable("attachments", {
