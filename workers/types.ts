@@ -23,4 +23,10 @@ export interface Env extends Cloudflare.Env {
 	 * When absent, the confirm endpoint returns 503.
 	 */
 	CONFIRMATION_TOKEN_SECRET?: string;
+	/**
+	 * HMAC-SHA256 shared secret for authenticating yaramail sidecar callbacks.
+	 * Set with `wrangler secret put YARAMAIL_CALLBACK_SECRET`.
+	 * When absent, the yaramail callback route returns 503.
+	 */
+	YARAMAIL_CALLBACK_SECRET?: string;
 }
