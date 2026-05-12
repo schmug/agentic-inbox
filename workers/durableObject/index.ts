@@ -92,6 +92,13 @@ interface EmailData {
 	thread_id?: string | null;
 	message_id?: string | null;
 	raw_headers?: string | null;
+	/**
+	 * Provenance of the row (issue #266): "agent" when the draft was
+	 * authored by the agent's draft_reply / draft_email tools, "user"
+	 * otherwise. Read by the outbound send-risk classifier to bump tier.
+	 * Omit to inherit the column default ("user") at the SQL layer.
+	 */
+	created_by?: "agent" | "user";
 }
 
 interface AttachmentData {
@@ -906,6 +913,7 @@ export class MailboxDO extends DurableObject<Env> {
 				thread_id: email.thread_id ?? null,
 				message_id: email.message_id ?? null,
 				raw_headers: email.raw_headers ?? null,
+				created_by: email.created_by ?? "user",
 			})
 			.run();
 

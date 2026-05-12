@@ -31,6 +31,13 @@ export interface ClassifySendInput {
 	attachments?: Array<{ filename?: string | null }>;
 	/** The mailboxId is an email address; its domain is the "internal" domain. */
 	mailboxId: string;
+	/**
+	 * Provenance of the draft (issue #266). When "agent", the computed tier is
+	 * bumped by +1 (capped at 2): a Tier-1 agent send (e.g. external recipient)
+	 * becomes Tier 2; Tier-0 stays Tier 0; Tier-2 stays Tier 2. Omitted /
+	 * "user" preserves the human-authored behavior.
+	 */
+	createdBy?: "agent" | "user";
 }
 
 // ── Tier-2 BEC / credential keyword list ────────────────────────────────────
@@ -134,6 +141,18 @@ export function classifySend(input: ClassifySendInput): SendRisk {
 			const sample = external.slice(0, 3).join(", ");
 			raise(1, `External recipient(s): ${sample}${external.length > 3 ? ` (+${external.length - 3} more)` : ""}`);
 		}
+	}
+
+	// ── Agent-authored bump (issue #266) ─────────────────────────────────────
+	// Bump tier by +1 (capped at 2) when the draft was written by the agent
+	// rather than a human. Tier 0 stays Tier 0 (purely internal traffic gets
+	// no bump — there is nothing risky to elevate); Tier 2 stays Tier 2
+	// (already at the ceiling). The reason is emitted on every non-zero
+	// agent send so audit reviewers see provenance on Tier-2 keyword/macro
+	// drafts too, not just the bumped ones.
+	if (input.createdBy === "agent" && tier > 0) {
+		reasons.push("Agent-authored draft");
+		if (tier < 2) tier = 2;
 	}
 
 	return { tier, reasons };

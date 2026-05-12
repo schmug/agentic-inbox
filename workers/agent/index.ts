@@ -187,6 +187,7 @@ function createEmailTools(env: Env, mailboxId: string) {
 					subject,
 					body,
 					isPlainText: true,
+					createdBy: "agent",
 				});
 			},
 		}),
@@ -216,6 +217,7 @@ function createEmailTools(env: Env, mailboxId: string) {
 					body,
 					isPlainText: true,
 					runVerifyDraft: true,
+					createdBy: "agent",
 				});
 			},
 		}),

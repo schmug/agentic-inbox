@@ -194,3 +194,61 @@ describe("classifySend — edge cases", () => {
 		expect(result.tier).toBe(1); // b@external.org is external
 	});
 });
+
+// ── Agent-authored tier bump (issue #266) ────────────────────────────────────
+
+describe("classifySend — createdBy: 'agent' bumps tier (issue #266)", () => {
+	it("agent-authored external send (Tier 1 base) becomes Tier 2", () => {
+		const result = classifySend(
+			make({ to: "vendor@external.com", createdBy: "agent" }),
+		);
+		expect(result.tier).toBe(2);
+		expect(result.reasons.some((r) => r.includes("Agent-authored"))).toBe(true);
+		// Original Tier-1 reason still surfaces.
+		expect(result.reasons.some((r) => r.includes("External"))).toBe(true);
+	});
+
+	it("agent-authored internal-only send stays Tier 0", () => {
+		const result = classifySend(
+			make({ to: "colleague@internal.example", createdBy: "agent" }),
+		);
+		expect(result.tier).toBe(0);
+		expect(result.reasons).toHaveLength(0);
+	});
+
+	it("user-authored external send remains Tier 1 (unchanged)", () => {
+		const result = classifySend(
+			make({ to: "vendor@external.com", createdBy: "user" }),
+		);
+		expect(result.tier).toBe(1);
+		expect(result.reasons.some((r) => r.includes("Agent-authored"))).toBe(false);
+	});
+
+	it("omitting createdBy preserves base tier (default behavior)", () => {
+		const result = classifySend(make({ to: "vendor@external.com" }));
+		expect(result.tier).toBe(1);
+		expect(result.reasons.some((r) => r.includes("Agent-authored"))).toBe(false);
+	});
+
+	it("agent-authored Tier-2 send stays Tier 2 (no double bump) and surfaces provenance", () => {
+		const result = classifySend(
+			make({
+				to: "vendor@external.com",
+				body: "wire transfer please",
+				createdBy: "agent",
+			}),
+		);
+		expect(result.tier).toBe(2);
+		// Reason emitted so audit reviewers see provenance on every non-zero
+		// agent send, not just the ones that got bumped from Tier 1.
+		expect(result.reasons.some((r) => r.includes("Agent-authored"))).toBe(true);
+	});
+
+	it("agent-authored high-recipient-count send (Tier 1 base) becomes Tier 2", () => {
+		const many = Array.from({ length: 11 }, (_, i) => `user${i}@internal.example`);
+		const result = classifySend(make({ to: many, createdBy: "agent" }));
+		expect(result.tier).toBe(2);
+		expect(result.reasons.some((r) => r.includes("High recipient count"))).toBe(true);
+		expect(result.reasons.some((r) => r.includes("Agent-authored"))).toBe(true);
+	});
+});

@@ -142,6 +142,12 @@ export async function toolDraftReply(
 		body: string;
 		isPlainText?: boolean;
 		runVerifyDraft?: boolean;
+		/**
+		 * Provenance for the persisted draft (issue #266). Pass "agent" from
+		 * the email-handling agent; omit (or pass "user") from MCP / human
+		 * paths so the row defaults to "user".
+		 */
+		createdBy?: "agent" | "user";
 	},
 ): Promise<
 	| { status: "draft_saved"; draftId: string; message: string; draft: Record<string, string> }
@@ -192,6 +198,7 @@ export async function toolDraftReply(
 			in_reply_to: params.originalEmailId,
 			email_references: null,
 			thread_id: threadId,
+			created_by: params.createdBy,
 		},
 		[],
 	);
@@ -224,6 +231,12 @@ export async function toolDraftEmail(
 		in_reply_to?: string;
 		/** Optional thread_id for create_draft style */
 		thread_id?: string;
+		/**
+		 * Provenance for the persisted draft (issue #266). Pass "agent" from
+		 * the email-handling agent; omit (or pass "user") from MCP / human
+		 * paths so the row defaults to "user".
+		 */
+		createdBy?: "agent" | "user";
 	},
 ): Promise<
 	| { status: string; draftId: string; threadId?: string; message: string; draft?: Record<string, string> }
@@ -268,6 +281,7 @@ export async function toolDraftEmail(
 			in_reply_to: params.in_reply_to || null,
 			email_references: null,
 			thread_id: resolvedThreadId,
+			created_by: params.createdBy,
 		},
 		[],
 	);
