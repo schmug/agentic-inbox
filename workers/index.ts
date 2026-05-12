@@ -67,6 +67,8 @@ import { loadHubCredentials } from "./lib/hub-config";
 import { aggregateOrgSearch, type PerMailboxSearchResult } from "./lib/org-search";
 import { readMailboxAcl, writeMailboxAcl, deleteMailboxAcl, callerInAcl } from "./lib/mailbox-acl";
 import { aclMemberRoutes } from "./routes/acl-members";
+import { fireYaraScan } from "./security/yaramail-signal";
+import { yaramailCallbackRoute } from "./routes/yaramail-callback";
 
 type AppContext = Context<MailboxContext>;
 
@@ -128,6 +130,14 @@ app.use("/api/*", cors({
 		return undefined;
 	},
 }));
+// -- Yaramail sidecar callback (HMAC-authenticated, no CF Access) ------
+//
+// Registered BEFORE the requireMailbox middleware so the sidecar's
+// machine-to-machine calls — which carry an HMAC-SHA256 signature rather
+// than a cf-access-authenticated-user-email header — can reach the handler
+// without being rejected by the mailbox ACL check.
+app.route("/api/v1/mailboxes/:mailboxId/yaramail-callback", yaramailCallbackRoute);
+
 app.use("/api/v1/mailboxes/:mailboxId/*", requireMailbox);
 
 // -- Config ---------------------------------------------------------
@@ -1350,6 +1360,32 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 			);
 		} catch (e) {
 			console.error("deep-scan enqueue failed:", (e as Error).message);
+		}
+	}
+
+	// Async yaramail sidecar scan (issue #257). Fire-and-forget via
+	// ctx.waitUntil — one request per attachment. Only runs when the mailbox
+	// has `yaramail_scanner.enabled === true`. Skipped if the email has no
+	// attachments. presignedUrl is "" until R2 S3-API presigned URL support
+	// is wired; the sidecar must fall back to PhishSOC's download endpoint.
+	if (attachmentData.length > 0) {
+		try {
+			const yaraScanSettings = (await resolveMailboxSettings(env, mailboxId)).raw?.yaramail_scanner;
+			if (yaraScanSettings?.enabled) {
+				for (const att of attachmentData) {
+					const r2Key = attachmentObjectKey(att.email_id, att.id, att.filename);
+					// fireYaraScan internally calls resolveMailboxSettings again and
+					// checks enabled + endpoint_url — the outer check is an optimisation
+					// to skip the per-attachment loop entirely when the scanner is off.
+					ctx.waitUntil(
+						fireYaraScan(env, ctx, mailboxId, messageId, r2Key).catch(
+							(e) => console.error("yaramail fire failed:", (e as Error).message),
+						),
+					);
+				}
+			}
+		} catch (e) {
+			console.error("yaramail scan enqueue failed:", (e as Error).message);
 		}
 	}
 

@@ -1872,6 +1872,77 @@ export class MailboxDO extends DurableObject<Env> {
 		return rows[0]?.count ?? 0;
 	}
 
+	// ── Yaramail sidecar results (issue #257) ────────────────────────────────
+
+	/**
+	 * Persist the raw YARA match results returned by the sidecar callback.
+	 * One row per email — if the sidecar calls back twice for the same email,
+	 * the later result wins (INSERT OR REPLACE semantics).
+	 */
+	async insertYaraScanResult(
+		emailId: string,
+		resultsJson: string,
+		scannedAt: number,
+	): Promise<void> {
+		this.ctx.storage.sql.exec(
+			`INSERT OR REPLACE INTO yaramail_scan_results (email_id, results, scanned_at)
+			 VALUES (?1, ?2, ?3)`,
+			emailId,
+			resultsJson,
+			scannedAt,
+		);
+	}
+
+	/**
+	 * Apply a YARA score delta to the email's `security_score`.
+	 *
+	 * Rules:
+	 *  - Never downgrades: if the stored score is already >= current + delta,
+	 *    the column is left unchanged.
+	 *  - Total is capped at 100.
+	 *  - Also upserts a row into `yaramail_scan_results` so the result is
+	 *    always persisted even when the score doesn't change.
+	 *
+	 * @param emailId    The email whose score is being updated.
+	 * @param scoreDelta The bounded delta from computeYaraScoreDelta (0–30).
+	 */
+	async applyYaraSignal(emailId: string, scoreDelta: number): Promise<void> {
+		// Store the scan result first (empty match list placeholder; the
+		// route handler records the full JSON separately via insertYaraScanResult
+		// before calling this method, or callers can call this standalone).
+		const now = Math.floor(Date.now() / 1000);
+
+		// Read current score
+		const row = this.db
+			.select({ security_score: schema.emails.security_score })
+			.from(schema.emails)
+			.where(eq(schema.emails.id, emailId))
+			.get();
+
+		if (!row) return; // email not found — no-op
+
+		const currentScore = row.security_score ?? 0;
+		const newScore = Math.min(100, currentScore + scoreDelta);
+
+		// Never downgrade
+		if (newScore <= currentScore) return;
+
+		this.db
+			.update(schema.emails)
+			.set({ security_score: newScore })
+			.where(eq(schema.emails.id, emailId))
+			.run();
+
+		// Ensure a yaramail_scan_results row exists (upsert preserves existing
+		// results JSON if insertYaraScanResult was already called).
+		this.ctx.storage.sql.exec(
+			`INSERT OR IGNORE INTO yaramail_scan_results (email_id, results, scanned_at)
+			 VALUES (?1, '[]', ?2)`,
+			emailId,
+			now,
+		);
+	}
+
 	/** List RUF records, optionally filtered by domain. Newest first, max 200. */
 	async listDmarcRufRecords(
 		options: { domain?: string; limit?: number; offset?: number } = {},
