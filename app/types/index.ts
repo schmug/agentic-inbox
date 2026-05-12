@@ -96,6 +96,15 @@ export interface DmarcRufRecord {
 	original_headers: string | null;
 }
 
+/**
+ * Per-mailbox yaramail async attachment-scanning sidecar config (#258 / #256).
+ * Mirrors `YaraMailScannerSettings` in `shared/mailbox-settings.ts`.
+ */
+export interface YaraMailScannerSettings {
+	enabled?: boolean;
+	endpoint_url?: string;
+}
+
 export interface MailboxSettings {
 	fromName?: string;
 	forwarding?: { enabled: boolean; email: string };
@@ -104,6 +113,7 @@ export interface MailboxSettings {
 	agentSystemPrompt?: string;
 	security?: SecuritySettings;
 	intel?: IntelSettings;
+	yaramail_scanner?: YaraMailScannerSettings;
 }
 
 export interface Mailbox {

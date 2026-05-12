@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { Badge, Button, Dialog, Input, Loader } from "@cloudflare/kumo";
+import { Badge, Button, Dialog, Input, Loader, Switch } from "@cloudflare/kumo";
 import { RobotIcon, ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
@@ -18,7 +18,7 @@ import {
 	validateHubConfig,
 	type HubFieldErrors,
 } from "~/components/HubSettingsPanel";
-import type { HubConfigSettings, SecuritySettings } from "~/types";
+import type { HubConfigSettings, SecuritySettings, YaraMailScannerSettings } from "~/types";
 import {
 	TEXT_MODELS,
 	SECURITY_MODELS,
@@ -147,6 +147,11 @@ export default function SettingsRoute() {
 	const [hubOverride, setHubOverride] = useState(false);
 	const [hub, setHub] = useState<HubConfigSettings | undefined>(undefined);
 	const [hubErrors, setHubErrors] = useState<HubFieldErrors | undefined>(undefined);
+
+	// Attachment scanner (yaramail sidecar, #258 / #256). Off by default —
+	// a fresh mailbox never contacts the sidecar unless the operator opts in.
+	const [yaraScannerEnabled, setYaraScannerEnabled] = useState(false);
+	const [yaraScannerEndpointUrl, setYaraScannerEndpointUrl] = useState("");
 
 	const [isSaving, setIsSaving] = useState(false);
 
@@ -279,6 +284,18 @@ export default function SettingsRoute() {
 		}
 		setHubErrors(undefined);
 
+		// yaramail_scanner — off by default; never pre-populate endpoint URL
+		// unless the mailbox has an explicit saved config with enabled: true.
+		const savedYara = (mailbox.settings as Record<string, unknown> | undefined)
+			?.yaramail_scanner as YaraMailScannerSettings | undefined;
+		if (savedYara?.enabled) {
+			setYaraScannerEnabled(true);
+			setYaraScannerEndpointUrl(savedYara.endpoint_url ?? "");
+		} else {
+			setYaraScannerEnabled(false);
+			setYaraScannerEndpointUrl("");
+		}
+
 		// availableModels intentionally omitted from deps — see commit
 		// message for the rationale (re-running this effect would clobber
 		// edits when the dynamic models list resolves).
@@ -326,6 +343,12 @@ export default function SettingsRoute() {
 		// Build the PUT payload. Per audit Q5/Q6/Q8: undefined fields get
 		// stripped server-side via stripDefaultEqual (PR1) so the resolver
 		// can fall through to the org tier on the next read.
+		// yaramail_scanner: include only when enabled; absent key strips via
+		// stripDefaultEqual on the server, consistent with absent-key semantics.
+		const nextYaraScanner: YaraMailScannerSettings | undefined = yaraScannerEnabled
+			? { enabled: true, endpoint_url: yaraScannerEndpointUrl.trim() || undefined }
+			: undefined;
+
 		const settings = {
 			...mailbox.settings,
 			fromName: displayName,
@@ -337,6 +360,7 @@ export default function SettingsRoute() {
 			classifierModel: classifierOverride ? classifierModelChoice : undefined,
 			security: securityOverride ? security : undefined,
 			intel: nextIntel,
+			yaramail_scanner: nextYaraScanner,
 		};
 		try {
 			await updateMailboxMutation.mutateAsync({ mailboxId, settings });
@@ -784,6 +808,45 @@ export default function SettingsRoute() {
 						}}
 						errors={hubErrors}
 					/>
+				</div>
+
+				{/* Attachment scanner (yaramail sidecar, #258 / #256) */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-2">Attachment scanner</div>
+					<p className="text-xs text-ink-3 mb-4">
+						Optional async attachment-scanning sidecar (yaramail). When enabled,
+						attachments are forwarded to the configured sidecar endpoint for
+						deep content inspection. Disabled by default — only enable when you
+						have a sidecar container deployed and the endpoint URL ready.
+					</p>
+					<div className="space-y-3">
+						<Switch
+							label="Enable attachment scanner"
+							checked={yaraScannerEnabled}
+							onCheckedChange={(v) => {
+								setYaraScannerEnabled(v);
+								if (!v) setYaraScannerEndpointUrl("");
+							}}
+							data-testid="yaramail-scanner-toggle"
+						/>
+						{yaraScannerEnabled && (
+							<div className="border-t border-line pt-4">
+								<Input
+									label="Sidecar endpoint URL"
+									type="url"
+									placeholder="https://yaramail.internal/scan"
+									value={yaraScannerEndpointUrl}
+									onChange={(e) => setYaraScannerEndpointUrl(e.target.value)}
+								/>
+								<p className="text-xs text-ink-3 mt-2">
+									URL of the yaramail sidecar container's HTTP scan endpoint.
+									Must be reachable from the Worker runtime. No format validation
+									beyond <code className="pp-mono">type="url"</code> — the server
+									validates on save.
+								</p>
+							</div>
+						)}
+					</div>
 				</div>
 
 				{/* Save */}
