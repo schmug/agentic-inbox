@@ -30,6 +30,7 @@ import { getDomainSettings, putDomainSettings } from "./lib/domain-settings";
 import { DomainSettings } from "../shared/domain-settings";
 import { MailboxSettings } from "../shared/mailbox-settings";
 import { runSecurityPipeline } from "./security";
+import { classifySend } from "./security/send-risk";
 import { runDeepScan } from "./intel/deep-scan";
 import { isDmarcReport, ingestDmarcReport, isDmarcRuf, ingestDmarcRuf } from "./dmarc/ingest";
 import { dmarcRoutes } from "./routes/dmarc";
@@ -947,6 +948,23 @@ app.get("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	return c.json(emails);
 });
 
+// Preflight endpoint: returns risk tier + reasons without actually sending.
+// Must be registered before the parameterised /emails route so Hono matches
+// /emails/preflight before /emails (though they are distinct anyway).
+app.post("/api/v1/mailboxes/:mailboxId/emails/preflight", async (c: AppContext) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const body = SendEmailRequestSchema.parse(await c.req.json());
+	const { to, cc, bcc, subject, html, text, attachments } = body;
+	const risk = classifySend({
+		to, cc, bcc,
+		subject,
+		body: html || text,
+		attachments: attachments?.map((att) => ({ filename: att.filename })),
+		mailboxId,
+	});
+	return c.json({ tier: risk.tier, reasons: risk.reasons });
+});
+
 app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	const mailboxId = c.req.param("mailboxId")!;
 	const body = SendEmailRequestSchema.parse(await c.req.json());
@@ -958,6 +976,23 @@ app.post("/api/v1/mailboxes/:mailboxId/emails", async (c: AppContext) => {
 	} catch (e) {
 		if (e instanceof SenderValidationError) return c.json({ error: e.message }, 400);
 		throw e;
+	}
+
+	// ── Send-risk classification (issue #262 / #15 slice 3) ──────────────────
+	const risk = classifySend({
+		to, cc, bcc,
+		subject,
+		body: html || text,
+		attachments: attachments?.map((att) => ({ filename: att.filename })),
+		mailboxId,
+	});
+	if (risk.tier >= 1) {
+		const token = c.req.header("x-confirmation-token");
+		if (!token) {
+			return c.json({ error: "confirmation_required", risk }, 401);
+		}
+		// Placeholder validation — full implementation ships in slice 2 (#264).
+		// validateConfirmationToken(token, mailboxId) → true
 	}
 
 	const { messageId, outgoingMessageId } = generateMessageId(fromDomain);
