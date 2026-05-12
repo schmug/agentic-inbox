@@ -3,10 +3,13 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Banner, Button, Input } from "@cloudflare/kumo";
-import { FloppyDiskIcon, PaperPlaneTiltIcon, XIcon } from "@phosphor-icons/react";
+import { FloppyDiskIcon, XIcon } from "@phosphor-icons/react";
+import { useEffect } from "react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
+import { splitEmailList, toEmailListValue, htmlToPlainText } from "~/lib/utils";
 import RichTextEditor from "./RichTextEditor";
+import ComposeSendButton from "./ComposeSendButton";
 
 export default function ComposePanel() {
 	const { mailboxId, folder } = useParams<{
@@ -35,7 +38,27 @@ export default function ComposePanel() {
 		handleSend,
 		closeCompose,
 		closePanel,
+		preflightTier,
+		runPreflight,
 	} = useComposeForm(mailboxId, folder);
+
+	// Run preflight once when the panel mounts and a recipient is present.
+	useEffect(() => {
+		if (!mailboxId) return;
+		const toRecipients = splitEmailList(to);
+		if (toRecipients.length === 0) return;
+		const payload = {
+			to: toEmailListValue(toRecipients),
+			subject,
+			html: body,
+			text: htmlToPlainText(body),
+		};
+		void runPreflight(mailboxId, payload);
+		// Only re-run when mailboxId or primary recipient changes.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [mailboxId, to]);
+
+	const primaryRecipient = splitEmailList(to)[0] ?? "";
 
 	return (
 		<div className="flex flex-col h-full bg-paper">
@@ -166,16 +189,12 @@ export default function ComposePanel() {
 							>
 								{isSavingDraft ? "Saving..." : "Save as Draft"}
 							</Button>
-							<Button
-								type="submit"
-								variant="primary"
-								size="sm"
-								loading={isSending}
-								disabled={isSavingDraft || isSending}
-								icon={<PaperPlaneTiltIcon size={14} />}
-							>
-								{isSending ? "Sending..." : "Send"}
-							</Button>
+							<ComposeSendButton
+								tier={preflightTier}
+								isSending={isSending}
+								isSavingDraft={isSavingDraft}
+								primaryRecipient={primaryRecipient}
+							/>
 						</div>
 					</div>
 				</div>

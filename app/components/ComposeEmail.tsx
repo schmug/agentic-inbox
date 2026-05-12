@@ -3,10 +3,13 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { Banner, Button, Dialog, Input, Text } from "@cloudflare/kumo";
-import { FloppyDiskIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
+import { FloppyDiskIcon } from "@phosphor-icons/react";
+import { useEffect } from "react";
 import { useParams } from "react-router";
 import { useComposeForm } from "~/hooks/useComposeForm";
+import { splitEmailList, toEmailListValue, htmlToPlainText } from "~/lib/utils";
 import RichTextEditor from "./RichTextEditor";
+import ComposeSendButton from "./ComposeSendButton";
 import { useUIStore } from "~/hooks/useUIStore";
 
 export default function ComposeEmail() {
@@ -14,7 +17,7 @@ export default function ComposeEmail() {
 		mailboxId: string;
 		folder: string;
 	}>();
-	
+
 	const { isComposeModalOpen, closeComposeModal } = useUIStore();
 
 	const {
@@ -36,7 +39,27 @@ export default function ComposeEmail() {
 		formTitle,
 		handleSaveDraft,
 		handleSend,
+		preflightTier,
+		runPreflight,
 	} = useComposeForm(mailboxId, folder);
+
+	// Run preflight once when the modal opens (i.e. when mailboxId is available).
+	useEffect(() => {
+		if (!mailboxId || !isComposeModalOpen) return;
+		const toRecipients = splitEmailList(to);
+		if (toRecipients.length === 0) return;
+		const payload = {
+			to: toEmailListValue(toRecipients),
+			subject,
+			html: body,
+			text: htmlToPlainText(body),
+		};
+		void runPreflight(mailboxId, payload);
+		// Only re-run preflight when the modal opens or the primary recipient changes.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [mailboxId, isComposeModalOpen, to]);
+
+	const primaryRecipient = splitEmailList(to)[0] ?? "";
 
 	return (
 		<Dialog.Root
@@ -128,16 +151,12 @@ export default function ComposeEmail() {
 							>
 								{isSavingDraft ? "Saving..." : "Save as Draft"}
 							</Button>
-							<Button
-								type="submit"
-								variant="primary"
-								size="sm"
-								loading={isSending}
-								disabled={isSavingDraft || isSending}
-								icon={<PaperPlaneTiltIcon size={14} />}
-							>
-								{isSending ? "Sending..." : "Send"}
-							</Button>
+							<ComposeSendButton
+								tier={preflightTier}
+								isSending={isSending}
+								isSavingDraft={isSavingDraft}
+								primaryRecipient={primaryRecipient}
+							/>
 						</div>
 					</div>
 				</form>

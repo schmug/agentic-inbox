@@ -17,6 +17,7 @@ import {
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
+import { usePreflightTier, type PreflightTier } from "~/hooks/usePreflightTier";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -162,6 +163,9 @@ function buildInitialComposeFields(
 	};
 }
 
+// Re-export so callers don't need a separate import.
+export type { PreflightTier };
+
 export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const feedback = useFeedback();
 	const { composeOptions, closePanel, closeCompose } = useUIStore();
@@ -171,6 +175,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const replyMutation = useReplyToEmail();
 	const forwardMutation = useForwardEmail();
 	const deleteEmailMutation = useDeleteEmail();
+	const { tier: preflightTier, isPreflight: isPreflighting, runPreflight } = usePreflightTier();
 
 	const [to, setTo] = useState("");
 	const [cc, setCc] = useState("");
@@ -262,5 +267,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel, preflightTier, isPreflighting, runPreflight };
 }
