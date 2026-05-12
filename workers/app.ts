@@ -9,6 +9,7 @@ import { createRequestHandler } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
 import { EmailMCP } from "./mcp";
 import { refreshAllFeeds } from "./intel/feeds";
+import { confirmRoute } from "./routes/confirm";
 import type { Env } from "./types";
 
 export { MailboxDO } from "./durableObject";
@@ -43,6 +44,11 @@ function getAccessUrls(teamDomain: string) {
 
 // Main app that wraps the API and adds React Router fallback
 const app = new Hono<{ Bindings: Env }>();
+
+// Step-up confirm endpoint — mounted BEFORE the CF Access middleware so that
+// the step-up JWT (audience = STEP_UP_AUD) is not rejected by the main-app
+// POLICY_AUD check. The route validates the step-up JWT itself.
+app.route("/api/v1/confirm", confirmRoute);
 
 // Cloudflare Access JWT validation middleware (production only)
 app.use("*", async (c, next) => {
