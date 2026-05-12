@@ -173,14 +173,14 @@ describe("usePreflightTier — fetch mock integration", () => {
 	const MAILBOX_ID = "mbx_test";
 	const PREFLIGHT_HOSTNAME = "localhost";
 
-	let originalFetch: typeof global.fetch;
+	let originalFetch: typeof globalThis.fetch;
 
 	beforeEach(() => {
-		originalFetch = global.fetch;
+		originalFetch = globalThis.fetch;
 	});
 
 	afterEach(() => {
-		global.fetch = originalFetch;
+		globalThis.fetch = originalFetch;
 	});
 
 	function makeFetchMock(
@@ -213,7 +213,7 @@ describe("usePreflightTier — fetch mock integration", () => {
 	});
 
 	it("updates tier to 0 when preflight returns Tier 0", async () => {
-		global.fetch = makeFetchMock({ tier: 0, reasons: [] });
+		globalThis.fetch = makeFetchMock({ tier: 0, reasons: [] });
 		const { result } = renderHook(() => usePreflightTier());
 
 		await act(async () => {
@@ -225,7 +225,7 @@ describe("usePreflightTier — fetch mock integration", () => {
 	});
 
 	it("updates tier to 1 when preflight returns Tier 1", async () => {
-		global.fetch = makeFetchMock({ tier: 1, reasons: ["suspicious domain"] });
+		globalThis.fetch = makeFetchMock({ tier: 1, reasons: ["suspicious domain"] });
 		const { result } = renderHook(() => usePreflightTier());
 
 		await act(async () => {
@@ -237,7 +237,7 @@ describe("usePreflightTier — fetch mock integration", () => {
 	});
 
 	it("updates tier to 2 when preflight returns Tier 2", async () => {
-		global.fetch = makeFetchMock({ tier: 2, reasons: ["known phishing domain"] });
+		globalThis.fetch = makeFetchMock({ tier: 2, reasons: ["known phishing domain"] });
 		const { result } = renderHook(() => usePreflightTier());
 
 		await act(async () => {
@@ -248,7 +248,7 @@ describe("usePreflightTier — fetch mock integration", () => {
 	});
 
 	it("defaults to Tier 0 and does NOT throw when preflight network request fails", async () => {
-		global.fetch = makeFetchMock("error");
+		globalThis.fetch = makeFetchMock("error");
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const { result } = renderHook(() => usePreflightTier());
 
@@ -267,7 +267,7 @@ describe("usePreflightTier — fetch mock integration", () => {
 	});
 
 	it("defaults to Tier 0 and warns when preflight returns 5xx", async () => {
-		global.fetch = vi.fn(async () =>
+		globalThis.fetch = vi.fn(async () =>
 			new Response(JSON.stringify({ error: "Internal Server Error" }), {
 				status: 500,
 				headers: { "Content-Type": "application/json" },
