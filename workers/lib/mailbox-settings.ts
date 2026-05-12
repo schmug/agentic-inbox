@@ -7,7 +7,10 @@ import {
 	DEFAULT_DRAFT_VERIFIER_MODEL,
 	DEFAULT_INJECTION_SCANNER_MODEL,
 	MailboxSettings,
+	YaraMailScannerSettings,
 } from "../../shared/mailbox-settings";
+
+export { YaraMailScannerSettings } from "../../shared/mailbox-settings";
 import type { OrgSettings } from "../../shared/org-settings";
 import { getOrgSettings } from "./org-settings";
 import type { DomainSettings } from "../../shared/domain-settings";
@@ -453,6 +456,10 @@ function isDefaultEqual(key: string, value: unknown): boolean {
 			// Empty domains array is the default; strip it so absent-key semantics
 			// are preserved and the blob doesn't accumulate `"domains": []` on every write.
 			return Array.isArray(value) && value.length === 0;
+		case "yaramail_scanner":
+			// Off by default — strip when disabled or empty so absent-key semantics
+			// are preserved and a fresh save doesn't persist an inert block.
+			return deepEqual(value, { enabled: false }) || deepEqual(value, {});
 		default:
 			return false;
 	}
