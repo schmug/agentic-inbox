@@ -159,6 +159,11 @@ const api = {
 	// Emails
 	listEmails: (mailboxId: string, params: Record<string, string>, opts?: { signal?: AbortSignal }) =>
 		get<EmailListResponse | Email[]>(`/api/v1/mailboxes/${mailboxId}/emails`, { params, signal: opts?.signal }),
+	preflightEmail: (mailboxId: string, email: unknown) =>
+		post<{ tier: 0 | 1 | 2; reasons: string[] }>(
+			`/api/v1/mailboxes/${mailboxId}/emails/preflight`,
+			email,
+		),
 	sendEmail: (mailboxId: string, email: unknown) =>
 		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email),
 	getEmail: (mailboxId: string, id: string, opts?: { signal?: AbortSignal }) =>

@@ -30,12 +30,20 @@ export default function ComposePanel() {
 		error,
 		isSavingDraft,
 		isSending,
+		preflight,
+		confirmPhrase,
+		setConfirmPhrase,
 		formTitle,
 		handleSaveDraft,
 		handleSend,
 		closeCompose,
 		closePanel,
 	} = useComposeForm(mailboxId, folder);
+
+	const sendTier = preflight?.tier ?? 0;
+	const sendLabel = sendTier === 2 ? "Send (verify)" : sendTier === 1 ? "Send (re-auth)" : "Send";
+	const sendTestId = sendTier === 2 ? "send-button-tier2" : sendTier === 1 ? "send-button-tier1" : "send-button-tier0";
+	const primaryRecipient = to.split(/[,;]/)[0].trim();
 
 	return (
 		<div className="flex flex-col h-full bg-paper">
@@ -146,6 +154,18 @@ export default function ComposePanel() {
 							onChange={setBody}
 						/>
 					</div>
+					{sendTier >= 2 && (
+						<div className="mt-2">
+							<Input
+								label={`Type "${primaryRecipient}" to confirm`}
+								type="text"
+								size="sm"
+								value={confirmPhrase}
+								onChange={(e) => setConfirmPhrase(e.target.value)}
+								data-testid="confirm-phrase-input"
+							/>
+						</div>
+					)}
 				</div>
 
 				{/* Footer actions */}
@@ -173,8 +193,9 @@ export default function ComposePanel() {
 								loading={isSending}
 								disabled={isSavingDraft || isSending}
 								icon={<PaperPlaneTiltIcon size={14} />}
+								data-testid={sendTestId}
 							>
-								{isSending ? "Sending..." : "Send"}
+								{isSending ? "Sending..." : sendLabel}
 							</Button>
 						</div>
 					</div>
