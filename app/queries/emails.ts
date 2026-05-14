@@ -116,6 +116,21 @@ export function useSendEmail() {
 	});
 }
 
+export interface PreflightResult {
+	tier: 0 | 1 | 2;
+	reasons: string[];
+}
+
+export function usePreflightEmail() {
+	return useMutation({
+		mutationFn: ({
+			mailboxId,
+			email,
+		}: { mailboxId: string; email: unknown }) =>
+			api.preflightEmail(mailboxId, email),
+	});
+}
+
 export function useUpdateEmail() {
 	const qc = useQueryClient();
 	return useMutation({

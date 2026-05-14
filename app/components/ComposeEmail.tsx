@@ -36,6 +36,8 @@ export default function ComposeEmail() {
 		formTitle,
 		handleSaveDraft,
 		handleSend,
+		sendButtonLabel,
+		sendButtonTestId,
 	} = useComposeForm(mailboxId, folder);
 
 	return (
@@ -135,8 +137,9 @@ export default function ComposeEmail() {
 								loading={isSending}
 								disabled={isSavingDraft || isSending}
 								icon={<PaperPlaneTiltIcon size={14} />}
+								data-testid={sendButtonTestId}
 							>
-								{isSending ? "Sending..." : "Send"}
+								{sendButtonLabel}
 							</Button>
 						</div>
 					</div>

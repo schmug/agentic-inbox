@@ -35,6 +35,8 @@ export default function ComposePanel() {
 		handleSend,
 		closeCompose,
 		closePanel,
+		sendButtonLabel,
+		sendButtonTestId,
 	} = useComposeForm(mailboxId, folder);
 
 	return (
@@ -173,8 +175,9 @@ export default function ComposePanel() {
 								loading={isSending}
 								disabled={isSavingDraft || isSending}
 								icon={<PaperPlaneTiltIcon size={14} />}
+								data-testid={sendButtonTestId}
 							>
-								{isSending ? "Sending..." : "Send"}
+								{sendButtonLabel}
 							</Button>
 						</div>
 					</div>

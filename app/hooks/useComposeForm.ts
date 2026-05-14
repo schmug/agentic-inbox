@@ -14,7 +14,7 @@ import {
 	stripHtml,
 	toEmailListValue,
 } from "~/lib/utils";
-import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
+import { useDeleteEmail, useForwardEmail, usePreflightEmail, useReplyToEmail, useSaveDraft, useSendEmail, type PreflightResult } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 
@@ -162,6 +162,8 @@ function buildInitialComposeFields(
 	};
 }
 
+const PREFLIGHT_DEFAULT: PreflightResult = { tier: 0, reasons: [] };
+
 export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const feedback = useFeedback();
 	const { composeOptions, closePanel, closeCompose } = useUIStore();
@@ -171,6 +173,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const replyMutation = useReplyToEmail();
 	const forwardMutation = useForwardEmail();
 	const deleteEmailMutation = useDeleteEmail();
+	const preflightMutation = usePreflightEmail();
 
 	const [to, setTo] = useState("");
 	const [cc, setCc] = useState("");
@@ -181,6 +184,8 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [error, setError] = useState<string | null>(null);
 	const [isSavingDraft, setIsSavingDraft] = useState(false);
 	const [isSending, setIsSending] = useState(false);
+	const [preflight, setPreflight] = useState<PreflightResult>(PREFLIGHT_DEFAULT);
+	const preflightFiredRef = useRef(false);
 	const lastInitializedOptionsRef = useRef<typeof composeOptions | null>(null);
 	const isDraftEdit = !!composeOptions.draftEmail;
 
@@ -207,7 +212,52 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
+		// Reset preflight when compose options change (new compose session).
+		setPreflight(PREFLIGHT_DEFAULT);
+		preflightFiredRef.current = false;
 	}, [composeOptions, currentMailbox?.email, sigBlock]);
+
+	// Call preflight once when the composer renders with a mailboxId.
+	// Fires only once per compose session (ref guard). Network failure defaults
+	// to Tier 0 so sending is never blocked by a preflight error.
+	useEffect(() => {
+		if (!mailboxId || preflightFiredRef.current) return;
+		preflightFiredRef.current = true;
+
+		preflightMutation.mutateAsync({
+			mailboxId,
+			email: { to: "", from: mailboxId, subject: "", text: "" },
+		}).then((result) => {
+			setPreflight(result);
+		}).catch((err: unknown) => {
+			console.warn("[preflight] failed, defaulting to Tier 0:", err);
+			setPreflight(PREFLIGHT_DEFAULT);
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [mailboxId]);
+
+	// The primary recipient's address — used as the typed-confirmation phrase
+	// for Tier 2. Derived from `to` (first address in the list).
+	const primaryRecipient = useMemo(() => splitEmailList(to)[0] ?? "", [to]);
+
+	// State for Tier-2 typed-confirmation dialog.
+	const [showTier2Confirm, setShowTier2Confirm] = useState(false);
+	const [tier2Input, setTier2Input] = useState("");
+	const tier2Confirmed = tier2Input.trim().toLowerCase() === primaryRecipient.toLowerCase() && primaryRecipient.length > 0;
+
+	const sendButtonLabel = isSending
+		? "Sending..."
+		: preflight.tier === 2
+			? "Send (verify)"
+			: preflight.tier === 1
+				? "Send (re-auth)"
+				: "Send";
+
+	const sendButtonTestId = preflight.tier === 2
+		? "send-button-tier2"
+		: preflight.tier === 1
+			? "send-button-tier1"
+			: "send-button-tier0";
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -234,6 +284,11 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 
 	const handleSend = async (e: FormEvent, onClose: () => void) => {
 		e.preventDefault(); if (isSending) return; setError(null);
+		// Tier 1 / 2: step-up auth popup not yet configured (slice 2).
+		if (preflight.tier >= 1) {
+			feedback.info("Step-up auth not yet configured");
+			return;
+		}
 		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
 		const toRecipients = splitEmailList(to);
 		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
@@ -262,5 +317,22 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return {
+		to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc,
+		subject, setSubject, body, setBody,
+		error, setError,
+		isSavingDraft, isSending,
+		formTitle,
+		handleSaveDraft, handleSend,
+		closeCompose, closePanel,
+		// Preflight / send-risk state
+		preflight,
+		sendButtonLabel,
+		sendButtonTestId,
+		// Tier-2 typed-confirmation
+		showTier2Confirm, setShowTier2Confirm,
+		tier2Input, setTier2Input,
+		tier2Confirmed,
+		primaryRecipient,
+	};
 }
