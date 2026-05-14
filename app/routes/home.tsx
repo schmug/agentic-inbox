@@ -4,7 +4,6 @@ import { Loader } from "@cloudflare/kumo";
 import {
 	BriefcaseIcon,
 	BuildingsIcon,
-	EnvelopeIcon,
 	ShieldCheckIcon,
 	WarningIcon,
 } from "@phosphor-icons/react";
@@ -15,6 +14,7 @@ import { useAutoProvisionMailboxes } from "~/hooks/useAutoProvisionMailboxes";
 import { useDomains } from "~/queries/domains";
 import { useMailboxes } from "~/queries/mailboxes";
 import { useOrgOverview } from "~/queries/org";
+import { ApiError } from "~/services/api";
 import type { OrgOverview, OrgVerdictMix } from "~/types";
 
 export function meta() {
@@ -23,7 +23,7 @@ export function meta() {
 
 export default function HomeRoute() {
 	useAutoProvisionMailboxes();
-	const { data, isLoading, isError, refetch } = useOrgOverview();
+	const { data, isLoading, isError, error, refetch } = useOrgOverview();
 	const { data: mailboxes = [] } = useMailboxes();
 
 	return (
@@ -36,7 +36,7 @@ export default function HomeRoute() {
 						<Loader size="lg" />
 					</div>
 				) : isError ? (
-					<OrgError onRetry={() => refetch()} />
+					<OrgError onRetry={() => refetch()} error={error} />
 				) : data ? (
 					<OrgBody data={data} mailboxCount={mailboxes.length} />
 				) : null}
@@ -69,7 +69,47 @@ function OrgHeader({
 	);
 }
 
-function OrgError({ onRetry }: { onRetry: () => void }) {
+function OrgError({ onRetry, error }: { onRetry: () => void; error?: unknown }) {
+	const isCfAccessError =
+		error instanceof ApiError && (error.status === 401 || error.status === 403);
+
+	if (isCfAccessError) {
+		return (
+			<div className="pp-card p-6 flex items-start gap-3">
+				<span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-2 text-ink-3 shrink-0">
+					<WarningIcon size={18} />
+				</span>
+				<div>
+					<div className="text-[14px] font-medium text-ink mb-1">
+						CF Access not configured
+					</div>
+					<p className="text-[12.5px] text-ink-3 leading-relaxed mb-2">
+						The Worker is reachable but Cloudflare Access rejected the request.
+						This usually means the Access application isn't assigned to your account
+						or the JWT cookie has expired.
+					</p>
+					<div className="flex items-center gap-4">
+						<a
+							href="https://github.com/schmug/PhishSOC/blob/main/README.md#troubleshooting-access"
+							target="_blank"
+							rel="noreferrer"
+							className="text-[12px] underline text-accent hover:opacity-80"
+						>
+							Troubleshooting steps
+						</a>
+						<button
+							type="button"
+							onClick={onRetry}
+							className="text-[12px] underline text-accent hover:opacity-80"
+						>
+							Retry
+						</button>
+					</div>
+				</div>
+			</div>
+		);
+	}
+
 	return (
 		<div className="pp-card p-6 flex items-start gap-3">
 			<span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-2 text-ink-3 shrink-0">
@@ -118,24 +158,51 @@ function OrgBody({
 
 function EmptyOrg() {
 	return (
-		<div className="pp-card py-16 px-6">
-			<div className="flex flex-col items-center text-center">
-				<div className="mb-4">
-					<EnvelopeIcon size={48} weight="thin" className="text-ink-3" />
-				</div>
-				<h3 className="text-base font-semibold text-ink mb-1.5">
-					No mailboxes yet
-				</h3>
-				<p className="text-sm text-ink-3 max-w-sm mb-5">
-					Provision a mailbox to start aggregating org-wide threat activity.
-				</p>
-				<RouterLink
-					to="/mailboxes"
-					className="text-[13px] underline text-accent hover:opacity-80"
-				>
-					Go to Mailboxes
-				</RouterLink>
-			</div>
+		<div className="pp-card py-10 px-8">
+			<h3 className="text-base font-semibold text-ink mb-1.5">
+				No mailboxes yet — set one up to start triaging mail.
+			</h3>
+			<p className="text-sm text-ink-3 mb-6">Start here:</p>
+			<ol className="space-y-5">
+				<li className="flex gap-3">
+					<span className="pp-mono text-[11px] font-semibold text-ink-3 mt-0.5 w-4 shrink-0">1.</span>
+					<div>
+						<div className="text-sm font-medium text-ink">Configure Cloudflare Email Routing</div>
+						<p className="text-[12.5px] text-ink-3 mt-0.5 leading-relaxed">
+							Forward your domain's catch-all to this Worker.
+						</p>
+					</div>
+				</li>
+				<li className="flex gap-3">
+					<span className="pp-mono text-[11px] font-semibold text-ink-3 mt-0.5 w-4 shrink-0">2.</span>
+					<div>
+						<div className="text-sm font-medium text-ink">Create your first mailbox</div>
+						<RouterLink to="/mailboxes" className="text-[12.5px] text-accent hover:opacity-80 mt-0.5 block">
+							Go to Mailboxes →
+						</RouterLink>
+					</div>
+				</li>
+				<li className="flex gap-3">
+					<span className="pp-mono text-[11px] font-semibold text-ink-3 mt-0.5 w-4 shrink-0">3.</span>
+					<div>
+						<div className="text-sm font-medium text-ink">Set up domain security (DMARC / SPF / DKIM)</div>
+						<RouterLink to="/domains" className="text-[12.5px] text-accent hover:opacity-80 mt-0.5 block">
+							Go to Domains →
+						</RouterLink>
+					</div>
+				</li>
+				<li className="flex gap-3">
+					<span className="pp-mono text-[11px] font-semibold text-ink-3 mt-0.5 w-4 shrink-0">4.</span>
+					<div>
+						<div className="text-sm font-medium text-ink">
+							Connect a threat-intel hub <span className="text-ink-3 font-normal">(optional)</span>
+						</div>
+						<RouterLink to="/hub" className="text-[12.5px] text-accent hover:opacity-80 mt-0.5 block">
+							Go to Hub →
+						</RouterLink>
+					</div>
+				</li>
+			</ol>
 		</div>
 	);
 }
