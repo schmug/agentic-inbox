@@ -33,10 +33,20 @@ export default function ComposeEmail() {
 		error,
 		isSavingDraft,
 		isSending,
+		sendRisk,
+		isPreflighting,
+		tier2Phrase,
+		setTier2Phrase,
+		handleSendFocus,
 		formTitle,
 		handleSaveDraft,
 		handleSend,
 	} = useComposeForm(mailboxId, folder);
+
+	const primaryRecipient = to.split(",")[0]?.trim() ?? "";
+	const sendTier = sendRisk?.tier ?? 0;
+	const sendLabel = isSending ? "Sending..." : sendTier === 2 ? "Send (verify)" : sendTier === 1 ? "Send (re-auth)" : "Send";
+	const sendTestId = sendTier === 2 ? "send-button-verify" : sendTier === 1 ? "send-button-reauth" : "send-button";
 
 	return (
 		<Dialog.Root
@@ -116,28 +126,44 @@ export default function ComposeEmail() {
 						>
 							Discard
 						</Button>
-						<div className="flex items-center gap-2">
-							<Button
-								type="button"
-								variant="secondary"
-								size="sm"
-								loading={isSavingDraft}
-								disabled={isSending}
-								icon={<FloppyDiskIcon size={14} />}
-								onClick={handleSaveDraft}
-							>
-								{isSavingDraft ? "Saving..." : "Save as Draft"}
-							</Button>
-							<Button
-								type="submit"
-								variant="primary"
-								size="sm"
-								loading={isSending}
-								disabled={isSavingDraft || isSending}
-								icon={<PaperPlaneTiltIcon size={14} />}
-							>
-								{isSending ? "Sending..." : "Send"}
-							</Button>
+						<div className="flex flex-col items-end gap-2">
+							{sendTier === 2 && (
+								<div className="w-full">
+									<Input
+										label={`Type "${primaryRecipient}" to confirm`}
+										type="text"
+										size="sm"
+										value={tier2Phrase}
+										onChange={(e) => setTier2Phrase(e.target.value)}
+										data-testid="send-verify-phrase-input"
+									/>
+								</div>
+							)}
+							<div className="flex items-center gap-2">
+								<Button
+									type="button"
+									variant="secondary"
+									size="sm"
+									loading={isSavingDraft}
+									disabled={isSending}
+									icon={<FloppyDiskIcon size={14} />}
+									onClick={handleSaveDraft}
+								>
+									{isSavingDraft ? "Saving..." : "Save as Draft"}
+								</Button>
+								<Button
+									type="submit"
+									variant="primary"
+									size="sm"
+									loading={isSending || isPreflighting}
+									disabled={isSavingDraft || isSending}
+									icon={<PaperPlaneTiltIcon size={14} />}
+									data-testid={sendTestId}
+									onFocus={handleSendFocus}
+								>
+									{sendLabel}
+								</Button>
+							</div>
 						</div>
 					</div>
 				</form>

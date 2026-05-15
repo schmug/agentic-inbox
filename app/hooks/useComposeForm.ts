@@ -3,6 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import api from "~/services/api";
 import { useFeedback } from "~/lib/feedback";
 import {
 	buildQuotedReplyBlock,
@@ -181,7 +182,11 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [error, setError] = useState<string | null>(null);
 	const [isSavingDraft, setIsSavingDraft] = useState(false);
 	const [isSending, setIsSending] = useState(false);
+	const [sendRisk, setSendRisk] = useState<{ tier: 0 | 1 | 2; reasons: string[] } | null>(null);
+	const [isPreflighting, setIsPreflighting] = useState(false);
+	const [tier2Phrase, setTier2Phrase] = useState("");
 	const lastInitializedOptionsRef = useRef<typeof composeOptions | null>(null);
+	const preflightCalledRef = useRef(false);
 	const isDraftEdit = !!composeOptions.draftEmail;
 
 	const formTitle = useMemo(() => {
@@ -194,6 +199,7 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	useEffect(() => {
 		if (lastInitializedOptionsRef.current === composeOptions) return;
 		lastInitializedOptionsRef.current = composeOptions;
+		preflightCalledRef.current = false;
 
 		const initialFields = buildInitialComposeFields(
 			composeOptions,
@@ -207,7 +213,24 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
-	}, [composeOptions, currentMailbox?.email, sigBlock]);
+		setSendRisk(null);
+		setTier2Phrase("");
+
+		if (mailboxId && currentMailbox?.email && initialFields.to.trim()) {
+			preflightCalledRef.current = true;
+			const from = currentMailbox.email;
+			setIsPreflighting(true);
+			api.preflightSend(mailboxId, {
+				to: initialFields.to,
+				from,
+				subject: initialFields.subject || "",
+				html: initialFields.body || "<p></p>",
+			})
+				.then(setSendRisk)
+				.catch(() => console.warn("[PhishSOC] Preflight check failed — defaulting to Tier 0"))
+				.finally(() => setIsPreflighting(false));
+		}
+	}, [composeOptions, currentMailbox?.email, sigBlock, mailboxId]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -232,11 +255,41 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSavingDraft(false); }
 	};
 
+	const handleSendFocus = () => {
+		if (preflightCalledRef.current || !mailboxId || !currentMailbox?.email || !to.trim()) return;
+		preflightCalledRef.current = true;
+		const from = currentMailbox.email;
+		setIsPreflighting(true);
+		api.preflightSend(mailboxId, {
+			to,
+			from,
+			subject: subject || "",
+			html: body || "<p></p>",
+		})
+			.then(setSendRisk)
+			.catch(() => console.warn("[PhishSOC] Preflight check failed — defaulting to Tier 0"))
+			.finally(() => setIsPreflighting(false));
+	};
+
 	const handleSend = async (e: FormEvent, onClose: () => void) => {
 		e.preventDefault(); if (isSending) return; setError(null);
 		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
 		const toRecipients = splitEmailList(to);
 		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
+
+		const tier = sendRisk?.tier ?? 0;
+		if (tier >= 1) {
+			if (tier >= 2) {
+				const primaryRecipient = toRecipients[0];
+				if (tier2Phrase.trim().toLowerCase() !== primaryRecipient.toLowerCase()) {
+					setError(`Type "${primaryRecipient}" to confirm before sending.`);
+					return;
+				}
+			}
+			feedback.info("Step-up auth not yet configured. Send requires step-up confirmation.");
+			return;
+		}
+
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
 		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
@@ -262,5 +315,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, sendRisk, isPreflighting, tier2Phrase, setTier2Phrase, handleSendFocus, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }
