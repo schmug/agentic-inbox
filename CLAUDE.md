@@ -5,6 +5,43 @@ conventions surfaced by real incidents so future agents inherit the lesson
 without re-discovering it. Keep entries grounded in observed events; this is a
 seed, not a comprehensive style guide.
 
+## Codebase map
+
+| Folder | Purpose |
+| --- | --- |
+| `app/` | React 19 / React Router v7 SPA — routes, components, hooks, and client-side queries for the mailbox UI |
+| `shared/` | Zod schemas and pure helpers shared by both the React app and Workers (mailbox/domain/org settings, folder constants) |
+| `workers/` | All Cloudflare Workers backend code; see subsystems below |
+| `hub/` | MISP-compatible community threat-intel hub — exposes a destroylist feed and admin UI for corroborated phishing reports |
+| `sidecar/` | Stand-alone YARA attachment scanner sidecar Worker with its own `wrangler.jsonc`, package, and tests |
+| `test/` | Vitest unit-test fixtures and per-subsystem test suites mirroring the `workers/` tree |
+| `tests/` | Integration and frontend Vitest test suites (routes, intel, security, lib) |
+| `docs/` | Developer and operator documentation (architecture notes, setup guides) |
+| `public/` | Static assets served by the Worker (favicon, theme bootstrap script) |
+
+### `workers/` subsystems
+
+| Subsystem | Purpose |
+| --- | --- |
+| `workers/agent/` | `EmailAgent` and `OrgAgent` Durable Objects — AI chat agents with 9 email tools, auto-draft, and streaming responses |
+| `workers/security/` | Synchronous security pipeline: SPF/DKIM/DMARC, URL heuristics, LLM classifier, sender reputation, off-hours scoring, and verdict aggregation |
+| `workers/intel/` | Async deep-scan stage: redirect-chain resolution, RDAP domain age, CrowdSec CTI, Spamhaus DROP/EDROP CIDR, attachment heuristics, and threat-intel feed management |
+| `workers/lib/` | Shared backend helpers: mailbox/domain/org settings resolution, attachment storage, email helpers, token handling, and schema definitions |
+| `workers/routes/` | Hono sub-apps for scoped API routes: reply/forward, DMARC, TLS-RPT, cases, send-email, hub UI, ACL |
+| `workers/durableObject/` | `MailboxDO` — per-mailbox Durable Object with SQLite schema/migrations and R2 attachment storage |
+| `workers/mcp/` | `EmailMCP` — MCP server exposing email tools over HTTP so external AI clients (Claude Code, Cursor) can act on mailboxes |
+| `workers/dmarc/` | DMARC aggregate-report ingest and RUF forensic-report ingest |
+| `workers/spf/` | SPF TXT record fetch and posture scoring for the per-domain posture surface |
+| `workers/dkim/` | DKIM public-key lookup and posture check for the per-domain posture surface |
+| `workers/bimi/` | BIMI TXT record presence check for the per-domain posture surface |
+| `workers/mta-sts/` | MTA-STS policy fetch and caching for the per-domain posture surface |
+| `workers/tlsrpt/` | TLS-RPT posture check and aggregate-report ingest for the per-domain posture surface |
+| `workers/db/` | SQLite schema definition and migration runner used by `MailboxDO` |
+| `workers/app.ts` | Top-level Worker entry point: Cloudflare Access auth, Hono routing, cron handler, Durable Object exports |
+| `workers/index.ts` | Core Hono API app: mailbox CRUD, email receive pipeline, settings endpoints, send-email handler |
+| `workers/types.ts` | `Env` interface binding all Worker environment variables and Durable Object stubs |
+| `workers/email-sender.ts` | Outbound email send helper wrapping the `send_email` binding |
+
 ## Conventions
 
 ### URL host checks in test mocks must parse, not substring
