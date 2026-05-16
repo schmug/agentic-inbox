@@ -1,5 +1,13 @@
 {
   "$comment": "Committed harness for PhishSOC. Enforces invariants documented in CLAUDE.md so they fail at edit time instead of in advisor review / CodeQL. See issue #278.",
+  "permissions": {
+    "allow": [
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(gh search code *)",
+      "Bash(pnpm lint)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
