@@ -80,12 +80,24 @@ function get<T>(url: string, opts?: { params?: Record<string, string>; responseT
 	});
 }
 
-function post<T>(url: string, body?: unknown, opts?: { signal?: AbortSignal }) {
+function post<T>(
+	url: string,
+	body?: unknown,
+	opts?: { signal?: AbortSignal; headers?: Record<string, string> },
+) {
 	return request<T>(url, {
 		method: "POST",
 		signal: opts?.signal,
+		...(opts?.headers ? { headers: opts.headers } : {}),
 		body: body != null ? JSON.stringify(body) : undefined,
 	});
+}
+
+/** x-confirmation-token header opts for a step-up–gated send (#285). */
+function confirmOpts(confirmationToken?: string) {
+	return confirmationToken
+		? { headers: { "x-confirmation-token": confirmationToken } }
+		: undefined;
 }
 
 function put<T>(url: string, body?: unknown) {
@@ -164,8 +176,8 @@ const api = {
 			`/api/v1/mailboxes/${mailboxId}/emails/preflight`,
 			email,
 		),
-	sendEmail: (mailboxId: string, email: unknown) =>
-		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email),
+	sendEmail: (mailboxId: string, email: unknown, confirmationToken?: string) =>
+		post<void>(`/api/v1/mailboxes/${mailboxId}/emails`, email, confirmOpts(confirmationToken)),
 	getEmail: (mailboxId: string, id: string, opts?: { signal?: AbortSignal }) =>
 		get<Email>(`/api/v1/mailboxes/${mailboxId}/emails/${id}`, { signal: opts?.signal }),
 	updateEmail: (mailboxId: string, id: string, data: unknown) =>
@@ -193,10 +205,10 @@ const api = {
 			draft_id?: string;
 		},
 	) => post<{ draft_id: string }>(`/api/v1/mailboxes/${mailboxId}/drafts`, draft),
-	replyToEmail: (mailboxId: string, emailId: string, email: unknown) =>
-		post<void>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/reply`, email),
-	forwardEmail: (mailboxId: string, emailId: string, email: unknown) =>
-		post<void>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/forward`, email),
+	replyToEmail: (mailboxId: string, emailId: string, email: unknown, confirmationToken?: string) =>
+		post<void>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/reply`, email, confirmOpts(confirmationToken)),
+	forwardEmail: (mailboxId: string, emailId: string, email: unknown, confirmationToken?: string) =>
+		post<void>(`/api/v1/mailboxes/${mailboxId}/emails/${emailId}/forward`, email, confirmOpts(confirmationToken)),
 
 	// Folders
 	listFolders: (mailboxId: string) =>

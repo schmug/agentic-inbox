@@ -110,8 +110,9 @@ export function useSendEmail() {
 		mutationFn: ({
 			mailboxId,
 			email,
-		}: { mailboxId: string; email: unknown }) =>
-			api.sendEmail(mailboxId, email),
+			confirmationToken,
+		}: { mailboxId: string; email: unknown; confirmationToken?: string }) =>
+			api.sendEmail(mailboxId, email, confirmationToken),
 		onSuccess: (_data, { mailboxId }) => invalidate(mailboxId),
 	});
 }
@@ -259,8 +260,9 @@ export function useReplyToEmail() {
 			mailboxId,
 			emailId,
 			email,
-		}: { mailboxId: string; emailId: string; email: unknown }) =>
-			api.replyToEmail(mailboxId, emailId, email),
+			confirmationToken,
+		}: { mailboxId: string; emailId: string; email: unknown; confirmationToken?: string }) =>
+			api.replyToEmail(mailboxId, emailId, email, confirmationToken),
 		onSuccess: (_data, { mailboxId }) => invalidate(mailboxId),
 	});
 }
@@ -272,8 +274,9 @@ export function useForwardEmail() {
 			mailboxId,
 			emailId,
 			email,
-		}: { mailboxId: string; emailId: string; email: unknown }) =>
-			api.forwardEmail(mailboxId, emailId, email),
+			confirmationToken,
+		}: { mailboxId: string; emailId: string; email: unknown; confirmationToken?: string }) =>
+			api.forwardEmail(mailboxId, emailId, email, confirmationToken),
 		onSuccess: (_data, { mailboxId }) => invalidate(mailboxId),
 	});
 }
