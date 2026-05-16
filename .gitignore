@@ -18,4 +18,8 @@ opencode.jsonc
 skills-lock.json
 .DS_Store
 worker-configuration.d.ts
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/check-invariants.sh
