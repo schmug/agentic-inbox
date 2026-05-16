@@ -12,6 +12,8 @@ An **AI agent** runs alongside the inbox: it reads incoming mail, auto-drafts re
 
 Read the blog post to learn more about Cloudflare Email Service and how to use it with the Agents SDK, MCP, and from the Wrangler CLI: [Email for Agents](https://blog.cloudflare.com/email-for-agents/).
 
+For a folder-by-folder orientation of the repo, see the [Codebase map](./CLAUDE.md#codebase-map) in CLAUDE.md.
+
 ## How to setup
 
 **Important**: Clicking the 'Deploy to Cloudflare' button is only one part of the setup. You must follow the **After deploying** steps as well. For a full step-by-step guide with screenshots, refer to the upstream setup walkthrough — its deploy/Email-Routing/Access steps still apply to PhishSOC: 
