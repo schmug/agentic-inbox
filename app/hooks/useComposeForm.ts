@@ -18,6 +18,7 @@ import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSend
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
 import api from "~/services/api";
+import { requestStepUpConfirmation } from "~/lib/step-up-confirm";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -282,11 +283,6 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 				return;
 			}
 		}
-		if (sendTier >= 1) {
-			feedback.info("Step-up auth not yet configured");
-			return;
-		}
-
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
 		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
@@ -300,11 +296,28 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 			text: htmlToPlainText(body),
 		};
 		const draftId = composeOptions.draftEmail?.id; const mode = composeOptions.mode; const originalId = composeOptions.originalEmail?.id || composeOptions.draftEmail?.in_reply_to;
-		setIsSending(true); feedback.info("Sending email...");
+		setIsSending(true);
 		try {
-			if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData });
-			else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData });
+			let confirmationToken: string | undefined;
+			if (sendTier >= 1) {
+				// Tier ≥1: step-up confirm. The payload MUST be the exact
+				// values the send will use (server binds the one-shot token to
+				// SHA-256 of {to, subject, body, attachmentIds}); derive both
+				// from this single emailData object and never re-normalize.
+				feedback.info("Verifying step-up authentication…");
+				confirmationToken = await requestStepUpConfirmation({
+					tier: sendTier,
+					mailboxId,
+					to: emailData.to ?? toEmailListValue(toRecipients) ?? "",
+					subject: emailData.subject,
+					body: emailData.html || emailData.text || "",
+					attachmentIds: [],
+				});
+			}
+			feedback.info("Sending email...");
+			if ((mode === "reply" || mode === "reply-all") && originalId) await replyMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData, confirmationToken });
+			else if (mode === "forward" && originalId) await forwardMutation.mutateAsync({ mailboxId, emailId: originalId, email: emailData, confirmationToken });
+			else await sendEmailMutation.mutateAsync({ mailboxId, email: emailData, confirmationToken });
 			if (draftId) deleteEmailMutation.mutate({ mailboxId, id: draftId });
 			feedback.success("Email sent!");
 			onClose();

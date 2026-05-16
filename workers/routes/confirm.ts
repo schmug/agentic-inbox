@@ -31,6 +31,70 @@ const ConfirmBodySchema = z.object({
 
 export const confirmRoute = new Hono<{ Bindings: Env }>();
 
+// ── Step-up relay page (issue #285) ───────────────────────────────────────────
+//
+// Cloudflare Access step-up requires a top-level navigation to a
+// step-up-protected path. `/api/v1/confirm` is the only such path, so the
+// composer opens THIS GET in a popup. Access intercepts the navigation,
+// runs the step-up login, and (post-auth) lets the request through to this
+// handler with the step-up cookie now set for the popup's origin. The tiny
+// relay page below then POSTs the preflighted payload back to the same path
+// (Access injects `cf-access-jwt-assertion` on that fetch), and relays the
+// one-shot confirmation token to the opener via `postMessage`.
+//
+// This is an ADDITIVE sibling to the POST handler — it does not alter the
+// slice-2 token contract (payloadHash binding, one-shot jti, signing) in
+// any way. The page has no interpolated/untrusted content; the payload
+// arrives at runtime via a same-origin, opener-checked postMessage.
+const RELAY_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>PhishSOC step-up confirmation</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:14px system-ui,sans-serif;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;color:#374151;background:#f9fafb}</style>
+</head>
+<body>
+<p id="s">Completing step-up confirmation…</p>
+<script>
+(function(){
+  var SRC="phishsoc-confirm";
+  var opener=window.opener;
+  var status=document.getElementById("s");
+  if(!opener){status.textContent="This window must be opened by PhishSOC.";return;}
+  var openerOrigin=window.location.origin;
+  var handled=false;
+  function send(m){try{opener.postMessage(m,openerOrigin);}catch(e){}}
+  window.addEventListener("message",function(e){
+    if(e.origin!==openerOrigin)return;
+    if(e.source!==opener)return;
+    var d=e.data;
+    if(!d||d.source!==SRC||d.type!=="payload")return;
+    if(handled)return;handled=true;
+    var nonce=d.nonce;
+    fetch("/api/v1/confirm",{method:"POST",credentials:"same-origin",
+      headers:{"content-type":"application/json"},body:JSON.stringify(d.payload)})
+    .then(function(r){return r.json().catch(function(){return {};}).then(function(j){
+      if(r.ok&&j&&typeof j.token==="string"){
+        send({source:SRC,type:"token",nonce:nonce,token:j.token});
+      }else{
+        send({source:SRC,type:"error",nonce:nonce,error:(j&&j.error)||("confirm failed ("+r.status+")")});
+      }
+    });})
+    .catch(function(err){send({source:SRC,type:"error",nonce:nonce,error:String((err&&err.message)||err)});})
+    .then(function(){try{window.close();}catch(e){}});
+  });
+  send({source:SRC,type:"ready"});
+})();
+</script>
+</body>
+</html>`;
+
+confirmRoute.get("/", (c) =>
+	c.html(RELAY_HTML, 200, {
+		"cache-control": "no-store",
+		"x-frame-options": "DENY",
+	}),
+);
+
 confirmRoute.post("/", async (c) => {
 	const { STEP_UP_AUD, TEAM_DOMAIN, CONFIRMATION_TOKEN_SECRET, BLOOM_KV } = c.env;
 
