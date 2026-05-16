@@ -1,0 +1,31 @@
+{
+  "$comment": "Committed harness for PhishSOC. Enforces invariants documented in CLAUDE.md so they fail at edit time instead of in advisor review / CodeQL. See issue #278.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "$comment": "MTA-STS policy fetch must use redirect: \"manual\" (RFC 8461 §3.3 / global CLAUDE.md). Presence check on the bad pattern in the incoming edit; mirrors the dmarcheck hook that stopped PRs #58/#92 regressing the same invariant.",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r 'if ((.tool_input.file_path // \"\") | test(\"workers/mta-sts/posture\\\\.ts$\")) then (.tool_input.new_string // .tool_input.content // \"\") else \"\" end' | grep -qE 'redirect:[[:space:]]*\"(error|follow)\"' && { echo 'Blocked: MTA-STS policy fetch in workers/mta-sts/posture.ts must use redirect: \"manual\" (RFC 8461 §3.3). This invariant regressed twice in the sibling dmarcheck repo (PRs #58, #92). See CLAUDE.md.' >&2; exit 2; } || exit 0",
+            "statusMessage": "Checking MTA-STS redirect mode..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "$comment": "stripDefaultEqual must guard settings-tier writes (CLAUDE.md: 'stripDefaultEqual runs on every settings-tier write'; regressed in PRs #148, #154). Coarse file-wide tripwire: a settings-write file that performs an R2/helper write but no longer references stripDefaultEqual is flagged. Heuristic by design — if a write legitimately needs no strip, route it so the file still references stripDefaultEqual or move the write out of these files.",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path // \"\"' | { read -r f; case \"$f\" in *workers/index.ts|*workers/lib/mailbox-settings.ts|*workers/lib/domain-settings.ts|*workers/lib/org-settings.ts|*workers/security/settings.ts) if [ -f \"$f\" ] && grep -qE 'BUCKET\\.put\\(|putDomainSettings|putMailboxSettings|orgSettingsKey' \"$f\" && ! grep -q 'stripDefaultEqual' \"$f\"; then echo \"Blocked: $f performs a settings-tier write but no longer references stripDefaultEqual. Every settings-tier write (mailboxes/<id>.json, domains/<domain>.json, org/settings.json) must route through stripDefaultEqual from workers/lib/mailbox-settings.ts before BUCKET.put — see CLAUDE.md. This regressed in PRs #148 and #154.\" >&2; exit 2; fi ;; esac; }",
+            "statusMessage": "Checking stripDefaultEqual on settings-tier writes..."
+          }
+        ]
+      }
+    ]
+  }
+}

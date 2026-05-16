@@ -18,4 +18,7 @@ opencode.jsonc
 skills-lock.json
 .DS_Store
 worker-configuration.d.ts
-.claude/
+# Track the committed Claude Code harness (settings.json) but keep
+# local-only session state (plans, transcripts, settings.local.json) ignored.
+.claude/*
+!.claude/settings.json
