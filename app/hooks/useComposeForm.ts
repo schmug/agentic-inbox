@@ -17,6 +17,7 @@ import {
 import { useDeleteEmail, useForwardEmail, useReplyToEmail, useSaveDraft, useSendEmail } from "~/queries/emails";
 import { useMailbox } from "~/queries/mailboxes";
 import { useUIStore } from "~/hooks/useUIStore";
+import api from "~/services/api";
 
 function appendUniqueAddress(
 	addresses: string[],
@@ -181,7 +182,12 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 	const [error, setError] = useState<string | null>(null);
 	const [isSavingDraft, setIsSavingDraft] = useState(false);
 	const [isSending, setIsSending] = useState(false);
+	const [preflight, setPreflight] = useState<{ tier: 0 | 1 | 2; reasons: string[] } | null>(null);
+	const [isPreflighting, setIsPreflighting] = useState(false);
+	const [confirmPhrase, setConfirmPhrase] = useState("");
 	const lastInitializedOptionsRef = useRef<typeof composeOptions | null>(null);
+	const latestSubjectRef = useRef(subject);
+	const latestBodyRef = useRef(body);
 	const isDraftEdit = !!composeOptions.draftEmail;
 
 	const formTitle = useMemo(() => {
@@ -207,7 +213,37 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		setShowCcBcc(initialFields.showCcBcc);
 		setSubject(initialFields.subject);
 		setBody(initialFields.body);
+		setPreflight(null);
+		setConfirmPhrase("");
 	}, [composeOptions, currentMailbox?.email, sigBlock]);
+
+	useEffect(() => { latestSubjectRef.current = subject; }, [subject]);
+	useEffect(() => { latestBodyRef.current = body; }, [body]);
+
+	useEffect(() => {
+		if (!mailboxId || !to.trim()) {
+			setPreflight(null);
+			return;
+		}
+		const timer = setTimeout(async () => {
+			setIsPreflighting(true);
+			try {
+				const result = await api.preflightEmail(mailboxId, {
+					to,
+					from: mailboxId,
+					subject: latestSubjectRef.current || ".",
+					text: htmlToPlainText(latestBodyRef.current) || " ",
+				});
+				setPreflight(result);
+			} catch {
+				console.warn("[preflight] network error, defaulting to Tier 0");
+				setPreflight(null);
+			} finally {
+				setIsPreflighting(false);
+			}
+		}, 600);
+		return () => clearTimeout(timer);
+	}, [to, mailboxId]);
 
 	const handleSaveDraft = async () => {
 		if (!mailboxId || isSending) return; setIsSavingDraft(true); setError(null);
@@ -237,6 +273,20 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		if (!currentMailbox || !mailboxId) { setError("No mailbox selected."); return; }
 		const toRecipients = splitEmailList(to);
 		if (toRecipients.length === 0) { setError("Add at least one recipient."); return; }
+
+		const sendTier = preflight?.tier ?? 0;
+		if (sendTier >= 2) {
+			const primaryRecipient = toRecipients[0].trim().toLowerCase();
+			if (confirmPhrase.trim().toLowerCase() !== primaryRecipient) {
+				setError(`Type "${toRecipients[0]}" to confirm before sending.`);
+				return;
+			}
+		}
+		if (sendTier >= 1) {
+			feedback.info("Step-up auth not yet configured");
+			return;
+		}
+
 		const ccRecipients = splitEmailList(cc); const bccRecipients = splitEmailList(bcc);
 		const fromName = currentMailbox.settings?.fromName || currentMailbox.name;
 		const from = fromName && fromName !== currentMailbox.email ? { email: currentMailbox.email, name: fromName } : currentMailbox.email;
@@ -262,5 +312,5 @@ export function useComposeForm(mailboxId?: string, _folder?: string) {
 		finally { setIsSending(false); }
 	};
 
-	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
+	return { to, setTo, cc, setCc, bcc, setBcc, showCcBcc, setShowCcBcc, subject, setSubject, body, setBody, error, setError, isSavingDraft, isSending, preflight, isPreflighting, confirmPhrase, setConfirmPhrase, formTitle, handleSaveDraft, handleSend, closeCompose, closePanel };
 }
