@@ -1,3 +1,4 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/schmug/PhishSOC)
 <div align="center">
   <h1>PhishSOC</h1>
   <p><em>A phishing-aware email SOC on Cloudflare Workers — full mailbox UI, AI triage agent, and a real-time SPF/DKIM/DMARC + URL/RDAP scoring pipeline.</em></p>
