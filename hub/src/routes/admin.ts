@@ -197,3 +197,63 @@ adminRoutes.delete("/peers/:uuid", async (c) => {
 	]);
 	return new Response(null, { status: 204 });
 });
+
+// ── Org trust management ──────────────────────────────────────────────────
+
+const UpdateOrgSchema = z.object({
+	/** Trust multiplier for this org's attribute contributions (0 = effectively demoted). */
+	trust: z.number().min(0).max(10),
+});
+
+/**
+ * Update an org's trust multiplier. Setting trust to 0 demotes a misbehaving
+ * contributor so their attributes no longer affect the corroboration score.
+ */
+adminRoutes.patch("/orgs/:uuid", async (c) => {
+	const uuid = c.req.param("uuid");
+	const parsed = UpdateOrgSchema.safeParse(await c.req.json().catch(() => null));
+	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+	const org = await c.env.DB
+		.prepare(`SELECT uuid FROM orgs WHERE uuid = ?1`)
+		.bind(uuid)
+		.first<{ uuid: string }>();
+	if (!org) return c.json({ error: "not found" }, 404);
+
+	await c.env.DB
+		.prepare(`UPDATE orgs SET trust = ?1 WHERE uuid = ?2`)
+		.bind(parsed.data.trust, uuid)
+		.run();
+
+	return c.json({ ok: true, uuid, trust: parsed.data.trust });
+});
+
+// ── Sharing group public-feed toggle ─────────────────────────────────────
+
+const UpdateSharingGroupSchema = z.object({
+	/** When true, promoted entries from this group are served on the unauthenticated public destroylist. */
+	is_public: z.boolean(),
+});
+
+/**
+ * Toggle whether a sharing group's promoted entries appear on the
+ * unauthenticated GET /feeds/public/destroylist.txt feed (issue #23).
+ */
+adminRoutes.patch("/sharing-groups/:uuid", async (c) => {
+	const uuid = c.req.param("uuid");
+	const parsed = UpdateSharingGroupSchema.safeParse(await c.req.json().catch(() => null));
+	if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+	const sg = await c.env.DB
+		.prepare(`SELECT uuid FROM sharing_groups WHERE uuid = ?1`)
+		.bind(uuid)
+		.first<{ uuid: string }>();
+	if (!sg) return c.json({ error: "not found" }, 404);
+
+	await c.env.DB
+		.prepare(`UPDATE sharing_groups SET is_public = ?1 WHERE uuid = ?2`)
+		.bind(parsed.data.is_public ? 1 : 0, uuid)
+		.run();
+
+	return c.json({ ok: true, uuid, is_public: parsed.data.is_public });
+});
