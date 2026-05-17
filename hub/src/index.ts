@@ -21,7 +21,7 @@
 
 import { Hono } from "hono";
 import { eventRoutes } from "./routes/events";
-import { feedRoutes } from "./routes/feeds";
+import { feedRoutes, publicFeedRoutes } from "./routes/feeds";
 import { orgRoutes, orgAcceptApp } from "./routes/orgs";
 import { sharingGroupRoutes } from "./routes/sharing-groups";
 import { adminRoutes } from "./routes/admin";
@@ -36,6 +36,10 @@ const app = new Hono<{ Bindings: Env }>();
 app.get("/", (c) => c.text("AIS Hub — MISP-compatible threat-intel sharing. See /events, /feeds/destroylist.txt, /orgs."));
 
 app.route("/events", eventRoutes);
+// Public (unauthenticated) feeds must be mounted before the authenticated
+// /feeds sub-app so that /feeds/public/* is handled here before the
+// requireOrg middleware on feedRoutes fires.
+app.route("/feeds/public", publicFeedRoutes);
 app.route("/feeds", feedRoutes);
 app.route("/orgs", orgAcceptApp); // public /orgs/accept
 app.route("/orgs", orgRoutes);    // authed /orgs/me, /orgs/invite
