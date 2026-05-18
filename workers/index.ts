@@ -279,6 +279,45 @@ app.get("/api/v1/mailboxes", async (c) => {
 	})));
 });
 
+// Bulk lock-down: lock every unscoped mailbox the caller can see (#294).
+app.post("/api/v1/mailboxes/bulk-lockdown", async (c) => {
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+	if (!callerEmail) {
+		return c.json({ error: "CF Access email required" }, 400);
+	}
+
+	const allMailboxes = await listMailboxes(c.env.BUCKET);
+	const acls = await Promise.all(allMailboxes.map((m) => readMailboxAcl(c.env, m.id)));
+
+	// Filter to unscoped mailboxes (no ACL = unscoped = visible to all).
+	const unscoped = allMailboxes.filter((_m, i) => !acls[i]);
+
+	let locked = 0;
+	let skipped = 0;
+	const errors: string[] = [];
+
+	await Promise.all(
+		unscoped.map(async (m) => {
+			const existing = await readMailboxAcl(c.env, m.id);
+			if (existing) {
+				skipped++;
+				return;
+			}
+			try {
+				const acl = { owner: callerEmail, members: [callerEmail] };
+				await writeMailboxAcl(c.env, m.id, acl);
+				locked++;
+			} catch (err) {
+				errors.push(`${m.id}: ${(err as Error)?.message ?? "unknown error"}`);
+			}
+		}),
+	);
+
+	return c.json({ locked, skipped, errors });
+});
+
 // -- Org overview ---------------------------------------------------
 
 /** Versioned KV key — bumping the prefix on schema change is a clean rename. */
