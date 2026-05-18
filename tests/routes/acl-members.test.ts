@@ -261,3 +261,76 @@ describe("DELETE /acl/members/:memberEmail — remove member", () => {
 		expect(stored.members).not.toContain("bob@example.com");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/mailboxes/:mailboxId/acl/transfer — ownership transfer (#293)
+// ---------------------------------------------------------------------------
+
+describe("POST /acl/transfer — ownership transfer", () => {
+	it("owner transfers to an existing member → 200, new owner set, old owner stays in members", async () => {
+		const { fetch, bucket } = makeApp(storeWithAcl(aliceAndBobAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.owner).toBe("bob@example.com");
+		expect(body.members).toContain("alice@example.com");
+		expect(body.members).toContain("bob@example.com");
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.owner).toBe("bob@example.com");
+	});
+
+	it("non-owner admitted caller → 403", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceAndBobAcl), "bob@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "alice@example.com" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("target email not in members → 400 with clear message", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceOnlyAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "carol@example.com" }),
+		});
+		expect(res.status).toBe(400);
+		const body = await res.json() as { error: string };
+		expect(body.error).toMatch(/member/i);
+	});
+
+	it("after transfer, old owner loses owner-only access", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceAndBobAcl), "alice@example.com");
+		// Transfer alice → bob
+		await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "bob@example.com" }),
+		});
+		// Alice tries to add a member — should now be 403
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/members`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "carol@example.com" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("email is normalised to lower-case before lookup and write", async () => {
+		const { fetch, bucket } = makeApp(storeWithAcl(aliceAndBobAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl/transfer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ email: "BOB@EXAMPLE.COM" }),
+		});
+		expect(res.status).toBe(200);
+		const stored = JSON.parse(bucket._store[aclKey]) as MailboxAcl;
+		expect(stored.owner).toBe("bob@example.com");
+	});
+});

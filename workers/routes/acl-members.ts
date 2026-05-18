@@ -86,6 +86,35 @@ aclMemberRoutes.post("/members", async (c) => {
 	return c.json({ owner: updated.owner, members: updated.members });
 });
 
+/**
+ * Transfer ACL ownership to an existing member (#293).
+ * Only the current owner may call this. The target must already be in
+ * `acl.members`; the old owner stays as a member after the transfer.
+ */
+aclMemberRoutes.post("/transfer", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+	const acl = await readMailboxAcl(c.env, mailboxId);
+	if (!acl || callerEmail !== acl.owner) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+
+	const body = (await c.req.json().catch(() => ({}))) as { email?: unknown };
+	const rawEmail = typeof body.email === "string" ? body.email.trim() : "";
+	if (!rawEmail) return c.json({ error: "Email required" }, 400);
+
+	const targetEmail = rawEmail.toLowerCase();
+	if (!acl.members.includes(targetEmail)) {
+		return c.json({ error: "Target must already be a member" }, 400);
+	}
+
+	const updated = { owner: targetEmail, members: acl.members };
+	await writeMailboxAcl(c.env, mailboxId, updated);
+	return c.json({ owner: updated.owner, members: updated.members });
+});
+
 /** Remove a member from the mailbox ACL. The owner cannot remove themselves. */
 aclMemberRoutes.delete("/members/:memberEmail", async (c) => {
 	const mailboxId = c.req.param("mailboxId")!;

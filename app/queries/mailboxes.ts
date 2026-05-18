@@ -114,3 +114,13 @@ export function useRemoveAclMember(mailboxId: string) {
 		},
 	});
 }
+
+export function useTransferAclOwnership(mailboxId: string) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (email: string) => api.transferAclOwnership(mailboxId, email),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
+		},
+	});
+}
