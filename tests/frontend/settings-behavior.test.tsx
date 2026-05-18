@@ -25,6 +25,10 @@ let domainSettingsFixture: { domain: string; settings: Record<string, unknown> }
 vi.mock("~/queries/mailboxes", () => ({
 	useMailbox: () => ({ data: mailboxFixture }),
 	useUpdateMailbox: () => updateMailboxMock,
+	useLockDownMailbox: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+	useMailboxAcl: () => ({ data: undefined, isLoading: true }),
+	useAddAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useRemoveAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("~/queries/org-settings", () => ({

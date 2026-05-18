@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import api from "~/services/api";
+import api, { ApiError } from "~/services/api";
 import type { Mailbox } from "~/types";
 import { queryKeys } from "./keys";
 
@@ -76,6 +76,41 @@ export function useLockDownAllMailboxes() {
 		mutationFn: () => api.lockDownAllMailboxes(),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+		},
+	});
+}
+
+export function useMailboxAcl(mailboxId: string | undefined) {
+	return useQuery<{ owner: string; members: string[] } | null>({
+		queryKey: mailboxId ? queryKeys.mailboxes.acl(mailboxId) : ["mailboxes", "_acl_disabled"],
+		queryFn: async () => {
+			try {
+				return await api.getMailboxAcl(mailboxId!) as { owner: string; members: string[] };
+			} catch (err) {
+				if (err instanceof ApiError && err.status === 404) return null;
+				throw err;
+			}
+		},
+		enabled: !!mailboxId,
+	});
+}
+
+export function useAddAclMember(mailboxId: string) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (email: string) => api.addAclMember(mailboxId, email),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
+		},
+	});
+}
+
+export function useRemoveAclMember(mailboxId: string) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (email: string) => api.removeAclMember(mailboxId, email),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.acl(mailboxId) });
 		},
 	});
 }

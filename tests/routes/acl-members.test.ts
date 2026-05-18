@@ -100,6 +100,53 @@ const aliceAndBobAcl: MailboxAcl = {
 };
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/mailboxes/:mailboxId/acl — read ACL (#291)
+// ---------------------------------------------------------------------------
+
+describe("GET /acl — read ACL", () => {
+	it("owner gets { owner, members } with 200", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceOnlyAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`);
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.owner).toBe("alice@example.com");
+		expect(body.members).toContain("alice@example.com");
+	});
+
+	it("non-owner admitted member → 403", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceAndBobAcl), "bob@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`);
+		expect(res.status).toBe(403);
+	});
+
+	it("unscoped mailbox (no ACL blob) → 404 with { acl_status: 'unscoped' }", async () => {
+		const { fetch } = makeApp({ [mailboxKey]: "{}" }, "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`);
+		expect(res.status).toBe(404);
+		const body = await res.json() as { acl_status: string };
+		expect(body.acl_status).toBe("unscoped");
+	});
+
+	it("dev mode (no callerEmail) → 200 when ACL exists", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceOnlyAcl), null);
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`);
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.owner).toBe("alice@example.com");
+	});
+
+	it("returns both owner and multi-member list", async () => {
+		const { fetch } = makeApp(storeWithAcl(aliceAndBobAcl), "alice@example.com");
+		const res = await fetch(`/api/v1/mailboxes/${mailboxId}/acl`);
+		expect(res.status).toBe(200);
+		const body = await res.json() as MailboxAcl;
+		expect(body.owner).toBe("alice@example.com");
+		expect(body.members).toContain("alice@example.com");
+		expect(body.members).toContain("bob@example.com");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/mailboxes/:mailboxId/acl/members
 // ---------------------------------------------------------------------------
 
