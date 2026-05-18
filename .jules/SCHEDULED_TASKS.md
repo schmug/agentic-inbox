@@ -1,0 +1,1 @@
+⚡ Bolt: getSnippetText memoization

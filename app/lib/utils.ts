@@ -67,14 +67,37 @@ export function stripHtml(html: string): string {
 	return htmlToText(html);
 }
 
+// ⚡ Bolt: Cache htmlToText operations to prevent expensive HTML parsing on every re-render
+// of the email list. This acts as a simple LRU to bound memory while optimizing hot paths.
+const snippetCache = new Map<string, string>();
+
 export function getSnippetText(
 	snippet?: string | null,
 	maxLength = 100,
 ): string {
 	if (!snippet) return "";
+	const cacheKey = `${maxLength}:${snippet}`;
+
+	// ⚡ Bolt: Return memoized result to avoid repeated htmlToText CPU overhead
+	if (snippetCache.has(cacheKey)) {
+		const cached = snippetCache.get(cacheKey);
+		if (cached !== undefined) {
+			return cached;
+		}
+	}
 	const clean = htmlToText(snippet);
 	if (!clean) return "";
-	return clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
+	const result = clean.length > maxLength ? `${clean.slice(0, maxLength)}...` : clean;
+
+	// ⚡ Bolt: Prevent memory leaks by maintaining a bounded size (evicts oldest entry)
+	if (snippetCache.size >= 1000) {
+		const firstKey = snippetCache.keys().next().value;
+		if (firstKey !== undefined) {
+			snippetCache.delete(firstKey);
+		}
+	}
+	snippetCache.set(cacheKey, result);
+	return result;
 }
 
 /**
