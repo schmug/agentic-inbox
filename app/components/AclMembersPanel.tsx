@@ -3,7 +3,7 @@
 import { Button, Input, Loader } from "@cloudflare/kumo";
 import { LockIcon, UserIcon, XIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember } from "~/queries/mailboxes";
+import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember, useTransferAclOwnership } from "~/queries/mailboxes";
 import { ApiError } from "~/services/api";
 
 interface AclMembersPanelProps {
@@ -15,10 +15,12 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 	const lockDown = useLockDownMailbox();
 	const addMember = useAddAclMember(mailboxId);
 	const removeMember = useRemoveAclMember(mailboxId);
+	const transferOwnership = useTransferAclOwnership(mailboxId);
 
 	const [newEmail, setNewEmail] = useState("");
 	const [addError, setAddError] = useState<string | null>(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
+	const [transferError, setTransferError] = useState<string | null>(null);
 
 	if (isLoading || acl === undefined) {
 		return (
@@ -78,6 +80,15 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 		}
 	};
 
+	const handleTransfer = async (email: string) => {
+		setTransferError(null);
+		try {
+			await transferOwnership.mutateAsync(email);
+		} catch (err) {
+			setTransferError(err instanceof ApiError ? err.message : "Failed to transfer ownership");
+		}
+	};
+
 	return (
 		<div className="space-y-4">
 			<div>
@@ -95,22 +106,37 @@ export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
 						<li key={member} className="flex items-center justify-between gap-2">
 							<span className="text-sm text-ink truncate">{member}</span>
 							{member !== acl.owner && (
-								<button
-									type="button"
-									aria-label={`Remove ${member}`}
-									data-testid={`remove-member-${member}`}
-									className="text-ink-3 hover:text-red-600 shrink-0"
-									disabled={removeMember.isPending}
-									onClick={() => handleRemove(member)}
-								>
-									<XIcon size={14} />
-								</button>
+								<div className="flex items-center gap-1 shrink-0">
+									<button
+										type="button"
+										aria-label={`Make ${member} owner`}
+										data-testid={`transfer-to-${member}`}
+										className="text-xs text-ink-3 hover:text-amber-600 px-1"
+										disabled={transferOwnership.isPending}
+										onClick={() => handleTransfer(member)}
+									>
+										Make owner
+									</button>
+									<button
+										type="button"
+										aria-label={`Remove ${member}`}
+										data-testid={`remove-member-${member}`}
+										className="text-ink-3 hover:text-red-600"
+										disabled={removeMember.isPending}
+										onClick={() => handleRemove(member)}
+									>
+										<XIcon size={14} />
+									</button>
+								</div>
 							)}
 						</li>
 					))}
 				</ul>
 				{removeError && (
 					<p className="mt-1 text-xs text-red-600" data-testid="remove-error">{removeError}</p>
+				)}
+				{transferError && (
+					<p className="mt-1 text-xs text-red-600" data-testid="transfer-error">{transferError}</p>
 				)}
 			</div>
 

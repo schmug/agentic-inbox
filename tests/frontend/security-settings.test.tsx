@@ -24,6 +24,7 @@ vi.mock("~/queries/mailboxes", () => ({
 	useMailboxAcl: () => ({ data: undefined, isLoading: true }),
 	useAddAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
 	useRemoveAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useTransferAclOwnership: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 // Per-mailbox settings page now also reads org settings to drive the
