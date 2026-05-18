@@ -12,7 +12,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { requireMailbox, type MailboxContext } from "../../workers/lib/mailbox";
 import { aclMemberRoutes } from "../../workers/routes/acl-members";
-import { readMailboxAcl, callerInAcl } from "../../workers/lib/mailbox-acl";
+import { readMailboxAcl, writeMailboxAcl, callerInAcl } from "../../workers/lib/mailbox-acl";
 import { listMailboxes } from "../../workers/lib/email-helpers";
 import type { MailboxAcl } from "../../workers/lib/mailbox-acl";
 
@@ -260,5 +260,174 @@ describe("POST /api/v1/mailboxes/:id/acl — lock down", () => {
 		const body = await listRes.json() as Array<{ id: string; acl_status: string }>;
 		const mailbox = body.find((m) => m.id === mailboxId);
 		expect(mailbox?.acl_status).toBe("scoped");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Bulk lock-down endpoint app (#294)
+// ---------------------------------------------------------------------------
+
+function makeBulkLockDownApp(bucketStore: Record<string, string>, callerEmail: string | null) {
+	const bucket = makeR2Stub(bucketStore);
+	const MAILBOX = { idFromName: () => "fake-id", get: () => ({}) };
+
+	const app = new Hono<{ Bindings: { BUCKET: typeof bucket; MAILBOX: typeof MAILBOX } }>();
+
+	app.post("/api/v1/mailboxes/bulk-lockdown", async (c) => {
+		const caller =
+			c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+		if (!caller) {
+			return c.json({ error: "CF Access email required" }, 400);
+		}
+
+		const allMailboxes = await listMailboxes(c.env.BUCKET as unknown as R2Bucket);
+		const acls = await Promise.all(
+			allMailboxes.map((m) => readMailboxAcl(c.env as unknown as { BUCKET: R2Bucket }, m.id)),
+		);
+
+		const unscoped = allMailboxes.filter((_m, i) => !acls[i]);
+
+		let locked = 0;
+		let skipped = 0;
+		const errors: string[] = [];
+
+		await Promise.all(
+			unscoped.map(async (m) => {
+				const existing = await readMailboxAcl(c.env as unknown as { BUCKET: R2Bucket }, m.id);
+				if (existing) {
+					skipped++;
+					return;
+				}
+				try {
+					const acl = { owner: caller, members: [caller] };
+					await writeMailboxAcl(c.env as unknown as { BUCKET: R2Bucket }, m.id, acl);
+					locked++;
+				} catch (err) {
+					errors.push(`${m.id}: ${(err as Error)?.message ?? "unknown error"}`);
+				}
+			}),
+		);
+
+		return c.json({ locked, skipped, errors });
+	});
+
+	return {
+		post() {
+			const hdrs: Record<string, string> = {};
+			if (callerEmail) hdrs["cf-access-authenticated-user-email"] = callerEmail;
+			return app.request(
+				"/api/v1/mailboxes/bulk-lockdown",
+				{ method: "POST", headers: hdrs },
+				{
+					BUCKET: bucket as unknown as R2Bucket,
+					MAILBOX: MAILBOX as unknown as DurableObjectNamespace,
+				},
+			);
+		},
+		bucket,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/mailboxes/bulk-lockdown (#294)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/v1/mailboxes/bulk-lockdown (#294)", () => {
+	const aliceKey = `mailboxes/alice@example.com.json`;
+	const aliceAclKey = `mailboxes-acl/alice@example.com.json`;
+	const bobKey = `mailboxes/bob@example.com.json`;
+	const bobAclKey = `mailboxes-acl/bob@example.com.json`;
+	const charlieKey = `mailboxes/charlie@example.com.json`;
+
+	it("locks all unscoped mailboxes in a mixed fleet", async () => {
+		// alice is already scoped; bob and charlie are unscoped
+		const aliceAcl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+		const store = {
+			[aliceKey]: "{}",
+			[aliceAclKey]: JSON.stringify(aliceAcl),
+			[bobKey]: "{}",
+			[charlieKey]: "{}",
+		};
+		const { post, bucket } = makeBulkLockDownApp(store, "operator@example.com");
+		const res = await post();
+		expect(res.status).toBe(200);
+		const body = await res.json() as { locked: number; skipped: number; errors: string[] };
+		expect(body.locked).toBe(2);
+		expect(body.skipped).toBe(0);
+		expect(body.errors).toHaveLength(0);
+
+		// bob and charlie now have ACLs with operator as owner
+		const storedBob = JSON.parse(bucket._store[bobAclKey]) as MailboxAcl;
+		expect(storedBob.owner).toBe("operator@example.com");
+		expect(storedBob.members).toContain("operator@example.com");
+		const charlieAclKey = `mailboxes-acl/charlie@example.com.json`;
+		const storedCharlie = JSON.parse(bucket._store[charlieAclKey]) as MailboxAcl;
+		expect(storedCharlie.owner).toBe("operator@example.com");
+	});
+
+	it("returns 0 locked, 0 skipped when all mailboxes are already scoped", async () => {
+		const aliceAcl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+		const store = {
+			[aliceKey]: "{}",
+			[aliceAclKey]: JSON.stringify(aliceAcl),
+		};
+		const { post } = makeBulkLockDownApp(store, "operator@example.com");
+		const res = await post();
+		expect(res.status).toBe(200);
+		const body = await res.json() as { locked: number; skipped: number; errors: string[] };
+		expect(body.locked).toBe(0);
+		expect(body.skipped).toBe(0);
+		expect(body.errors).toHaveLength(0);
+	});
+
+	it("returns 0/0 when there are no mailboxes at all", async () => {
+		const { post } = makeBulkLockDownApp({}, "operator@example.com");
+		const res = await post();
+		expect(res.status).toBe(200);
+		const body = await res.json() as { locked: number; skipped: number; errors: string[] };
+		expect(body.locked).toBe(0);
+		expect(body.skipped).toBe(0);
+		expect(body.errors).toHaveLength(0);
+	});
+
+	it("after bulk lock-down, GET /api/v1/mailboxes shows all as scoped", async () => {
+		const store: Record<string, string> = { [aliceKey]: "{}", [bobKey]: "{}" };
+		const { post, bucket } = makeBulkLockDownApp(store, "operator@example.com");
+		const lockRes = await post();
+		expect(lockRes.status).toBe(200);
+		const lockBody = await lockRes.json() as { locked: number };
+		expect(lockBody.locked).toBe(2);
+
+		const { fetch } = makeListApp(bucket._store, null);
+		const listRes = await fetch();
+		expect(listRes.status).toBe(200);
+		const listBody = await listRes.json() as Array<{ id: string; acl_status: string }>;
+		for (const m of listBody) {
+			expect(m.acl_status).toBe("scoped");
+		}
+	});
+
+	it("returns 400 when no CF Access email is present", async () => {
+		const store = { [aliceKey]: "{}" };
+		const { post } = makeBulkLockDownApp(store, null);
+		const res = await post();
+		expect(res.status).toBe(400);
+	});
+
+	it("does not abort when a mailbox is already scoped (partial-success idempotence)", async () => {
+		// alice is already scoped; only bob is unscoped → 1 locked, 0 skipped
+		const aliceAcl: MailboxAcl = { owner: "alice@example.com", members: ["alice@example.com"] };
+		const store = {
+			[aliceKey]: "{}",
+			[aliceAclKey]: JSON.stringify(aliceAcl),
+			[bobKey]: "{}",
+		};
+		const { post } = makeBulkLockDownApp(store, "operator@example.com");
+		const res = await post();
+		expect(res.status).toBe(200);
+		const body = await res.json() as { locked: number; skipped: number; errors: string[] };
+		expect(body.locked).toBe(1);
+		expect(body.errors).toHaveLength(0);
 	});
 });

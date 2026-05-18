@@ -21,6 +21,7 @@ import api from "~/services/api";
 import {
 	useCreateMailbox,
 	useDeleteMailbox,
+	useLockDownAllMailboxes,
 	useLockDownMailbox,
 	useMailboxes,
 } from "~/queries/mailboxes";
@@ -36,6 +37,7 @@ export default function MailboxesRoute() {
 	const createMailbox = useCreateMailbox();
 	const deleteMailbox = useDeleteMailbox();
 	const lockDownMailbox = useLockDownMailbox();
+	const lockDownAllMailboxes = useLockDownAllMailboxes();
 
 	useAutoProvisionMailboxes();
 
@@ -60,6 +62,7 @@ export default function MailboxesRoute() {
 		email: string;
 	} | null>(null);
 	const [isDeleting, setIsDeleting] = useState(false);
+	const [isBulkLockDownOpen, setIsBulkLockDownOpen] = useState(false);
 
 	useEffect(() => {
 		if (domains.length > 0 && !selectedDomain) {
@@ -128,6 +131,26 @@ export default function MailboxesRoute() {
 		}
 	};
 
+	const unscopedCount = mailboxes.filter((m) => m.acl_status === "unscoped").length;
+
+	const handleBulkLockDown = async () => {
+		try {
+			const result = await lockDownAllMailboxes.mutateAsync();
+			const parts: string[] = [];
+			if (result.locked > 0) parts.push(`${result.locked} locked`);
+			if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+			if (result.errors.length > 0) {
+				feedback.error(`Bulk lock-down finished with errors: ${result.errors.join("; ")}`);
+			} else {
+				feedback.success(`Bulk lock-down complete — ${parts.join(", ")}`);
+			}
+		} catch {
+			feedback.error("Bulk lock-down failed");
+		} finally {
+			setIsBulkLockDownOpen(false);
+		}
+	};
+
 	const isLoading = !configData;
 
 	return (
@@ -136,15 +159,26 @@ export default function MailboxesRoute() {
 				<div className="mb-8">
 					<div className="flex items-center justify-between">
 						<h1 className="pp-serif text-[40px] leading-none text-ink">Mailboxes</h1>
-						{!isConfigured && (
-							<Button
-								variant="primary"
-								icon={<PlusIcon size={16} />}
-								onClick={() => setIsCreateOpen(true)}
-							>
-								New Mailbox
-							</Button>
-						)}
+						<div className="flex items-center gap-2">
+							{unscopedCount > 0 && (
+								<Button
+									variant="secondary"
+									size="sm"
+									onClick={() => setIsBulkLockDownOpen(true)}
+								>
+									Lock down all unscoped
+								</Button>
+							)}
+							{!isConfigured && (
+								<Button
+									variant="primary"
+									icon={<PlusIcon size={16} />}
+									onClick={() => setIsCreateOpen(true)}
+								>
+									New Mailbox
+								</Button>
+							)}
+						</div>
 					</div>
 					{domains.length > 0 && (
 						<p className="text-sm text-ink-3 mt-1">
@@ -326,6 +360,38 @@ export default function MailboxesRoute() {
 							</Button>
 						</div>
 					</form>
+				</Dialog>
+			</Dialog.Root>
+
+			{/* Bulk Lock-down Confirm Dialog */}
+			<Dialog.Root open={isBulkLockDownOpen} onOpenChange={setIsBulkLockDownOpen}>
+				<Dialog size="sm" className="p-6">
+					<Dialog.Title className="text-base font-semibold mb-2">
+						Lock down all unscoped mailboxes?
+					</Dialog.Title>
+					<Dialog.Description className="text-ink-3 text-sm mb-5">
+						Lock down{" "}
+						<strong className="text-ink">{unscopedCount}</strong>{" "}
+						unscoped{" "}
+						{unscopedCount === 1 ? "mailbox" : "mailboxes"}? You will become owner of each.
+					</Dialog.Description>
+					<div className="flex justify-end gap-2">
+						<Dialog.Close
+							render={(props) => (
+								<Button {...props} variant="secondary" size="sm">
+									Cancel
+								</Button>
+							)}
+						/>
+						<Button
+							variant="primary"
+							size="sm"
+							loading={lockDownAllMailboxes.isPending}
+							onClick={handleBulkLockDown}
+						>
+							Lock down all
+						</Button>
+					</div>
 				</Dialog>
 			</Dialog.Root>
 

@@ -69,3 +69,13 @@ export function useLockDownMailbox() {
 		},
 	});
 }
+
+export function useLockDownAllMailboxes() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () => api.lockDownAllMailboxes(),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: queryKeys.mailboxes.all });
+		},
+	});
+}
