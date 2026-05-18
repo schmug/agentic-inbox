@@ -27,6 +27,10 @@ let mailboxFixture: Mailbox;
 vi.mock("~/queries/mailboxes", () => ({
 	useMailbox: () => ({ data: mailboxFixture }),
 	useUpdateMailbox: () => updateMailboxMock,
+	useLockDownMailbox: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+	useMailboxAcl: () => ({ data: undefined, isLoading: true }),
+	useAddAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useRemoveAclMember: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 // Per-mailbox settings page now also reads org settings to drive the

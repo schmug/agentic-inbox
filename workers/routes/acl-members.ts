@@ -18,6 +18,26 @@ export const aclMemberRoutes = new Hono<MailboxContext>();
 aclMemberRoutes.use("*", requireMailbox);
 
 /**
+ * Read the ACL for a mailbox (#291). Owner-only — returns { owner, members }.
+ * Non-owner admitted callers receive 403. Unscoped mailboxes (no ACL blob)
+ * return 404 with { acl_status: "unscoped" } so the UI can prompt lock-down.
+ */
+aclMemberRoutes.get("/", async (c) => {
+	const mailboxId = c.req.param("mailboxId")!;
+	const callerEmail =
+		c.req.header("cf-access-authenticated-user-email")?.toLowerCase() ?? null;
+
+	const acl = await readMailboxAcl(c.env, mailboxId);
+	if (!acl) {
+		return c.json({ acl_status: "unscoped" }, 404);
+	}
+	if (callerEmail !== null && callerEmail !== acl.owner) {
+		return c.json({ error: "Forbidden" }, 403);
+	}
+	return c.json({ owner: acl.owner, members: acl.members });
+});
+
+/**
  * Lock down an unscoped (pre-#27) mailbox by creating its first ACL with the
  * caller as owner (#241). Returns 201 on success, 409 if an ACL already exists,
  * 400 when CF Access email is absent (dev mode).

@@ -12,6 +12,7 @@ import { useOrgSettings } from "~/queries/org-settings";
 import { useDomainSettings } from "~/queries/domain-settings";
 import { useTextModels } from "~/queries/text-models";
 import { SecuritySettingsPanel } from "~/components/SecuritySettingsPanel";
+import { AclMembersPanel } from "~/components/AclMembersPanel";
 import {
 	HubSettingsPanel,
 	normalizeHubConfig,
@@ -847,6 +848,18 @@ export default function SettingsRoute() {
 							</div>
 						)}
 					</div>
+				</div>
+
+				{/* Access / Members — per-mailbox ACL panel (#291). Not part of the
+				    settings-tier save; managed via separate ACL endpoints. */}
+				<div className="pp-card p-5">
+					<div className="text-sm font-medium text-ink mb-4">Access</div>
+					<p className="text-xs text-ink-3 mb-4">
+						Manage who can access this mailbox. Lock it down to restrict access to
+						specific members; unscoped mailboxes are visible to everyone admitted
+						by Cloudflare Access.
+					</p>
+					<AclMembersPanel mailboxId={mailboxId!} />
 				</div>
 
 				{/* Save */}

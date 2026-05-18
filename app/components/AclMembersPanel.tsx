@@ -1,0 +1,144 @@
+// Copyright (c) 2026 schmug. Licensed under the Apache 2.0 license.
+
+import { Button, Input, Loader } from "@cloudflare/kumo";
+import { LockIcon, UserIcon, XIcon } from "@phosphor-icons/react";
+import { useState } from "react";
+import { useLockDownMailbox, useMailboxAcl, useAddAclMember, useRemoveAclMember } from "~/queries/mailboxes";
+import { ApiError } from "~/services/api";
+
+interface AclMembersPanelProps {
+	mailboxId: string;
+}
+
+export function AclMembersPanel({ mailboxId }: AclMembersPanelProps) {
+	const { data: acl, isLoading } = useMailboxAcl(mailboxId);
+	const lockDown = useLockDownMailbox();
+	const addMember = useAddAclMember(mailboxId);
+	const removeMember = useRemoveAclMember(mailboxId);
+
+	const [newEmail, setNewEmail] = useState("");
+	const [addError, setAddError] = useState<string | null>(null);
+	const [removeError, setRemoveError] = useState<string | null>(null);
+
+	if (isLoading || acl === undefined) {
+		return (
+			<div className="flex justify-center py-6">
+				<Loader size="sm" />
+			</div>
+		);
+	}
+
+	if (acl === null) {
+		return (
+			<div className="rounded-md border border-line bg-paper-2 px-4 py-3 text-sm text-ink-3">
+				<div className="flex items-center gap-2 mb-2">
+					<LockIcon size={14} weight="duotone" />
+					<span className="font-medium text-ink">Mailbox is unscoped</span>
+				</div>
+				<p className="mb-3">
+					This mailbox is accessible to anyone admitted by CF Access. Lock it
+					down first to manage individual members.
+				</p>
+				<Button
+					variant="secondary"
+					size="sm"
+					loading={lockDown.isPending}
+					onClick={() => lockDown.mutate(mailboxId)}
+					data-testid="acl-lockdown-btn"
+				>
+					Lock down
+				</Button>
+				{lockDown.isError && (
+					<p className="mt-2 text-xs text-red-600">
+						{lockDown.error instanceof ApiError ? lockDown.error.message : "Lock down failed"}
+					</p>
+				)}
+			</div>
+		);
+	}
+
+	const handleAdd = async () => {
+		setAddError(null);
+		const email = newEmail.trim().toLowerCase();
+		if (!email) return;
+		try {
+			await addMember.mutateAsync(email);
+			setNewEmail("");
+		} catch (err) {
+			setAddError(err instanceof ApiError ? err.message : "Failed to add member");
+		}
+	};
+
+	const handleRemove = async (email: string) => {
+		setRemoveError(null);
+		try {
+			await removeMember.mutateAsync(email);
+		} catch (err) {
+			setRemoveError(err instanceof ApiError ? err.message : "Failed to remove member");
+		}
+	};
+
+	return (
+		<div className="space-y-4">
+			<div>
+				<div className="text-xs text-ink-3 mb-1">Owner</div>
+				<div className="flex items-center gap-2 text-sm text-ink">
+					<UserIcon size={14} weight="duotone" className="text-ink-3 shrink-0" />
+					<span data-testid="acl-owner">{acl.owner}</span>
+				</div>
+			</div>
+
+			<div>
+				<div className="text-xs text-ink-3 mb-2">Members</div>
+				<ul className="space-y-1" data-testid="acl-members-list">
+					{acl.members.map((member) => (
+						<li key={member} className="flex items-center justify-between gap-2">
+							<span className="text-sm text-ink truncate">{member}</span>
+							{member !== acl.owner && (
+								<button
+									type="button"
+									aria-label={`Remove ${member}`}
+									data-testid={`remove-member-${member}`}
+									className="text-ink-3 hover:text-red-600 shrink-0"
+									disabled={removeMember.isPending}
+									onClick={() => handleRemove(member)}
+								>
+									<XIcon size={14} />
+								</button>
+							)}
+						</li>
+					))}
+				</ul>
+				{removeError && (
+					<p className="mt-1 text-xs text-red-600" data-testid="remove-error">{removeError}</p>
+				)}
+			</div>
+
+			<div>
+				<div className="text-xs text-ink-3 mb-2">Add member</div>
+				<div className="flex gap-2">
+					<Input
+						type="email"
+						placeholder="teammate@example.com"
+						value={newEmail}
+						onChange={(e) => setNewEmail(e.target.value)}
+						onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+						data-testid="add-member-input"
+					/>
+					<Button
+						variant="secondary"
+						size="sm"
+						loading={addMember.isPending}
+						onClick={handleAdd}
+						data-testid="add-member-btn"
+					>
+						Add
+					</Button>
+				</div>
+				{addError && (
+					<p className="mt-1 text-xs text-red-600" data-testid="add-error">{addError}</p>
+				)}
+			</div>
+		</div>
+	);
+}
